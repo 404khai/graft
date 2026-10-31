@@ -5,7 +5,10 @@
 #   scripts/make-fixtures.sh            # all fixtures
 #
 # Fixtures:
-#   small   a git repository with a few files and three commits
+#   small     a git repository with a few files and three commits
+#   node-app  a Node project whose graft.toml declares a node_modules layer;
+#             its one dependency is a vendored tarball, so `npm ci` works
+#             offline (requires node and npm)
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -37,4 +40,50 @@ make_small() {
   echo "created $dir ($(git -C "$dir" rev-parse --short HEAD))"
 }
 
+make_node_app() {
+  local dir="$fixtures/node-app"
+  if ! command -v npm >/dev/null; then
+    echo "skipping node-app: npm not found" >&2
+    return
+  fi
+  rm -rf "$dir"
+  mkdir -p "$dir/vendor" "$dir/.pkg/package"
+  git -C "$dir" init -q -b main
+  printf '{"name":"leftpad","version":"1.0.0","main":"index.js"}\n' > "$dir/.pkg/package/package.json"
+  printf 'module.exports = (s, n, c = " ") => String(s).padStart(n, c);\n' > "$dir/.pkg/package/index.js"
+  # Fixed mtimes and ordering so the tarball, and so the lockfile, is reproducible.
+  (cd "$dir/.pkg" && find package -exec touch -t 202601010000 {} + &&
+    tar -cf - package | gzip -n > "$dir/vendor/leftpad-1.0.0.tgz")
+  rm -rf "$dir/.pkg"
+  cat > "$dir/package.json" <<'JSON'
+{
+  "name": "node-app",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": { "test": "node test.js" },
+  "dependencies": { "leftpad": "file:vendor/leftpad-1.0.0.tgz" }
+}
+JSON
+  cat > "$dir/test.js" <<'JS'
+const assert = require("assert");
+const leftpad = require("leftpad");
+assert.strictEqual(leftpad("7", 3, "0"), "007");
+console.log("ok");
+JS
+  printf 'node_modules/\n' > "$dir/.gitignore"
+  cat > "$dir/graft.toml" <<'TOML'
+[[layer]]
+path = "node_modules"
+inputs = ["package.json", "package-lock.json"]
+build = "npm ci --offline --no-audit --no-fund"
+TOML
+  (cd "$dir" && npm install --offline --no-audit --no-fund >/dev/null 2>&1)
+  rm -rf "$dir/node_modules"
+  export GIT_AUTHOR_DATE="2026-01-01T00:00:00Z" GIT_COMMITTER_DATE="2026-01-01T00:00:00Z"
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m "node app with a node_modules layer"
+  echo "created $dir ($(git -C "$dir" rev-parse --short HEAD))"
+}
+
 make_small
+make_node_app

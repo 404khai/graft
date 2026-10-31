@@ -20,6 +20,7 @@ path = "../../tests/e2e/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+graft-blueprint.workspace = true
 graft-core.workspace = true
 graft-fs.workspace = true
 graft-root.workspace = true

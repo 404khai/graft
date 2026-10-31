@@ -11,9 +11,11 @@ use anyhow::{Context, bail};
 use graft_core::{GraftName, GraftState};
 use graft_fs::{FsBackend, GraftSpec, ReflinkBackend, human_bytes};
 use graft_root::graft::{GraftRepo, unified_diff};
+use graft_root::layer::LayerCache;
 use graft_store::registry::{Located, locate};
 use graft_store::{GraftRecord, Store};
 
+use crate::layers;
 use crate::{Environment, Output};
 
 /// Arguments for `graft new`.
@@ -56,15 +58,17 @@ pub(crate) struct PruneArgs {
 struct Ctx {
     located: Located,
     backend: ReflinkBackend,
+    layers: LayerCache,
 }
 
 fn open(env: &Environment) -> anyhow::Result<Ctx> {
     let home = env.require_home()?;
     let located = locate(home, Path::new("."))?;
-    let mounts = home.root_dir(&located.record.id).join("mounts");
+    let root_dir = home.root_dir(&located.record.id);
     Ok(Ctx {
         located,
-        backend: ReflinkBackend::new(mounts),
+        backend: ReflinkBackend::new(root_dir.join("mounts")),
+        layers: LayerCache::new(root_dir.join("layers")),
     })
 }
 
@@ -88,9 +92,18 @@ pub(crate) fn new(args: &NewArgs, env: &Environment) -> anyhow::Result<Output> {
     let Ctx {
         mut located,
         backend,
+        layers: cache,
     } = open(env)?;
     let rev = args.from.as_deref().unwrap_or("HEAD");
     let base = located.repo.resolve_commit(rev)?;
+    // Refuse unapproved layer commands before anything is created.
+    let planned = layers::plan(
+        &located.repo,
+        &located.store,
+        &cache,
+        &base,
+        args.from.as_deref(),
+    )?;
 
     // The record reserves the name before any files exist.
     let record = located.store.create_graft(&name, &base)?;
@@ -104,10 +117,18 @@ pub(crate) fn new(args: &NewArgs, env: &Environment) -> anyhow::Result<Output> {
         .map_err(anyhow::Error::from)
         .and_then(|report| {
             located.repo.pin(record.id, &base, &name)?;
-            Ok(report)
+            let applied = layers::apply(
+                &planned,
+                &cache,
+                &mut located.store,
+                &report.path,
+                &name,
+                record.id,
+            )?;
+            Ok((report, applied))
         });
-    let report = match created {
-        Ok(report) => report,
+    let (report, applied) = match created {
+        Ok(created) => created,
         Err(e) => {
             let _ = backend.prune(&name, record.id);
             let _ = located.repo.unpin(record.id);
@@ -130,6 +151,21 @@ pub(crate) fn new(args: &NewArgs, env: &Environment) -> anyhow::Result<Output> {
         "  {} files reflinked, {} copied, {} written from git objects",
         report.clone.reflinked, report.clone.copied, c.written
     );
+    for layer in &applied {
+        let how = if layer.built { "built" } else { "reused" };
+        let _ = writeln!(
+            out.stdout,
+            "  layer {}: {how} ({})",
+            layer.path.display(),
+            &layer.key.to_string()[..12]
+        );
+        if let Some(reason) = &layer.copied_reason {
+            out.warnings.push(format!(
+                "layer {} was copied instead of reflinked: {reason}",
+                layer.path.display()
+            ));
+        }
+    }
     if let Some(reason) = &report.clone.fallback {
         out.warnings.push(format!(
             "copied {} files instead of reflinking them: {reason}. This graft uses its full size on disk.",
@@ -154,7 +190,9 @@ pub(crate) fn new(args: &NewArgs, env: &Environment) -> anyhow::Result<Output> {
 
 /// Lists grafts.
 pub(crate) fn ls(env: &Environment) -> anyhow::Result<Output> {
-    let Ctx { located, backend } = open(env)?;
+    let Ctx {
+        located, backend, ..
+    } = open(env)?;
     let grafts = located.store.grafts()?;
     let mut out = Output::default();
     if grafts.is_empty() {
@@ -216,7 +254,9 @@ pub(crate) fn ls(env: &Environment) -> anyhow::Result<Output> {
 /// Prints a graft's working-tree path.
 pub(crate) fn path(args: &NameArgs, env: &Environment) -> anyhow::Result<Output> {
     let name = parse_name(&args.name)?;
-    let Ctx { located, backend } = open(env)?;
+    let Ctx {
+        located, backend, ..
+    } = open(env)?;
     find(&located.store, &name)?;
     Ok(Output::stdout(format!(
         "{}\n",
@@ -272,7 +312,9 @@ pub(crate) fn status(args: &StatusArgs, env: &Environment) -> anyhow::Result<Out
 /// Prints a unified diff of a graft against its base.
 pub(crate) fn diff(args: &NameArgs, env: &Environment) -> anyhow::Result<Output> {
     let name = parse_name(&args.name)?;
-    let Ctx { located, backend } = open(env)?;
+    let Ctx {
+        located, backend, ..
+    } = open(env)?;
     let record = find(&located.store, &name)?;
     let graft = GraftRepo::open(&backend.path(&name))?;
     let text: String = graft

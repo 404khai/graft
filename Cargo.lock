@@ -1306,6 +1306,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
+ "graft-blueprint",
  "graft-core",
  "graft-fs",
  "graft-root",
