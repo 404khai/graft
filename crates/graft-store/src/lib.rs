@@ -7,7 +7,10 @@
 //! - `roots`: the single Root this database belongs to;
 //! - `grafts`: one record per graft (name, ID, base commit, state, times);
 //! - `op_log`: the append-only journal of graft writes (created in schema
-//!   v1, written from the delta store phase on).
+//!   v1, written from the delta store phase on);
+//! - `layers`, `layer_refs`: the layer cache's contents and which grafts use
+//!   them; `trusted_commands`: layer commands approved with `graft trust`
+//!   (schema v2, ADR 0004).
 //!
 //! The schema is versioned with `PRAGMA user_version` and migrated on open;
 //! see [`SCHEMA_VERSION`] and `docs/on-disk-format.md`.
@@ -23,7 +26,9 @@ mod schema;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use graft_core::{CommitId, GraftId, GraftName, GraftState, RootId, Timestamp};
+use graft_core::{
+    CommandHash, CommitId, GraftId, GraftName, GraftState, LayerKey, RootId, Timestamp,
+};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
 pub use error::{Result, StoreError};
@@ -72,6 +77,21 @@ pub struct GraftRecord {
     pub created_at: Timestamp,
     /// When its record last changed.
     pub updated_at: Timestamp,
+}
+
+/// A layer recorded in the layer cache.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayerRecord {
+    /// The layer's key; its directory name in the cache.
+    pub key: LayerKey,
+    /// Its path in a graft.
+    pub path: PathBuf,
+    /// The command that built it.
+    pub build: String,
+    /// When it was built.
+    pub built_at: Timestamp,
+    /// How many grafts reference it.
+    pub refs: u64,
 }
 
 /// An open metadata database for one Root.
@@ -476,6 +496,173 @@ impl Store {
             .pop())
     }
 
+    /// Records that layer `key` is in the cache. Idempotent.
+    ///
+    /// # Errors
+    ///
+    /// SQLite errors.
+    pub fn record_layer(&mut self, key: &LayerKey, path: &Path, build: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO layers (layer_key, path, build, built_at) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (layer_key) DO NOTHING",
+                (
+                    key.to_string(),
+                    graft_core::path_to_bytes(path),
+                    build,
+                    Timestamp::now().as_millis(),
+                ),
+            )
+            .map_err(|e| self.sql(e))?;
+        Ok(())
+    }
+
+    /// Records that graft `graft` uses layer `key`. Idempotent.
+    ///
+    /// # Errors
+    ///
+    /// SQLite errors, including a foreign-key error if either is unknown.
+    pub fn add_layer_ref(&mut self, graft: GraftId, key: &LayerKey) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO layer_refs (graft_id, layer_key) VALUES (?1, ?2)
+                 ON CONFLICT DO NOTHING",
+                (graft.to_string(), key.to_string()),
+            )
+            .map_err(|e| self.sql(e))?;
+        Ok(())
+    }
+
+    /// How many grafts reference layer `key`.
+    ///
+    /// # Errors
+    ///
+    /// SQLite errors.
+    pub fn layer_ref_count(&self, key: &LayerKey) -> Result<u64> {
+        self.conn
+            .query_row(
+                "SELECT count(*) FROM layer_refs WHERE layer_key = ?1",
+                [key.to_string()],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| u64::try_from(n).unwrap_or(0))
+            .map_err(|e| self.sql(e))
+    }
+
+    /// Every layer in the cache with its reference count, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// SQLite errors and [`StoreError::Corrupt`].
+    pub fn layers(&self) -> Result<Vec<LayerRecord>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT l.layer_key, l.path, l.build, l.built_at, count(r.graft_id)
+                 FROM layers l LEFT JOIN layer_refs r ON r.layer_key = l.layer_key
+                 GROUP BY l.layer_key ORDER BY l.built_at, l.layer_key",
+            )
+            .map_err(|e| self.sql(e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Vec<u8>>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                ))
+            })
+            .map_err(|e| self.sql(e))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (key, path, build, built_at, refs) = row.map_err(|e| self.sql(e))?;
+            out.push(LayerRecord {
+                key: key
+                    .parse()
+                    .map_err(|e| self.corrupt(format!("layers.layer_key: {e}")))?,
+                path: graft_core::path_from_bytes(path),
+                build,
+                built_at: Timestamp::from_millis(built_at),
+                refs: u64::try_from(refs).unwrap_or(0),
+            });
+        }
+        Ok(out)
+    }
+
+    /// The layers graft `graft` uses.
+    ///
+    /// # Errors
+    ///
+    /// SQLite errors and [`StoreError::Corrupt`].
+    pub fn graft_layers(&self, graft: GraftId) -> Result<Vec<LayerKey>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT layer_key FROM layer_refs WHERE graft_id = ?1 ORDER BY layer_key")
+            .map_err(|e| self.sql(e))?;
+        let keys = stmt
+            .query_map([graft.to_string()], |r| r.get::<_, String>(0))
+            .map_err(|e| self.sql(e))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| self.sql(e))?;
+        keys.into_iter()
+            .map(|k| {
+                k.parse()
+                    .map_err(|e| self.corrupt(format!("layer_refs.layer_key: {e}")))
+            })
+            .collect()
+    }
+
+    /// Forgets layer `key`. Refuses while any graft references it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::LayerInUse`] if it is referenced, plus SQLite errors.
+    pub fn delete_layer(&mut self, key: &LayerKey) -> Result<()> {
+        let refs = self.layer_ref_count(key)?;
+        if refs > 0 {
+            return Err(StoreError::LayerInUse { key: *key, refs });
+        }
+        self.conn
+            .execute("DELETE FROM layers WHERE layer_key = ?1", [key.to_string()])
+            .map_err(|e| self.sql(e))?;
+        Ok(())
+    }
+
+    /// Whether the user approved the commands identified by `hash`.
+    ///
+    /// # Errors
+    ///
+    /// SQLite errors.
+    pub fn is_trusted(&self, hash: &CommandHash) -> Result<bool> {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM trusted_commands WHERE command_hash = ?1",
+                [hash.to_string()],
+                |_| Ok(()),
+            )
+            .optional()
+            .map(|r| r.is_some())
+            .map_err(|e| self.sql(e))
+    }
+
+    /// Records the user's approval of the commands identified by `hash`;
+    /// `description` says what they were, for later display. Idempotent.
+    ///
+    /// # Errors
+    ///
+    /// SQLite errors.
+    pub fn trust(&mut self, hash: &CommandHash, description: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO trusted_commands (command_hash, description, trusted_at)
+                 VALUES (?1, ?2, ?3) ON CONFLICT (command_hash) DO NOTHING",
+                (hash.to_string(), description, Timestamp::now().as_millis()),
+            )
+            .map_err(|e| self.sql(e))?;
+        Ok(())
+    }
+
     /// Moves a graft to `next`, enforcing [`GraftState::can_become`].
     ///
     /// # Errors
@@ -720,6 +907,66 @@ mod tests {
             ("0".repeat(32), "b".repeat(40)),
         );
         assert!(second_root.is_err());
+    }
+
+    #[test]
+    fn layer_refs_follow_grafts() {
+        let (_dir, mut store) = fresh();
+        let key = LayerKey::from_bytes([4; 32]);
+        store
+            .record_layer(&key, Path::new("node_modules"), "npm ci")
+            .unwrap();
+        store
+            .record_layer(&key, Path::new("node_modules"), "npm ci")
+            .unwrap();
+        let a = store.create_graft(&name("a"), &commit()).unwrap();
+        let b = store.create_graft(&name("b"), &commit()).unwrap();
+        store.add_layer_ref(a.id, &key).unwrap();
+        store.add_layer_ref(a.id, &key).unwrap();
+        store.add_layer_ref(b.id, &key).unwrap();
+        assert_eq!(store.layer_ref_count(&key).unwrap(), 2);
+        assert_eq!(store.graft_layers(a.id).unwrap(), [key]);
+        let layers = store.layers().unwrap();
+        assert_eq!((layers.len(), layers[0].refs), (1, 2));
+        assert_eq!(layers[0].path, Path::new("node_modules"));
+
+        let err = store.delete_layer(&key).unwrap_err();
+        assert!(
+            matches!(err, StoreError::LayerInUse { refs: 2, .. }),
+            "{err:?}"
+        );
+        // Deleting a graft (prune's last step) releases its references.
+        store.delete_graft(a.id).unwrap();
+        store.delete_graft(b.id).unwrap();
+        assert_eq!(store.layer_ref_count(&key).unwrap(), 0);
+        store.delete_layer(&key).unwrap();
+        assert_eq!(store.layers().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn the_database_refuses_to_orphan_references() {
+        let (_dir, mut store) = fresh();
+        let key = LayerKey::from_bytes([5; 32]);
+        store.record_layer(&key, Path::new("x"), "b").unwrap();
+        let g = store.create_graft(&name("g"), &commit()).unwrap();
+        store.add_layer_ref(g.id, &key).unwrap();
+        // Bypassing delete_layer's check still cannot drop a referenced layer.
+        let raw = store.conn.execute("DELETE FROM layers", []);
+        assert!(raw.is_err(), "foreign key must protect referenced layers");
+        // Nor can a reference point at an unknown layer.
+        let missing = LayerKey::from_bytes([6; 32]);
+        assert!(store.add_layer_ref(g.id, &missing).is_err());
+    }
+
+    #[test]
+    fn trust_is_recorded_per_hash() {
+        let (_dir, mut store) = fresh();
+        let h = CommandHash::from_bytes([7; 32]);
+        assert!(!store.is_trusted(&h).unwrap());
+        store.trust(&h, "node_modules: npm ci").unwrap();
+        store.trust(&h, "node_modules: npm ci").unwrap();
+        assert!(store.is_trusted(&h).unwrap());
+        assert!(!store.is_trusted(&CommandHash::from_bytes([8; 32])).unwrap());
     }
 
     #[test]

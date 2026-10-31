@@ -7,6 +7,7 @@
 
 mod doctor;
 mod grafts;
+mod layers;
 mod root;
 
 use std::io::Write;
@@ -48,6 +49,10 @@ enum Command {
     Diff(grafts::NameArgs),
     /// Remove a graft. Refuses if work would be lost, unless --force.
     Prune(grafts::PruneArgs),
+    /// Approve the layer build commands declared in graft.toml.
+    Trust(layers::TrustArgs),
+    /// Remove layers no graft uses.
+    Gc(layers::GcArgs),
     /// Report platform, filesystem, reflink and FUSE/NFS support.
     Doctor(doctor::Args),
 }
@@ -129,6 +134,8 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Status(args) => ok(grafts::status(&args, &env))?,
         Command::Diff(args) => ok(grafts::diff(&args, &env))?,
         Command::Prune(args) => ok(grafts::prune(&args, &env))?,
+        Command::Trust(args) => ok(layers::trust(&args, &env))?,
+        Command::Gc(args) => ok(layers::gc(&args, &env))?,
         Command::Doctor(args) => {
             let (stdout, code) = doctor::run(&args, &env);
             (Output::stdout(stdout), code)

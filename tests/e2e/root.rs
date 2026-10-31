@@ -112,7 +112,8 @@ fn root_shows_the_registered_root_from_anywhere_in_the_repo() {
         );
     }
     assert!(out.contains("(main)"), "{out}");
-    assert!(out.contains("schema        v1"), "{out}");
+    let schema = format!("schema        v{}", graft_store::SCHEMA_VERSION);
+    assert!(out.contains(&schema), "{out}");
     assert!(out.contains("grafts        0"), "{out}");
     let id = root_id(&out);
     assert!(

@@ -7,7 +7,8 @@
 //! git repositories that back reflink grafts, sharing Root's object store.
 //! Objects are read lazily; nothing here shells out to `git`.
 //!
-//! The layer cache arrives in a later phase.
+//! [`layer`] owns the layer cache: shared directory trees such as
+//! `node_modules`, keyed by the hash of their declared inputs.
 
 #![forbid(unsafe_code)]
 
@@ -16,6 +17,7 @@ use std::path::{Path, PathBuf};
 use graft_core::{CommitId, RootId};
 
 pub mod graft;
+pub mod layer;
 
 /// Errors from opening or reading a repository.
 #[derive(Debug, thiserror::Error)]
@@ -290,6 +292,56 @@ impl Repo {
                 _ => return to_commit_id(id),
             }
         }
+    }
+
+    /// The contents of the file at `path` in `commit`'s tree, or `None` if
+    /// there is no such file. Symlinks yield their target.
+    ///
+    /// # Errors
+    ///
+    /// If the commit or tree cannot be read, or `path` names a directory.
+    pub fn read_file_at(&self, commit: &CommitId, path: &Path) -> Result<Option<Vec<u8>>> {
+        let tree = self.tree_at(commit)?;
+        let entry = tree
+            .lookup_entry_by_path(path)
+            .map_err(|e| git_err("reading a tree")(Box::new(e)))?;
+        let Some(entry) = entry else {
+            return Ok(None);
+        };
+        if !entry.mode().is_blob_or_symlink() {
+            return Err(RootError::BadRevision {
+                rev: format!("{}:{}", commit.short(7), path.display()),
+                reason: "is not a file".to_owned(),
+            });
+        }
+        let blob = self
+            .repo
+            .find_blob(entry.object_id())
+            .map_err(|e| git_err("reading a blob")(Box::new(e)))?;
+        Ok(Some(blob.data.clone()))
+    }
+
+    /// Whether `commit`'s tree has anything (file or directory) at `path`.
+    ///
+    /// # Errors
+    ///
+    /// If the commit or tree cannot be read.
+    pub fn tree_has(&self, commit: &CommitId, path: &Path) -> Result<bool> {
+        Ok(self
+            .tree_at(commit)?
+            .lookup_entry_by_path(path)
+            .map_err(|e| git_err("reading a tree")(Box::new(e)))?
+            .is_some())
+    }
+
+    fn tree_at(&self, commit: &CommitId) -> Result<gix::Tree<'_>> {
+        let oid = gix::ObjectId::from_hex(commit.as_str().as_bytes())
+            .map_err(|e| git_err("parsing a commit id")(Box::new(e)))?;
+        self.repo
+            .find_commit(oid)
+            .map_err(|e| git_err("reading a commit")(Box::new(e)))?
+            .tree()
+            .map_err(|e| git_err("reading a tree")(Box::new(e)))
     }
 
     /// The [`RootId`] this repository would be registered under now.

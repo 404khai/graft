@@ -1,0 +1,9 @@
+# Graft's own Blueprint (dogfooding, AGENTS.md §5).
+#
+# `target/` is built once per lockfile and toolchain, then shared by every
+# graft of this repository. Approve the build with `graft trust` first.
+
+[[layer]]
+path = "target"
+inputs = ["Cargo.lock", "rust-toolchain.toml"]
+build = "cargo build --workspace --locked"

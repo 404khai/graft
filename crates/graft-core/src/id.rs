@@ -139,6 +139,21 @@ hex_id!(
     "blob hash"
 );
 
+hex_id!(
+    /// Identifies a layer in the layer cache: a hash of everything that
+    /// determines its contents. Names `layers/<key>/`.
+    LayerKey,
+    32,
+    "layer key"
+);
+
+hex_id!(
+    /// Identifies the exact commands of a layer, for the build trust gate.
+    CommandHash,
+    32,
+    "command hash"
+);
+
 impl GraftId {
     /// A new random ID from the operating system's secure random source.
     ///

@@ -5,7 +5,8 @@
 //! has to agree on bare strings:
 //!
 //! - [`GraftId`], [`RootId`] and [`BlobHash`]: fixed-size identifiers with a
-//!   canonical lowercase-hex text form; [`CommitId`] for git commits.
+//!   canonical lowercase-hex text form, plus [`LayerKey`] and
+//!   [`CommandHash`]; [`CommitId`] for git commits.
 //! - [`GraftName`] and [`GraftState`]: a graft's validated name and its
 //!   lifecycle state.
 //! - [`Timestamp`]: persisted UTC instants; [`path_to_bytes`] and
@@ -31,6 +32,6 @@ pub use config::{CONFIG_FILE_NAME, Config, LogConfig};
 pub use error::{GraftError, Result};
 pub use graft::{GraftName, GraftState, InvalidGraftName, MAX_GRAFT_NAME_LEN, UnknownGraftState};
 pub use home::{GRAFT_HOME_ENV, GraftHome, HomeSource};
-pub use id::{BlobHash, GraftId, ParseIdError, RootId};
+pub use id::{BlobHash, CommandHash, GraftId, LayerKey, ParseIdError, RootId};
 pub use paths::{path_from_bytes, path_to_bytes};
 pub use time::Timestamp;

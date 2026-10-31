@@ -9,6 +9,7 @@
 mod cli;
 mod doctor;
 mod grafts;
+mod layers;
 mod repo_policy;
 mod root;
 

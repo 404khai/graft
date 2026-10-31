@@ -96,3 +96,11 @@ fn every_crate_has_crate_docs_and_workspace_lints() {
         );
     }
 }
+
+#[test]
+fn the_repositorys_own_graft_toml_is_valid() {
+    let text = std::fs::read_to_string(workspace_root().join("graft.toml")).unwrap();
+    let layers = graft_blueprint::parse_layers(&text, "graft.toml").unwrap();
+    assert_eq!(layers.len(), 1);
+    assert_eq!(layers[0].path, std::path::Path::new("target"));
+}

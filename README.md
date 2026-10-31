@@ -30,6 +30,12 @@ graft diff auth           # as a unified diff
 graft prune auth          # refuses if work would be lost; --force to discard
 ```
 
+Dependency trees are built once and shared: declare them as layers in
+`graft.toml` ([reference](docs/blueprint.md)), approve the build command once
+with `graft trust`, and every graft after the first gets `node_modules` (or
+`target/`) as a reflink in milliseconds. `graft gc` removes layers no graft
+uses.
+
 `graft doctor` reports the platform, the filesystem the repository is on,
 whether it supports reflinks (tested by cloning a scratch file), where
 `$GRAFT_HOME` is, and whether FUSE and NFS are available.

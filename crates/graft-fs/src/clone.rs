@@ -108,9 +108,90 @@ impl FileCloner for ReflinkCloner {
     }
 }
 
+/// Recreates the tree at `src` as `dst` (which must not exist), creating
+/// every regular file with `cloner` and copying symlinks as symlinks.
+/// Directory permissions are applied after their contents exist, so
+/// read-only directories (as some package managers create) work. Other file
+/// types (sockets, FIFOs) are skipped.
+///
+/// # Errors
+///
+/// The first I/O error; `dst` may then be partially populated.
+pub fn clone_tree(src: &Path, dst: &Path, cloner: &dyn FileCloner) -> io::Result<()> {
+    let meta = std::fs::symlink_metadata(src)?;
+    if !meta.is_dir() {
+        return Err(io::Error::other(format!(
+            "{} is not a directory",
+            src.display()
+        )));
+    }
+    std::fs::create_dir(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let to = dst.join(entry.file_name());
+        if kind.is_dir() {
+            clone_tree(&entry.path(), &to, cloner)?;
+        } else if kind.is_file() {
+            cloner.clone_file(&entry.path(), &to)?;
+        } else if kind.is_symlink() {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(std::fs::read_link(entry.path())?, &to)?;
+        } else {
+            tracing::debug!(path = %entry.path().display(), "skipping special file in layer");
+        }
+    }
+    std::fs::set_permissions(dst, meta.permissions())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clones_trees_with_symlinks_and_read_only_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(src.join("a/b")).unwrap();
+        std::fs::write(src.join("a/b/f.js"), "f").unwrap();
+        std::fs::write(src.join("top"), "t").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::os::unix::fs::symlink("a/b/f.js", src.join("link")).unwrap();
+            std::fs::set_permissions(src.join("a"), std::fs::Permissions::from_mode(0o555))
+                .unwrap();
+        }
+        let dst = dir.path().join("dst");
+        let cloner = ReflinkCloner::new();
+        clone_tree(&src, &dst, &cloner).unwrap();
+        assert_eq!(std::fs::read_to_string(dst.join("a/b/f.js")).unwrap(), "f");
+        assert_eq!(std::fs::read_to_string(dst.join("top")).unwrap(), "t");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::read_link(dst.join("link")).unwrap(),
+                Path::new("a/b/f.js")
+            );
+            let mode = std::fs::metadata(dst.join("a"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o555);
+            for d in [&src, &dst] {
+                std::fs::set_permissions(d.join("a"), std::fs::Permissions::from_mode(0o755))
+                    .unwrap();
+            }
+        }
+        // Writes to the clone never reach the source.
+        std::fs::write(dst.join("top"), "changed").unwrap();
+        assert_eq!(std::fs::read_to_string(src.join("top")).unwrap(), "t");
+        assert!(
+            clone_tree(&src, &dst, &cloner).is_err(),
+            "dst must not exist"
+        );
+    }
 
     #[test]
     fn clones_or_copies_with_identical_contents_and_mode() {

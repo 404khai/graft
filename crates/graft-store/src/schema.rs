@@ -8,7 +8,8 @@
 use rusqlite::{Connection, TransactionBehavior};
 
 /// Every migration, in order. Never edit or reorder a released entry.
-pub(crate) const MIGRATIONS: &[&str] = &[include_str!("schema/v1.sql")];
+pub(crate) const MIGRATIONS: &[&str] =
+    &[include_str!("schema/v1.sql"), include_str!("schema/v2.sql")];
 
 /// The schema version this build creates and understands.
 pub const SCHEMA_VERSION: u32 = {
