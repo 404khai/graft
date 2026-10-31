@@ -3,8 +3,9 @@
 //! A Root is the main repository: its git object store plus the layer cache
 //! of shared, content-addressed directory trees (for example `node_modules`).
 //! This crate opens repositories with `gix`, derives each Root's [`RootId`],
-//! and resolves refs and commits. Objects are read lazily; nothing here
-//! shells out to `git`.
+//! and resolves refs and commits. [`graft`] builds and inspects the small
+//! git repositories that back reflink grafts, sharing Root's object store.
+//! Objects are read lazily; nothing here shells out to `git`.
 //!
 //! The layer cache arrives in a later phase.
 
@@ -13,6 +14,8 @@
 use std::path::{Path, PathBuf};
 
 use graft_core::{CommitId, RootId};
+
+pub mod graft;
 
 /// Errors from opening or reading a repository.
 #[derive(Debug, thiserror::Error)]
@@ -58,6 +61,22 @@ pub enum RootError {
         source: std::io::Error,
     },
 
+    /// A path in a tree could escape the working tree or touch `.git`.
+    #[error("refusing unsafe path {path:?} in the tree: {reason}")]
+    UnsafePath {
+        /// The path as stored in the tree.
+        path: String,
+        /// Why it is unsafe.
+        reason: String,
+    },
+
+    /// The repository uses a configuration Graft does not support yet.
+    #[error("unsupported repository: {reason}")]
+    Unsupported {
+        /// What is unsupported.
+        reason: String,
+    },
+
     /// Reading from the object store or refs failed.
     #[error("{action}: {source}")]
     Git {
@@ -72,7 +91,7 @@ pub enum RootError {
 /// Result alias using [`RootError`].
 pub type Result<T, E = RootError> = std::result::Result<T, E>;
 
-fn git_err(
+pub(crate) fn git_err(
     action: &'static str,
 ) -> impl FnOnce(Box<dyn std::error::Error + Send + Sync>) -> RootError {
     move |source| RootError::Git { action, source }
@@ -114,7 +133,7 @@ impl std::fmt::Debug for Repo {
     }
 }
 
-fn to_commit_id(id: gix::ObjectId) -> Result<CommitId> {
+pub(crate) fn to_commit_id(id: gix::ObjectId) -> Result<CommitId> {
     id.to_string()
         .parse()
         .map_err(|e: graft_core::ParseIdError| RootError::Git {
