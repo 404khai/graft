@@ -13,8 +13,11 @@ publish.workspace = true
 privileged-tests = []
 
 [dependencies]
+graft-core.workspace = true
+graft-root.workspace = true
 libc.workspace = true
 tempfile.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 
 [lints]

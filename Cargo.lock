@@ -1333,8 +1333,11 @@ dependencies = [
 name = "graft-fs"
 version = "0.0.0"
 dependencies = [
+ "graft-core",
+ "graft-root",
  "libc",
  "tempfile",
+ "thiserror",
  "tracing",
 ]
 

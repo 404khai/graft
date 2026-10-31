@@ -1,8 +1,11 @@
 //! Filesystem backends for grafts.
 //!
-//! This crate will hold the `FsBackend` trait and its implementations
-//! (reflink, FUSE, NFS loopback). For now it provides the host probing that
-//! `graft doctor` reports and that backend selection will rely on:
+//! [`FsBackend`] is how grafts are materialised. [`ReflinkBackend`] gives
+//! each graft a real working tree whose unchanged files are reflinks of
+//! Root's (ADR 0003); FUSE and NFS backends arrive in later phases.
+//! [`unshared_bytes`] measures what a graft really costs on disk.
+//!
+//! It also provides the host probing that `graft doctor` reports:
 //!
 //! - [`filesystem_type`]: which filesystem a path lives on.
 //! - [`probe_reflink`]: whether that filesystem can clone files by reference
@@ -18,12 +21,18 @@
 
 #![deny(unsafe_code)]
 
+mod backend;
 mod capabilities;
+mod clone;
 mod fstype;
 mod reflink;
 #[allow(unsafe_code)] // FFI to statfs, clonefile and ioctl; see each SAFETY comment.
 mod sys;
+mod usage;
 
+pub use backend::{CreateReport, FsBackend, FsError, GraftSpec, ReflinkBackend, Result};
 pub use capabilities::{Availability, fuse_availability, nfs_client_availability};
+pub use clone::{CloneReport, ReflinkCloner};
 pub use fstype::{FsType, filesystem_type, same_filesystem};
 pub use reflink::{REFLINK_MECHANISM, probe_reflink};
+pub use usage::{human_bytes, unshared_bytes};
