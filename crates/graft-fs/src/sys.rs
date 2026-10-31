@@ -23,6 +23,26 @@ fn statfs(path: &Path) -> io::Result<libc::statfs> {
     Ok(unsafe { buf.assume_init() })
 }
 
+/// Bytes available to unprivileged users on the filesystem containing
+/// `path` (`f_bavail * f_bsize`).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn available_bytes(path: &Path) -> io::Result<u64> {
+    let st = statfs(path)?;
+    // Field types differ per target (u32/u64/c_long); all are non-negative.
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::unnecessary_cast,
+        clippy::cast_lossless
+    )]
+    Ok((st.f_bavail as u64).saturating_mul(st.f_bsize as u64))
+}
+
+/// Free space is not implemented on other platforms.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn available_bytes(_path: &Path) -> io::Result<u64> {
+    Err(io::ErrorKind::Unsupported.into())
+}
+
 /// The Linux `statfs` magic number for the filesystem containing `path`.
 #[cfg(target_os = "linux")]
 pub(crate) fn fs_magic(path: &Path) -> io::Result<u32> {
