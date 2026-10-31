@@ -8,6 +8,7 @@
 
 mod cli;
 mod doctor;
+mod grafts;
 mod repo_policy;
 mod root;
 

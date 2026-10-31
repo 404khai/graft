@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod doctor;
+mod grafts;
 mod root;
 
 use std::io::Write;
@@ -35,8 +36,36 @@ enum Command {
     Init(root::InitArgs),
     /// Show the Root for the current git repository.
     Root(root::RootArgs),
+    /// Create a graft: a workspace of its own, checked out from Root.
+    New(grafts::NewArgs),
+    /// List grafts with their state, changes and disk use.
+    Ls,
+    /// Print a graft's working-tree path, e.g. `cd "$(graft path auth)"`.
+    Path(grafts::NameArgs),
+    /// Show what changed in a graft since its base.
+    Status(grafts::StatusArgs),
+    /// Show a graft's changes as a unified diff.
+    Diff(grafts::NameArgs),
+    /// Remove a graft. Refuses if work would be lost, unless --force.
+    Prune(grafts::PruneArgs),
     /// Report platform, filesystem, reflink and FUSE/NFS support.
     Doctor(doctor::Args),
+}
+
+/// What a command prints: `stdout` as is, each warning on stderr.
+#[derive(Debug, Default)]
+pub(crate) struct Output {
+    pub stdout: String,
+    pub warnings: Vec<String>,
+}
+
+impl Output {
+    pub(crate) fn stdout(stdout: String) -> Self {
+        Self {
+            stdout,
+            warnings: Vec::new(),
+        }
+    }
 }
 
 /// What every command gets: `$GRAFT_HOME` and the config, or why they could
@@ -90,14 +119,30 @@ fn run() -> anyhow::Result<ExitCode> {
     let env = Environment::load();
     init_logging(env.config.as_ref().and_then(|c| c.as_ref().ok()));
 
+    let ok = |r: anyhow::Result<Output>| r.map(|o| (o, ExitCode::SUCCESS));
     let (output, code) = match cli.command {
-        Command::Init(args) => (root::init(&args, &env)?, ExitCode::SUCCESS),
-        Command::Root(args) => (root::show(&args, &env)?, ExitCode::SUCCESS),
-        Command::Doctor(args) => doctor::run(&args, &env),
+        Command::Init(args) => ok(root::init(&args, &env).map(Output::stdout))?,
+        Command::Root(args) => ok(root::show(&args, &env).map(Output::stdout))?,
+        Command::New(args) => ok(grafts::new(&args, &env))?,
+        Command::Ls => ok(grafts::ls(&env))?,
+        Command::Path(args) => ok(grafts::path(&args, &env))?,
+        Command::Status(args) => ok(grafts::status(&args, &env))?,
+        Command::Diff(args) => ok(grafts::diff(&args, &env))?,
+        Command::Prune(args) => ok(grafts::prune(&args, &env))?,
+        Command::Doctor(args) => {
+            let (stdout, code) = doctor::run(&args, &env);
+            (Output::stdout(stdout), code)
+        }
     };
+    {
+        let mut stderr = std::io::stderr().lock();
+        for warning in &output.warnings {
+            let _ = writeln!(stderr, "graft: warning: {warning}");
+        }
+    }
     let mut stdout = std::io::stdout().lock();
     stdout
-        .write_all(output.as_bytes())
+        .write_all(output.stdout.as_bytes())
         .and_then(|()| stdout.flush())
         .context("writing to stdout")?;
     Ok(code)

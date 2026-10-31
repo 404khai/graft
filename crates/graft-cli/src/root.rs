@@ -57,13 +57,13 @@ pub(crate) fn init(args: &InitArgs, env: &Environment) -> anyhow::Result<String>
 /// Prints the Root for the repository.
 pub(crate) fn show(args: &RootArgs, env: &Environment) -> anyhow::Result<String> {
     let home = env.require_home()?;
-    let repo = discover(args.path.as_ref())?;
-    let Some((record, store)) = registry::find_root(home, &repo)? else {
-        anyhow::bail!(
-            "{} is not registered as a Root; run `graft init` first",
-            repo.workdir().display()
-        );
-    };
+    let start = args.path.clone().unwrap_or_else(|| PathBuf::from("."));
+    let registry::Located {
+        record,
+        store,
+        repo,
+        ..
+    } = registry::locate(home, &start)?;
 
     let head = match (repo.head_commit(), repo.head_ref()) {
         (Ok(commit), Ok(Some(name))) => {
