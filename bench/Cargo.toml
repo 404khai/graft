@@ -1,0 +1,24 @@
+[package]
+name = "graft-bench"
+description = "End-to-end benchmark harness: grafts versus git worktrees and full clones"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "graft-bench"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+blake3.workspace = true
+clap.workspace = true
+graft-fs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

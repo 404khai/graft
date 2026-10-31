@@ -4,6 +4,13 @@ name: Bench
 # pull requests labelled `bench`.
 on:
   workflow_dispatch:
+    inputs:
+      runs:
+        description: Times to repeat the harness matrix
+        default: "3"
+      agents:
+        description: Agent counts for the harness matrix
+        default: "1,4,8,16"
   pull_request:
     types: [labeled, synchronize]
 
@@ -45,3 +52,45 @@ jobs:
         run: |
           echo "### apfs" >> "$GITHUB_STEP_SUMMARY"
           scripts/measure-graft-disk.sh "$RUNNER_TEMP/graft-bench" 1024 10000 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  harness:
+    # The full matrix takes hours: on demand only, never on every push.
+    name: benchmark harness (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Mount a dedicated btrfs volume on the large /mnt disk (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y btrfs-progs xfsprogs
+          sudo mkdir -p /mnt/graft-bench && sudo chown "$(id -u):$(id -g)" /mnt/graft-bench
+          sudo env SIZE=60G scripts/mount-test-filesystems.sh /mnt/graft-bench "$(id -u):$(id -g)"
+          df -h /mnt/graft-bench/mnt/btrfs
+      - name: Run (Linux, btrfs)
+        if: runner.os == 'Linux'
+        run: >
+          bench/run.sh --work /mnt/graft-bench/mnt/btrfs
+          --runs "${{ inputs.runs }}" --agents "${{ inputs.agents }}"
+          --machine "GitHub Actions ubuntu-latest runner"
+      - name: Run (macOS, APFS)
+        if: runner.os == 'macOS'
+        run: >
+          bench/run.sh --image-size 60
+          --runs "${{ inputs.runs }}" --agents "${{ inputs.agents }}"
+          --machine "GitHub Actions macos-latest runner"
+      - name: Summary
+        if: always()
+        run: cat bench/results/*/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: bench-results-${{ matrix.os }}
+          path: bench/results/
