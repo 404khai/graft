@@ -139,6 +139,21 @@ hex_id!(
     "blob hash"
 );
 
+impl GraftId {
+    /// A new random ID from the operating system's secure random source.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraftError::Entropy`] if the OS cannot provide randomness.
+    ///
+    /// [`GraftError::Entropy`]: crate::GraftError::Entropy
+    pub fn random() -> crate::Result<Self> {
+        let mut bytes = [0u8; 16];
+        getrandom::fill(&mut bytes).map_err(|e| crate::GraftError::Entropy(e.to_string()))?;
+        Ok(Self(bytes))
+    }
+}
+
 impl BlobHash {
     /// Splits the hex form into the two-character shard directory and the
     /// remaining file name, as laid out under `blobs/`.
@@ -163,6 +178,14 @@ mod tests {
         assert_eq!(id.as_bytes()[15], 0xff);
         assert_eq!(id.to_string(), GRAFT_HEX);
         assert_eq!(format!("{id:?}"), format!("GraftId({GRAFT_HEX})"));
+    }
+
+    #[test]
+    fn random_graft_ids_differ() {
+        let a = GraftId::random().unwrap();
+        let b = GraftId::random().unwrap();
+        assert_ne!(a, b);
+        assert_eq!(a.to_string().parse::<GraftId>().unwrap(), a);
     }
 
     #[test]

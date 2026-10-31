@@ -49,6 +49,10 @@ pub enum GraftError {
         source: Box<toml::de::Error>,
     },
 
+    /// The operating system could not provide random bytes.
+    #[error("cannot read OS randomness: {0}")]
+    Entropy(String),
+
     /// An identifier could not be parsed.
     #[error(transparent)]
     InvalidId(#[from] ParseIdError),

@@ -7,7 +7,7 @@ them records the measured number.
 
 ## Phase 0 — Foundation
 
-Status: in review (`chore/workspace-scaffold`)
+Status: done (#1)
 
 - [x] `cargo build`, `cargo test`, `cargo clippy -D warnings`, `cargo fmt --check`, `cargo deny check` pass on Linux and macOS in CI.
 - [x] `graft doctor` correctly reports reflink support on APFS and btrfs, and its absence on ext4.
@@ -18,12 +18,16 @@ Status: in review (`chore/workspace-scaffold`)
 
 ## Phase 1 — Root registry and metadata store
 
-Status: not started
+Status: in review (`feat/root-registry`)
 
-- [ ] `graft init` is idempotent and refuses non-git directories with a clear error.
-- [ ] Schema migrations are tested from an empty DB.
-- [ ] Concurrent CLI invocations do not corrupt the DB (test with parallel processes).
-- [ ] Graft names are validated (lowercase, digits, hyphens, ≤ 40 chars) and unique per Root.
+- [x] `graft init` is idempotent and refuses non-git directories with a clear error.
+  - `root::init_registers_then_is_idempotent`, `root::init_refuses_a_directory_that_is_not_a_repository`; also refuses bare and empty repositories.
+- [x] Schema migrations are tested from an empty DB.
+  - `graft-store/tests/migrations.rs`: empty directory, empty file, re-open, newer-version refusal, rollback of a failed migration, hash pin on released migrations.
+- [x] Concurrent CLI invocations do not corrupt the DB (test with parallel processes).
+  - `root::parallel_inits_register_each_root_once_without_corruption` (24 `graft init` processes over 2 repos, then mixed `init`/`root`), and `graft-store/tests/concurrency.rs` (8 processes writing 201 grafts and racing for one name). `integrity_check` is clean; 0 failures in 30 repeated local runs.
+- [x] Graft names are validated (lowercase, digits, hyphens, ≤ 40 chars) and unique per Root.
+  - `GraftName` (also: must start with a letter or digit and not end with a hyphen); a partial unique index among unpruned grafts; `names_are_unique_among_unpruned_grafts`.
 
 ## Phase 2 — Reflink grafts
 

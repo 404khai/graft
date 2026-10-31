@@ -11,7 +11,8 @@ detects overlapping edits between agents while they work, and lands finished
 work into Root through a tested merge queue. The output is always ordinary git
 history.
 
-> **Status:** early development. Only `graft doctor` works today. See
+> **Status:** early development. `graft doctor`, `graft init` and
+> `graft root` work today; creating grafts comes next. See
 > [docs/STATUS.md](docs/STATUS.md) for progress and
 > [docs/architecture.md](docs/architecture.md) for the design.
 
@@ -19,6 +20,8 @@ history.
 
 ```sh
 cargo run -p graft-cli -- doctor
+cargo run -p graft-cli -- init     # register this repository as a Root
+cargo run -p graft-cli -- root     # show it
 ```
 
 `graft doctor` reports the platform, the filesystem the repository is on,

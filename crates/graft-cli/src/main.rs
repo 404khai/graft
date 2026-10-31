@@ -1,12 +1,12 @@
 //! `graft`, the command-line interface.
 //!
 //! Graft gives every agent a copy-on-write view of one shared Root plus a
-//! private delta. This binary is how people and scripts drive it. For now it
-//! only has `graft doctor`, which reports whether this host can run grafts.
+//! private delta. This binary is how people and scripts drive it.
 
 #![forbid(unsafe_code)]
 
 mod doctor;
+mod root;
 
 use std::io::Write;
 use std::process::ExitCode;
@@ -31,6 +31,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Register the current git repository as a Root.
+    Init(root::InitArgs),
+    /// Show the Root for the current git repository.
+    Root(root::RootArgs),
     /// Report platform, filesystem, reflink and FUSE/NFS support.
     Doctor(doctor::Args),
 }
@@ -47,6 +51,16 @@ impl Environment {
         let home = GraftHome::resolve();
         let config = home.as_ref().ok().map(Config::load);
         Self { home, config }
+    }
+
+    /// `$GRAFT_HOME`, for commands that cannot run without a usable home and
+    /// a valid config. `doctor` reports these problems instead.
+    pub(crate) fn require_home(&self) -> anyhow::Result<&GraftHome> {
+        let home = self.home.as_ref().map_err(|e| anyhow::anyhow!("{e}"))?;
+        if let Some(Err(e)) = &self.config {
+            anyhow::bail!("{e}");
+        }
+        Ok(home)
     }
 }
 
@@ -77,6 +91,8 @@ fn run() -> anyhow::Result<ExitCode> {
     init_logging(env.config.as_ref().and_then(|c| c.as_ref().ok()));
 
     let (output, code) = match cli.command {
+        Command::Init(args) => (root::init(&args, &env)?, ExitCode::SUCCESS),
+        Command::Root(args) => (root::show(&args, &env)?, ExitCode::SUCCESS),
         Command::Doctor(args) => doctor::run(&args, &env),
     };
     let mut stdout = std::io::stdout().lock();
