@@ -34,16 +34,16 @@ Status: done (#2)
 Status: in review (`feat/reflink-grafts`)
 
 - [ ] On APFS and btrfs, creating a graft of a 1 GB working tree uses < 5 MB of new disk (*target*), measured by `graft ls`.
-  - APFS (local, `scripts/measure-graft-disk.sh`): 1 GiB in 10,000 files → **804 KiB**, met; 1 GiB in 100,000 files → **7.7 MiB**, missed. The miss is the graft's git index (8.0 MB, ~80 bytes per entry), the same size as Root's own index; gix cannot write the smaller index v4.
-  - btrfs: pending the `bench` workflow.
+  - 1 GiB in 10,000 files (`scripts/measure-graft-disk.sh`, `bench` workflow): APFS **804 KiB**, btrfs **808 KiB**, XFS 1.2 MiB. Met.
+  - 1 GiB in 100,000 files, APFS (local): **7.7 MiB**. Missed. Nearly all of it is the graft's git index (8.0 MB, ~80 bytes per entry), the same size as Root's own index; gix cannot write the smaller index v4. Left unticked because it holds only for trees with fewer, larger files.
 - [x] Two grafts from the same Root can be created, edited and pruned independently.
   - `grafts::two_grafts_are_independent` (e2e), conformance `independent_grafts`.
 - [x] A graft never shares a git branch lock with Root or another graft.
   - `grafts::grafts_do_not_take_branch_locks`: Root and two grafts all have `main` checked out and commit on it; Root's branches and worktree list are untouched.
 - [x] Prune leaves no files, mounts or DB rows behind (verified by test).
   - `grafts::prune_leaves_nothing_behind`: no working tree, empty mounts dir, no rows, no `refs/graft/*`.
-- [ ] Copy fallback works on ext4 and prints a single clear warning.
-  - `grafts::warns_exactly_once_when_copying_instead_of_reflinking` asserts exactly one warning wherever reflinks are unsupported; ext4 is covered on the Ubuntu CI runner (pending). `warns_once_when_graft_home_is_on_another_filesystem` covers the cross-filesystem case.
+- [x] Copy fallback works on ext4 and prints a single clear warning.
+  - `grafts::warns_exactly_once_when_copying_instead_of_reflinking` passes on the Ubuntu runner (ext4); the `bench` run on an ext4 loop mount printed exactly one warning and copied the 1 GiB tree correctly (`graft ls`: 1.0 GiB). `warns_once_when_graft_home_is_on_another_filesystem` covers the cross-filesystem case.
 
 ## Phase 3 — Layer cache
 
