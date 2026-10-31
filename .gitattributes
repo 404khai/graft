@@ -1,0 +1,2 @@
+# Shipped schema migrations are hash-pinned; never let git rewrite them.
+*.sql -text
