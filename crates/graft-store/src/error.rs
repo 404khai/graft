@@ -62,6 +62,13 @@ pub enum StoreError {
         found: RootId,
     },
 
+    /// The repository has not been registered with `graft init`.
+    #[error("{} is not registered as a Root; run `graft init` first", path.display())]
+    NotRegistered {
+        /// The repository's working tree.
+        path: PathBuf,
+    },
+
     /// A live graft already uses this name.
     #[error("a graft named {name} already exists")]
     NameTaken {
