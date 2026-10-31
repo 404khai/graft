@@ -1,0 +1,11 @@
+[package]
+name = "graft-store"
+description = "SQLite metadata, delta blob store and op log"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
