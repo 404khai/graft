@@ -1,0 +1,11 @@
+[package]
+name = "graft-integrate"
+description = "Integrate queue, rebase, structural merge and test gate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,56 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+repository = "https://github.com/404khai/graft"
+publish = false
+
+[workspace.dependencies]
+# Internal crates. Crates depend downward only (see AGENTS.md §5).
+graft-core = { path = "crates/graft-core" }
+graft-root = { path = "crates/graft-root" }
+graft-store = { path = "crates/graft-store" }
+graft-fs = { path = "crates/graft-fs" }
+graft-sandbox = { path = "crates/graft-sandbox" }
+graft-blueprint = { path = "crates/graft-blueprint" }
+graft-radar = { path = "crates/graft-radar" }
+graft-integrate = { path = "crates/graft-integrate" }
+graft-sched = { path = "crates/graft-sched" }
+graft-daemon = { path = "crates/graft-daemon" }
+graft-mcp = { path = "crates/graft-mcp" }
+
+# External crates. Every addition is justified in its PR.
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+libc = "0.2.191"
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"
+toml = "1.1.8"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+# Test-only.
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
+tempfile = "3.27.0"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+undocumented_unsafe_blocks = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,34 @@
+[package]
+name = "graft-cli"
+description = "The graft command-line interface"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "graft"
+path = "src/main.rs"
+
+# End-to-end tests live at the workspace root (AGENTS.md §5) but are owned by
+# this package so Cargo builds the `graft` binary and sets CARGO_BIN_EXE_graft.
+[[test]]
+name = "e2e"
+path = "../../tests/e2e/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+graft-core.workspace = true
+graft-fs.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
