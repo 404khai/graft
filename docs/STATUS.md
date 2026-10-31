@@ -9,11 +9,11 @@ them records the measured number.
 
 Status: in review (`chore/workspace-scaffold`)
 
-- [ ] `cargo build`, `cargo test`, `cargo clippy -D warnings`, `cargo fmt --check`, `cargo deny check` pass on Linux and macOS in CI.
-- [ ] `graft doctor` correctly reports reflink support on APFS and btrfs, and its absence on ext4.
-  - APFS: verified locally and by `doctor::reflink_report_matches_the_filesystem` on macOS CI.
-  - ext4: covered by the same test on Ubuntu CI and by the privileged job.
-  - btrfs (and XFS): covered by the privileged job's loop mounts.
+- [x] `cargo build`, `cargo test`, `cargo clippy -D warnings`, `cargo fmt --check`, `cargo deny check` pass on Linux and macOS in CI.
+- [x] `graft doctor` correctly reports reflink support on APFS and btrfs, and its absence on ext4.
+  - APFS: supported (clonefile), on the macOS runner and locally.
+  - ext4: not supported, on the Ubuntu runner and a loop mount.
+  - btrfs and XFS (`reflink=1`): supported (FICLONE), on loop mounts in the privileged job.
 - [x] Every non-FS crate has `#![forbid(unsafe_code)]`. Enforced by `repo_policy::unsafe_code_is_forbidden_outside_fs_and_sandbox`; `graft-fs` and `graft-sandbox` use `#![deny(unsafe_code)]` with per-module allows.
 
 ## Phase 1 — Root registry and metadata store
