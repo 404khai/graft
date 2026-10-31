@@ -11,17 +11,23 @@ detects overlapping edits between agents while they work, and lands finished
 work into Root through a tested merge queue. The output is always ordinary git
 history.
 
-> **Status:** early development. `graft doctor`, `graft init` and
-> `graft root` work today; creating grafts comes next. See
+> **Status:** early development. Grafts are real working trees whose
+> unchanged files are reflinks of Root's; virtual (lazy) grafts come later. See
 > [docs/STATUS.md](docs/STATUS.md) for progress and
 > [docs/architecture.md](docs/architecture.md) for the design.
 
 ## Try it
 
 ```sh
-cargo run -p graft-cli -- doctor
-cargo run -p graft-cli -- init     # register this repository as a Root
-cargo run -p graft-cli -- root     # show it
+cargo install --path crates/graft-cli   # installs `graft`
+graft doctor              # can this machine reflink?
+graft init                # register this repository as a Root
+graft new auth            # a graft checked out at HEAD
+cd "$(graft path auth)"   # work in it like any git checkout
+graft ls                  # name, base, state, changed files, unshared disk
+graft status auth         # what changed since the base
+graft diff auth           # as a unified diff
+graft prune auth          # refuses if work would be lost; --force to discard
 ```
 
 `graft doctor` reports the platform, the filesystem the repository is on,

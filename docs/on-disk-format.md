@@ -1,6 +1,6 @@
 # On-disk format
 
-**Format version: 1** (metadata schema v1)
+**Format version: 2** (metadata schema v1)
 
 This file describes everything Graft persists. Any change to a structure
 below bumps the format version, adds a migration, and updates this file in
@@ -26,11 +26,20 @@ $GRAFT_HOME/
         ├── graft.db            SQLite metadata (+ graft.db-wal, graft.db-shm)
         ├── blobs/              (delta store phase) delta blobs
         ├── layers/             (layer cache phase) shared layers
-        └── mounts/<name>/      (reflink grafts phase) graft mount points
+        └── mounts/             mode 0700
+            ├── <name>/         a graft's working tree (see "Grafts" below)
+            └── .tmp-<graft-id>/  a graft being built; renamed to <name>/
 ```
 
 Entries in `roots/` whose name is not a valid Root ID, or that contain no
 `graft.db`, are ignored.
+
+## Format history
+
+| Version | Change | Migration |
+| --- | --- | --- |
+| 1 | `$GRAFT_HOME` layout, IDs, `graft.db` schema v1 | — |
+| 2 | Adds `mounts/`, graft repositories and `refs/graft/<graft-id>` pins in Root | None: additive; v1 never created these |
 
 ## `config.toml`
 
@@ -151,3 +160,45 @@ Created in v1 and written from the delta store phase on. `WITHOUT ROWID`.
 | `actor` | TEXT | Optional caller-supplied actor or tool-call ID |
 
 Primary key: `(graft_id, seq)`.
+
+## Grafts (reflink backend)
+
+Each graft is a standalone git repository at `mounts/<name>/`
+([ADR 0003](decisions/0003-reflink-graft-layout.md)):
+
+| Path | Contents |
+| --- | --- |
+| `.git/HEAD` | `ref: refs/heads/graft/<name>` |
+| `.git/refs/heads/graft/<name>` | The base commit, until the graft commits |
+| `.git/objects/info/alternates` | Canonical path of Root's `objects/` directory |
+| `.git/config` | `[include] path = <Root's .git/config>`, then `core.bare = false`, `core.logallrefupdates = true`, and a `root` remote whose URL is Root's working tree |
+| `.git/shallow` | Copy of Root's, if Root is shallow |
+| `.git/info/exclude` | Copy of Root's, if present |
+| `.git/index` | Index of the base tree, with real stat data |
+
+Objects the graft creates (its own commits) live in the graft's own
+`.git/objects/`. Roots that set `core.worktree` are refused.
+
+A graft is built in `mounts/.tmp-<graft-id>/` and renamed into place when
+complete, so `mounts/<name>/` is never half-built. A leftover `.tmp-*`
+directory is a failed or interrupted `graft new`, and prune removes it.
+
+## Refs in Root
+
+| Ref | Points at | Lifetime |
+| --- | --- | --- |
+| `refs/graft/<graft-id>` | The graft's base commit | `graft new` to `graft prune`; keeps the base reachable so `git gc` cannot prune it |
+
+## Graft lifecycle on disk
+
+`graft new` writes in this order, undoing completed steps on failure:
+
+1. `grafts` row in state `created` (reserves the name)
+2. `mounts/.tmp-<id>/`, renamed to `mounts/<name>/`
+3. `refs/graft/<id>` in Root
+4. state `live`
+
+`graft prune` marks the row `pruned`, removes `mounts/<name>/` and any
+`mounts/.tmp-<id>/`, deletes `refs/graft/<id>`, and finally deletes the row.
+A prune interrupted part-way is resumed by running `graft prune <name>`
+again.
