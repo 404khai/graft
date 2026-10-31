@@ -11,7 +11,9 @@ publish.workspace = true
 blake3.workspace = true
 gix.workspace = true
 graft-core.workspace = true
+libc.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

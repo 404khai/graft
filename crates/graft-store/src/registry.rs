@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use graft_core::{GraftHome, RootId, Timestamp};
+use graft_core::{GraftHome, GraftName, RootId, Timestamp};
 use graft_root::Repo;
 
 use crate::{Registration, Result, RootRecord, Store, StoreError};
@@ -112,4 +112,68 @@ pub fn register(home: &GraftHome, repo: &Repo) -> Result<(RootRecord, Store, Reg
     // A concurrent registration may have won with an earlier timestamp.
     let record = store.root()?;
     Ok((record, store, registration))
+}
+
+/// A Root found from a path, which may be inside one of its grafts.
+#[derive(Debug)]
+pub struct Located {
+    /// The Root's record.
+    pub record: RootRecord,
+    /// Its open database.
+    pub store: Store,
+    /// Root's repository.
+    pub repo: Repo,
+    /// The graft `start` was inside, if any.
+    pub inside_graft: Option<GraftName>,
+}
+
+/// Finds the Root for `start`: either the repository containing it, or, when
+/// `start` is inside a graft under `$GRAFT_HOME/roots/<id>/mounts/<name>`,
+/// the Root that graft belongs to. A graft's own repository is never
+/// mistaken for a Root.
+///
+/// # Errors
+///
+/// [`StoreError::NotRegistered`] if the repository is not a Root, plus
+/// repository and store errors.
+pub fn locate(home: &GraftHome, start: &Path) -> Result<Located> {
+    let start = start.canonicalize().map_err(|source| StoreError::Io {
+        action: "resolving",
+        path: start.to_owned(),
+        source,
+    })?;
+    if let Ok(roots) = home.roots_dir().canonicalize()
+        && let Ok(rest) = start.strip_prefix(&roots)
+    {
+        let mut parts = rest
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned());
+        if let Some(id) = parts.next().and_then(|p| p.parse::<RootId>().ok()) {
+            let store = Store::open(&home.root_dir(&id))?;
+            let record = store.root()?;
+            let repo = Repo::discover(&record.path)?;
+            let inside_graft = match (parts.next().as_deref(), parts.next()) {
+                (Some("mounts"), Some(name)) => name.parse().ok(),
+                _ => None,
+            };
+            return Ok(Located {
+                record,
+                store,
+                repo,
+                inside_graft,
+            });
+        }
+    }
+    let repo = Repo::discover(&start)?;
+    match find_root(home, &repo)? {
+        Some((record, store)) => Ok(Located {
+            record,
+            store,
+            repo,
+            inside_graft: None,
+        }),
+        None => Err(StoreError::NotRegistered {
+            path: repo.workdir().to_owned(),
+        }),
+    }
 }

@@ -26,8 +26,9 @@ mounts=()
 for fs in ext4 btrfs xfs; do
   img="$work/img/$fs.img"
   mnt="$work/mnt/$fs"
-  # 512 MiB satisfies every mkfs minimum (xfs needs ~300 MiB).
-  truncate -s 512M "$img"
+  # 512 MiB satisfies every mkfs minimum (xfs needs ~300 MiB). Benchmarks
+  # set SIZE for room to work.
+  truncate -s "${SIZE:-512M}" "$img"
   case $fs in
     ext4) mkfs.ext4 -q -F "$img" ;;
     btrfs) mkfs.btrfs -q -f "$img" ;;

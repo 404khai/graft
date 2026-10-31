@@ -450,6 +450,32 @@ impl Store {
         self.query_grafts("", [])
     }
 
+    /// Deletes a graft's record and its op log rows. Prune calls this last,
+    /// once the graft's files and pin are gone. Succeeds if it is already
+    /// gone.
+    ///
+    /// # Errors
+    ///
+    /// SQLite errors.
+    pub fn delete_graft(&mut self, id: GraftId) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM grafts WHERE graft_id = ?1", [id.to_string()])
+            .map_err(|e| self.sql(e))?;
+        Ok(())
+    }
+
+    /// The most recent pruned record named `name`, if a prune was
+    /// interrupted before the record was deleted.
+    ///
+    /// # Errors
+    ///
+    /// SQLite errors and [`StoreError::Corrupt`].
+    pub fn pruned_graft(&self, name: &GraftName) -> Result<Option<GraftRecord>> {
+        Ok(self
+            .query_grafts("WHERE name = ?1 AND state = 'pruned'", [name.as_str()])?
+            .pop())
+    }
+
     /// Moves a graft to `next`, enforcing [`GraftState::can_become`].
     ///
     /// # Errors
@@ -628,6 +654,36 @@ mod tests {
             matches!(err, StoreError::InvalidTransition { .. }),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn delete_graft_removes_the_row_and_its_op_log() {
+        let (_dir, mut store) = fresh();
+        let g = store.create_graft(&name("gone"), &commit()).unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT INTO op_log (graft_id, seq, at, kind, path) VALUES (?1, 1, 0, 'write', x'61')",
+                [g.id.to_string()],
+            )
+            .unwrap();
+        store.delete_graft(g.id).unwrap();
+        store.delete_graft(g.id).unwrap();
+        assert_eq!(store.graft_by_id(g.id).unwrap(), None);
+        let ops: i64 = store
+            .conn
+            .query_row("SELECT count(*) FROM op_log", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ops, 0, "op log rows must cascade");
+    }
+
+    #[test]
+    fn finds_an_interrupted_prune() {
+        let (_dir, mut store) = fresh();
+        let g = store.create_graft(&name("half"), &commit()).unwrap();
+        assert_eq!(store.pruned_graft(&name("half")).unwrap(), None);
+        store.set_state(g.id, GraftState::Pruned).unwrap();
+        assert_eq!(store.pruned_graft(&name("half")).unwrap().unwrap().id, g.id);
     }
 
     #[test]

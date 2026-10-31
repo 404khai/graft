@@ -18,7 +18,7 @@ Status: done (#1)
 
 ## Phase 1 — Root registry and metadata store
 
-Status: in review (`feat/root-registry`)
+Status: done (#2)
 
 - [x] `graft init` is idempotent and refuses non-git directories with a clear error.
   - `root::init_registers_then_is_idempotent`, `root::init_refuses_a_directory_that_is_not_a_repository`; also refuses bare and empty repositories.
@@ -31,13 +31,19 @@ Status: in review (`feat/root-registry`)
 
 ## Phase 2 — Reflink grafts
 
-Status: not started
+Status: in review (`feat/reflink-grafts`)
 
 - [ ] On APFS and btrfs, creating a graft of a 1 GB working tree uses < 5 MB of new disk (*target*), measured by `graft ls`.
-- [ ] Two grafts from the same Root can be created, edited and pruned independently.
-- [ ] A graft never shares a git branch lock with Root or another graft.
-- [ ] Prune leaves no files, mounts or DB rows behind (verified by test).
+  - APFS (local, `scripts/measure-graft-disk.sh`): 1 GiB in 10,000 files → **804 KiB**, met; 1 GiB in 100,000 files → **7.7 MiB**, missed. The miss is the graft's git index (8.0 MB, ~80 bytes per entry), the same size as Root's own index; gix cannot write the smaller index v4.
+  - btrfs: pending the `bench` workflow.
+- [x] Two grafts from the same Root can be created, edited and pruned independently.
+  - `grafts::two_grafts_are_independent` (e2e), conformance `independent_grafts`.
+- [x] A graft never shares a git branch lock with Root or another graft.
+  - `grafts::grafts_do_not_take_branch_locks`: Root and two grafts all have `main` checked out and commit on it; Root's branches and worktree list are untouched.
+- [x] Prune leaves no files, mounts or DB rows behind (verified by test).
+  - `grafts::prune_leaves_nothing_behind`: no working tree, empty mounts dir, no rows, no `refs/graft/*`.
 - [ ] Copy fallback works on ext4 and prints a single clear warning.
+  - `grafts::warns_exactly_once_when_copying_instead_of_reflinking` asserts exactly one warning wherever reflinks are unsupported; ext4 is covered on the Ubuntu CI runner (pending). `warns_once_when_graft_home_is_on_another_filesystem` covers the cross-filesystem case.
 
 ## Phase 3 — Layer cache
 
