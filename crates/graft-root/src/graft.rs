@@ -631,6 +631,41 @@ fn materialize(
         .unwrap_or_else(std::sync::PoisonError::into_inner))
 }
 
+/// Adds `paths` to the graft's `.git/info/exclude`, so layers (shared
+/// dependency trees) never show up as changes or block prune.
+///
+/// # Errors
+///
+/// If the exclude file cannot be written.
+pub fn exclude_paths(workdir: &Path, paths: &[&Path]) -> Result<()> {
+    use std::io::Write as _;
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let file = workdir.join(".git/info/exclude");
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir).map_err(io_err(dir))?;
+    }
+    let mut out = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&file)
+        .map_err(io_err(&file))?;
+    let mut text = Vec::from(&b"\n# Graft layers (shared, see graft.toml)\n"[..]);
+    for path in paths {
+        // Anchored to the top level, and escaped so names are literal.
+        text.push(b'/');
+        for &b in &graft_core::path_to_bytes(path) {
+            if matches!(b, b'*' | b'?' | b'[' | b'\\' | b'!' | b'#' | b' ') {
+                text.push(b'\\');
+            }
+            text.push(b);
+        }
+        text.extend_from_slice(b"/\n");
+    }
+    out.write_all(&text).map_err(io_err(&file))
+}
+
 /// How a path differs from the graft's base commit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ChangeKind {
