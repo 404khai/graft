@@ -76,6 +76,15 @@ pub enum StoreError {
         name: GraftName,
     },
 
+    /// The layer is still referenced by a graft.
+    #[error("layer {key} is in use by {refs} graft(s)")]
+    LayerInUse {
+        /// The layer.
+        key: graft_core::LayerKey,
+        /// How many grafts reference it.
+        refs: u64,
+    },
+
     /// No graft has this ID.
     #[error("no graft with id {id}")]
     NoSuchGraft {
