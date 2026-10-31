@@ -1126,6 +1126,8 @@ dependencies = [
  "clap",
  "graft-core",
  "graft-fs",
+ "graft-root",
+ "graft-store",
  "predicates",
  "tempfile",
  "tracing",

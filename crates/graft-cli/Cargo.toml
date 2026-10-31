@@ -22,6 +22,8 @@ anyhow.workspace = true
 clap.workspace = true
 graft-core.workspace = true
 graft-fs.workspace = true
+graft-root.workspace = true
+graft-store.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
