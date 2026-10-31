@@ -47,12 +47,16 @@ Status: in review (`feat/reflink-grafts`)
 
 ## Phase 3 — Layer cache
 
-Status: not started
+Status: in review (`feat/layer-cache`)
 
-- [ ] With a Node fixture, the second and later `graft new` calls do not run the install command.
-- [ ] Changing the lockfile produces a new layer; the old one is kept while referenced.
-- [ ] `graft gc` never removes a layer referenced by a live graft (tested).
-- [ ] Time from `graft new` to first passing `npm test` on the fixture is < 3 s after the first graft (*target*).
+- [x] With a Node fixture, the second and later `graft new` calls do not run the install command.
+  - `layers::node_fixture_reuses_node_modules_and_passes_npm_test_quickly` (real `npm ci`, required in CI) and `layers::builds_once_and_reuses_the_layer` (exact build count).
+- [x] Changing the lockfile produces a new layer; the old one is kept while referenced.
+  - `layers::a_lockfile_change_makes_a_new_layer_and_keeps_the_old`.
+- [x] `graft gc` never removes a layer referenced by a live graft (tested).
+  - `layers::gc_never_removes_a_referenced_layer`, `layers::gc_racing_graft_new_never_strands_a_graft` (6 `graft new` and 6 `graft gc` processes at once; 0 failures in 15 local runs), store and foreign-key tests.
+- [x] Time from `graft new` to first passing `npm test` on the fixture is < 3 s after the first graft (*target*).
+  - 0.13–0.16 s on Apple Silicon (APFS), measured by the Node e2e test.
 
 ## Phase 4 — Benchmark harness
 
