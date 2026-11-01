@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use anyhow::{Context, bail};
-use graft_core::{GraftName, GraftState};
+use graft_core::{BackendKind, GraftName, GraftState};
 use graft_fs::{FsBackend, GraftSpec, ReflinkBackend, human_bytes};
 use graft_root::graft::{GraftRepo, unified_diff};
 use graft_root::layer::LayerCache;
@@ -106,7 +106,9 @@ pub(crate) fn new(args: &NewArgs, env: &Environment) -> anyhow::Result<Output> {
     )?;
 
     // The record reserves the name before any files exist.
-    let record = located.store.create_graft(&name, &base)?;
+    let record = located
+        .store
+        .create_graft(&name, &base, BackendKind::Reflink)?;
     let spec = GraftSpec {
         id: record.id,
         name: &name,

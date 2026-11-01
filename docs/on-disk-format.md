@@ -1,6 +1,6 @@
 # On-disk format
 
-**Format version: 3** (metadata schema v2)
+**Format version: 4** (metadata schema v3)
 
 This file describes everything Graft persists. Any change to a structure
 below bumps the format version, adds a migration, and updates this file in
@@ -21,6 +21,10 @@ path never creates anything; only commands that write state do.
 ```
 $GRAFT_HOME/
 ├── config.toml                 optional user config
+├── run/                        mode 0700, graftd's runtime files (ADR 0007)
+│   ├── graftd.sock             JSON-RPC socket, mode 0600
+│   ├── graftd.lock             OS file lock held by the running graftd
+│   └── graftd.log              graftd's stderr when started by the CLI
 └── roots/
     └── <root-id>/              one directory per Root, mode 0700
         ├── graft.db            SQLite metadata (+ graft.db-wal, graft.db-shm)
@@ -30,7 +34,8 @@ $GRAFT_HOME/
         │   ├── <layer-key>.lock  OS file lock held by builders and gc
         │   └── .tmp-<layer-key>/ a layer being installed
         └── mounts/             mode 0700
-            ├── <name>/         a graft's working tree (see "Grafts" below)
+            ├── <name>/         a reflink graft's working tree, or a FUSE
+            │                   graft's mount point (see "Grafts" below)
             └── .tmp-<graft-id>/  a graft being built; renamed to <name>/
 ```
 
@@ -44,6 +49,7 @@ Entries in `roots/` whose name is not a valid Root ID, or that contain no
 | 1 | `$GRAFT_HOME` layout, IDs, `graft.db` schema v1 | — |
 | 2 | Adds `mounts/`, graft repositories and `refs/graft/<graft-id>` pins in Root | None: additive; v1 never created these |
 | 3 | Adds `layers/` and schema v2 (`layers`, `layer_refs`, `trusted_commands`) | Schema v1 → v2 runs automatically on open; tables only added |
+| 4 | Adds `run/` (graftd) and schema v3 (`grafts.backend`) | Schema v2 → v3 runs automatically on open; existing grafts become `reflink` |
 
 ## `config.toml`
 
@@ -52,6 +58,7 @@ TOML. Optional; a missing file means defaults. Unknown keys are an error.
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `log.filter` | string | `"warn"` | `tracing` filter directive. `$GRAFT_LOG` overrides it. |
+| `fs.backend` | string | `"reflink"` | Backend for new grafts: `reflink` or `fuse`. `$GRAFT_FS` and `graft new --backend` override it. |
 
 ## Identifiers
 
@@ -143,6 +150,7 @@ The Root this database belongs to. Exactly one row.
 | `state` | TEXT | `created`, `live`, `integrated` or `pruned` |
 | `created_at` | INTEGER | Timestamp |
 | `updated_at` | INTEGER | Timestamp of the last change to the row |
+| `backend` | TEXT | (v3) `reflink` or `fuse`; default `reflink` (ADR 0006) |
 
 Index `grafts_name_unique`: unique `name` where `state <> 'pruned'`.
 
@@ -228,6 +236,24 @@ A graft is built in `mounts/.tmp-<graft-id>/` and renamed into place when
 complete, so `mounts/<name>/` is never half-built. A leftover `.tmp-*`
 directory is a failed or interrupted `graft new`, and prune removes it.
 
+### FUSE grafts (v4)
+
+A graft with `backend = 'fuse'` stores no files. `mounts/<name>/` is an
+empty directory (mode `0700`) used as the mount point; `graftd` mounts the
+base commit's tree there, read-only, with each of the graft's layers
+(`layer_refs`) served from `layers/<key>/` at its path (ADR 0006). There is
+no `.git` inside the mount yet. A graft that should be mounted is one with
+`backend = 'fuse'` in state `live`; `graftd` remounts every such graft when
+it starts.
+
+## `run/` (v4)
+
+Created by `graftd` with mode `0700`; the daemon refuses to start if it is
+owned by another user or accessible by group or others. `graftd.sock` is
+created with mode `0600`. `graftd.lock` is held with an exclusive OS file
+lock for the daemon's lifetime; a socket whose lock is free is stale and is
+replaced. The protocol is in ADR 0007.
+
 ## Refs in Root
 
 | Ref | Points at | Lifetime |
@@ -244,6 +270,13 @@ directory is a failed or interrupted `graft new`, and prune removes it.
 4. for each layer, holding `layers/<key>.lock`: build it into the cache if
    missing, insert `layers` and `layer_refs` rows, reflink it into the graft
 5. state `live`
+
+For a FUSE graft, step 2 creates the empty `mounts/<name>/`; step 4 builds
+missing layers in a temporary reflink graft `mounts/.tmp-<id>/` that is
+removed afterwards, and records the references without copying anything;
+then `graftd` mounts the graft before step 5. Prune asks `graftd` to unmount
+it (lazily if busy) and then removes the empty mount point with `rmdir`,
+never recursively.
 
 `graft prune` marks the row `pruned`, removes `mounts/<name>/` and any
 `mounts/.tmp-<id>/`, deletes `refs/graft/<id>`, and finally deletes the row

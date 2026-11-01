@@ -18,6 +18,7 @@
 
 #![forbid(unsafe_code)]
 
+mod backend;
 mod commit;
 mod config;
 mod error;
@@ -27,8 +28,9 @@ mod id;
 mod paths;
 mod time;
 
+pub use backend::{BackendKind, UnknownBackend};
 pub use commit::CommitId;
-pub use config::{CONFIG_FILE_NAME, Config, LogConfig};
+pub use config::{CONFIG_FILE_NAME, Config, FsConfig, LogConfig};
 pub use error::{GraftError, Result};
 pub use graft::{GraftName, GraftState, InvalidGraftName, MAX_GRAFT_NAME_LEN, UnknownGraftState};
 pub use home::{GRAFT_HOME_ENV, GraftHome, HomeSource};
