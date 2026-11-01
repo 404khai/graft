@@ -1291,6 +1291,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "graft-bench"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "clap",
+ "graft-fs",
+ "tempfile",
+]
+
+[[package]]
 name = "graft-blueprint"
 version = "0.0.0"
 dependencies = [

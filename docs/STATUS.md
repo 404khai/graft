@@ -31,7 +31,7 @@ Status: done (#2)
 
 ## Phase 2 — Reflink grafts
 
-Status: in review (`feat/reflink-grafts`)
+Status: done (#3, #4)
 
 - [ ] On APFS and btrfs, creating a graft of a 1 GB working tree uses < 5 MB of new disk (*target*), measured by `graft ls`.
   - 1 GiB in 10,000 files (`scripts/measure-graft-disk.sh`, `bench` workflow): APFS **804 KiB**, btrfs **808 KiB**, XFS 1.2 MiB. Met.
@@ -47,7 +47,7 @@ Status: in review (`feat/reflink-grafts`)
 
 ## Phase 3 — Layer cache
 
-Status: in review (`feat/layer-cache`)
+Status: done (#5)
 
 - [x] With a Node fixture, the second and later `graft new` calls do not run the install command.
   - `layers::node_fixture_reuses_node_modules_and_passes_npm_test_quickly` (real `npm ci`, required in CI) and `layers::builds_once_and_reuses_the_layer` (exact build count).
@@ -60,11 +60,14 @@ Status: in review (`feat/layer-cache`)
 
 ## Phase 4 — Benchmark harness
 
-Status: not started
+Status: in review (`test/worktree-benchmarks`)
 
-- [ ] One command runs the whole matrix and produces the summary.
-- [ ] Results are reproducible within ±10% across three runs on the same machine.
+- [x] One command runs the whole matrix and produces the summary.
+  - `bench/run.sh`.
+- [x] Results are reproducible within ±10% across three runs on the same machine.
+  - Linux (GitHub runner, XFS): 159 of 160 values within ±10%. The macOS runner (a VM) was not: 17 of 113; see `bench/results/macos-arm64-apfs/NOTE.md`.
 - [ ] Summary committed for at least one Linux and one macOS machine.
+  - Linux: full matrix committed. macOS: small and medium only (large did not finish on the runner), with timings that are not reproducible.
 
 ## Phase 5 — Virtual filesystem: read path (Linux)
 

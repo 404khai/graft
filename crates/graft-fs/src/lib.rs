@@ -33,6 +33,6 @@ mod usage;
 pub use backend::{CreateReport, FsBackend, FsError, GraftSpec, ReflinkBackend, Result};
 pub use capabilities::{Availability, fuse_availability, nfs_client_availability};
 pub use clone::{CloneReport, ReflinkCloner, clone_tree};
-pub use fstype::{FsType, filesystem_type, same_filesystem};
+pub use fstype::{FsType, available_bytes, filesystem_type, same_filesystem};
 pub use reflink::{REFLINK_MECHANISM, probe_reflink};
 pub use usage::{human_bytes, unshared_bytes};

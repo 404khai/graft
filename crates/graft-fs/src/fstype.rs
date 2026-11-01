@@ -132,6 +132,17 @@ pub fn filesystem_type(path: &Path) -> io::Result<FsType> {
     }
 }
 
+/// Bytes available to unprivileged users on the filesystem containing
+/// `path`, as `df` reports it.
+///
+/// # Errors
+///
+/// Returns the OS error if `path` cannot be queried, and
+/// [`io::ErrorKind::Unsupported`] on platforms other than Linux and macOS.
+pub fn available_bytes(path: &Path) -> io::Result<u64> {
+    crate::sys::available_bytes(path)
+}
+
 /// Whether `a` and `b` are on the same filesystem (same device ID).
 ///
 /// # Errors
@@ -186,6 +197,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let fs = filesystem_type(dir.path()).unwrap();
         assert_ne!(fs.name(), "");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn reports_available_space() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(available_bytes(dir.path()).unwrap() > 0);
+        assert!(available_bytes(&dir.path().join("missing")).is_err());
     }
 
     #[test]
