@@ -248,7 +248,17 @@ fn measure(method: &mut dyn Method, agents: usize, work_fs: &Path) -> anyhow::Re
         create_median_s: median(all.iter().flat_map(|p| p.creates.iter().copied()).collect()),
         create_total_s: median(all.iter().map(|p| p.creates.iter().sum()).collect()),
         ready_first_s: median(all.iter().map(|p| p.readies[0]).collect()),
-        ready_median_s: median(all.iter().flat_map(|p| p.readies.iter().copied()).collect()),
+        // Later agents only: the first one (which may build a layer) is
+        // reported on its own, so it does not skew this median.
+        ready_median_s: if agents > 1 {
+            median(
+                all.iter()
+                    .flat_map(|p| p.readies[1..].iter().copied())
+                    .collect(),
+            )
+        } else {
+            median(all.iter().map(|p| p.readies[0]).collect())
+        },
         disk_added_bytes: disk,
         prune_median_s: median(all.iter().flat_map(|p| p.prunes.iter().copied()).collect()),
     })
@@ -300,7 +310,7 @@ fn header(args: &RunArgs, work_fs: &str) -> String {
          | runs | {} (after one discarded warm-up cell per fixture and method{}); cells with fewer than {MIN_SAMPLES} agents repeat until they have {MIN_SAMPLES} timed creations |\n\
          | load average at start | {} |\n| command | `{}` |\n\n\
          Each cell creates N workspaces one after another from the same fixture.\n\
-         **create** is the workspace command alone. **ready** adds `npm ci --offline` (worktree and clone \
+         **create** is the workspace command alone. **ready** (first agent, and median of the later agents) adds `npm ci --offline` (worktree and clone \
          need one per workspace; grafts reuse a `node_modules` layer that the first graft builds) and a \
          passing `npm test`. **disk added** is the drop in free space on the volume with all N workspaces \
          present, including Graft's layer cache and index. Local clones hardlink git objects, as `git clone` \

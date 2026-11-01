@@ -15,7 +15,7 @@ pub struct Metrics {
     pub create_total_s: f64,
     /// For the first agent: create + install (if needed) + passing test.
     pub ready_first_s: f64,
-    /// The same, median over all agents.
+    /// The same, median over agents 2..N (equal to the first for N = 1).
     pub ready_median_s: f64,
     /// Drop in the filesystem's free space with all workspaces present.
     pub disk_added_bytes: i64,
@@ -354,7 +354,7 @@ pub fn summary(rows: &[Row], header: &str) -> String {
             let _ = write!(
                 out,
                 "\n## {fixture} ({} tracked files)\n\n\
-                 | method | agents | create (median) | ready, first agent | ready (median) | disk added, all agents | disk per agent | prune (median) |\n\
+                 | method | agents | create (median) | ready, first agent | ready, later agents (median) | disk added, all agents | disk per agent | prune (median) |\n\
                  | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n",
                 g.files
             );

@@ -20,7 +20,7 @@ use std::process::Command;
 use anyhow::{Context, bail};
 
 /// Bump to regenerate cached fixtures after changing this module.
-const GENERATOR_VERSION: &str = "graft-bench fixtures v1";
+const GENERATOR_VERSION: &str = "graft-bench fixtures v2";
 const MARKER: &str = ".graft-bench-fixture";
 
 /// What one fixture contains.
@@ -30,7 +30,7 @@ pub struct Spec {
     pub name: &'static str,
     /// Generated modules under `src/`.
     pub modules: usize,
-    /// Bytes of payload per module (plus a little JavaScript around it).
+    /// Unused since fixtures v2: module sizes follow [`module_size`].
     pub module_bytes: usize,
     /// Vendored dependencies.
     pub deps: usize,
@@ -110,7 +110,7 @@ fn test_js(spec: &Spec) -> String {
             js,
             "assert.strictEqual(require(\"./{}\"), \"{}\");",
             module_path(i).display(),
-            payload(&format!("module {i}"), spec.module_bytes)
+            payload(&format!("module {i}"), module_size(i))
         );
     }
     js.push_str("console.log(\"ok\");\n");
@@ -120,6 +120,17 @@ fn test_js(spec: &Spec) -> String {
 fn sample(n: usize) -> impl Iterator<Item = usize> {
     let step = (n / 10).max(1);
     (0..n).step_by(step).take(10)
+}
+
+/// Payload size of module `i`: a fixed, repeating mix of 600 B, 3 KB, 8 KB
+/// and 20 KB (mean ≈ 5.6 KB), like real source trees. Every size is above
+/// btrfs's 2 KiB inline limit except the smallest, so data blocks (and
+/// therefore reflinks) matter as they do in real repositories.
+fn module_size(i: usize) -> usize {
+    const MIX: [usize; 10] = [
+        600, 3_000, 3_000, 3_000, 8_000, 8_000, 3_000, 600, 8_000, 20_000,
+    ];
+    MIX[i % MIX.len()]
 }
 
 fn module_path(i: usize) -> PathBuf {
@@ -238,7 +249,7 @@ pub fn ensure(root: &Path, spec: &Spec) -> anyhow::Result<PathBuf> {
             &path,
             format!(
                 "module.exports = \"{}\";\n",
-                payload(&format!("module {i}"), spec.module_bytes)
+                payload(&format!("module {i}"), module_size(i))
             ),
         )?;
     }

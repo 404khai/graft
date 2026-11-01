@@ -67,25 +67,35 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - name: Mount a dedicated btrfs volume on the large /mnt disk (Linux)
+      # XFS: reflinks like btrfs, but free space is reported exactly (btrfs
+      # allocates in chunks, which makes free-space deltas jump).
+      - name: Mount a dedicated XFS volume on the large /mnt disk (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update && sudo apt-get install -y btrfs-progs xfsprogs
           sudo mkdir -p /mnt/graft-bench && sudo chown "$(id -u):$(id -g)" /mnt/graft-bench
           sudo env SIZE=60G scripts/mount-test-filesystems.sh /mnt/graft-bench "$(id -u):$(id -g)"
-          df -h /mnt/graft-bench/mnt/btrfs
-      - name: Run (Linux, btrfs)
+          df -h /mnt/graft-bench/mnt/xfs
+      - name: Run (Linux, XFS)
         if: runner.os == 'Linux'
         run: >
-          bench/run.sh --work /mnt/graft-bench/mnt/btrfs
+          bench/run.sh --work /mnt/graft-bench/mnt/xfs
           --runs "${{ inputs.runs }}" --agents "${{ inputs.agents }}"
           --machine "GitHub Actions ubuntu-latest runner"
+      # The runner's own APFS disk: a sparse image inside the VM was too slow
+      # to finish in the job limit. Large is limited to 1 and 4 agents (one
+      # 16-agent large cell alone took longer than an hour there).
       - name: Run (macOS, APFS)
         if: runner.os == 'macOS'
-        run: >
-          bench/run.sh --image-size 60
-          --runs "${{ inputs.runs }}" --agents "${{ inputs.agents }}"
-          --machine "GitHub Actions macos-latest runner"
+        run: |
+          bench/run.sh --work "$RUNNER_TEMP/graft-bench" --label macos-arm64-apfs \
+            --fixtures small,medium --runs "${{ inputs.runs }}" --agents "${{ inputs.agents }}" \
+            --machine "GitHub Actions macos-latest runner"
+          mv bench/results/macos-arm64-apfs bench/results/macos-arm64-apfs-small-medium
+          bench/run.sh --work "$RUNNER_TEMP/graft-bench" --label macos-arm64-apfs \
+            --fixtures large --runs "${{ inputs.runs }}" --agents 1,4 \
+            --machine "GitHub Actions macos-latest runner (large: 1 and 4 agents only)"
+          mv bench/results/macos-arm64-apfs bench/results/macos-arm64-apfs-large
       - name: Summary
         if: always()
         run: cat bench/results/*/summary.md >> "$GITHUB_STEP_SUMMARY" || true

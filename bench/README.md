@@ -51,3 +51,20 @@ generator changes.
 on `ubuntu-latest` (btrfs on the runner's large disk) and `macos-latest`
 (APFS), and uploads `bench/results/` as an artifact. It never gates merges.
 The quick `graft disk use` job runs on pull requests labelled `bench`.
+
+## Reading the results today
+
+Grafts currently use the reflink backend: `graft new` still writes a full
+working tree, one reflink per file, so its **create time is close to a
+worktree's** (slower on small repos, slightly faster on very large ones). What
+grafts already save is disk (unchanged files share blocks; see
+`graft ls`) and **time to ready for every agent after the first**, which
+reuses the `node_modules` layer instead of reinstalling it.
+
+The large wins come in later phases, and this harness is how they will be shown:
+
+| Phase | Change | Target |
+| --- | --- | --- |
+| Virtual filesystem (5, 7) | `graft new` writes metadata only; files are read lazily | < 1 s regardless of repo size |
+| Delta store (6) | A graft stores only what changed | disk ∝ edits, not repo |
+| Bud and Ring (8) | Fork a graft by copying its delta index | < 200 ms |
