@@ -60,11 +60,14 @@ Status: done (#5)
 
 ## Phase 4 — Benchmark harness
 
-Status: in progress (`test/worktree-benchmarks`)
+Status: in review (`test/worktree-benchmarks`)
 
-- [ ] One command runs the whole matrix and produces the summary.
-- [ ] Results are reproducible within ±10% across three runs on the same machine.
+- [x] One command runs the whole matrix and produces the summary.
+  - `bench/run.sh`.
+- [x] Results are reproducible within ±10% across three runs on the same machine.
+  - Linux (GitHub runner, XFS): 159 of 160 values within ±10%. The macOS runner (a VM) was not: 17 of 113; see `bench/results/macos-arm64-apfs/NOTE.md`.
 - [ ] Summary committed for at least one Linux and one macOS machine.
+  - Linux: full matrix committed. macOS: small and medium only (large did not finish on the runner), with timings that are not reproducible.
 
 ## Phase 5 — Virtual filesystem: read path (Linux)
 

@@ -36,7 +36,8 @@ graft="$root/target/release/graft"
 harness="$root/target/release/graft-bench"
 
 cleanup=()
-trap 'for c in "${cleanup[@]}"; do eval "$c"; done' EXIT
+# "${a[@]+...}" keeps bash 3.2 (macOS) from failing on an empty array under set -u.
+trap 'for c in ${cleanup[@]+"${cleanup[@]}"}; do eval "$c"; done' EXIT
 
 if [[ -z $work ]]; then
   if [[ $(uname -s) == Darwin ]]; then
@@ -71,4 +72,4 @@ fi
 out="$root/bench/results/$label"
 echo "bench/run.sh: results go to $out" >&2
 
-"$harness" run --graft "$graft" --work "$work/bench" --out "$out" --machine "$machine" "${pass[@]}"
+"$harness" run --graft "$graft" --work "$work/bench" --out "$out" --machine "$machine" ${pass[@]+"${pass[@]}"}
