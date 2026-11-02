@@ -255,7 +255,7 @@ struct Group {
 }
 
 fn method_order(m: &str) -> usize {
-    ["graft", "worktree", "clone"]
+    ["graft", "graft-fuse", "worktree", "clone"]
         .iter()
         .position(|x| *x == m)
         .unwrap_or(9)
@@ -339,7 +339,7 @@ pub fn summary(rows: &[Row], header: &str) -> String {
         }
     }
     let method_name = |order: usize| {
-        ["graft", "worktree", "clone"]
+        ["graft", "graft-fuse", "worktree", "clone"]
             .get(order)
             .copied()
             .unwrap_or("?")

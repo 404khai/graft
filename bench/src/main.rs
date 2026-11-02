@@ -65,7 +65,7 @@ enum Cmd {
     },
 }
 
-#[derive(Debug, clap::Args)]
+#[derive(Debug, Clone, clap::Args)]
 struct RunArgs {
     /// The `graft` binary to measure.
     #[arg(long)]
@@ -86,6 +86,10 @@ struct RunArgs {
     /// Methods to compare.
     #[arg(long, value_delimiter = ',', default_value = "graft,worktree,clone")]
     methods: Vec<String>,
+    /// Filesystem backends for the `graft` method. `fuse` (Linux) adds a
+    /// `graft-fuse` method alongside `graft` (reflink).
+    #[arg(long, value_delimiter = ',', default_value = "reflink")]
+    backends: Vec<String>,
     /// Times to repeat the whole matrix.
     #[arg(long, default_value_t = 3)]
     runs: usize,
@@ -172,6 +176,9 @@ fn estimate(
     let index = spec.modules as u64 * 128;
     match method {
         "graft" if reflinks => n * (index + (1 << 20)) + node_modules,
+        // Virtual grafts store nothing but metadata; layers are served from
+        // the cache.
+        "graft-fuse" => n * (1 << 20) + node_modules,
         _ => n * (checkout + node_modules + index) + node_modules,
     }
 }
@@ -369,16 +376,41 @@ fn make_method(
     cell: &Path,
 ) -> anyhow::Result<Box<dyn Method>> {
     Ok(match name {
-        "graft" => Box::new(GraftMethod::new(graft, fixture, cell)?),
+        "graft" => Box::new(GraftMethod::new(graft, fixture, cell, "reflink")?),
+        "graft-fuse" => Box::new(GraftMethod::new(graft, fixture, cell, "fuse")?),
         "worktree" => Box::new(WorktreeMethod::new(fixture, cell)),
         _ => Box::new(CloneMethod::new(fixture, cell)),
     })
 }
 
+/// `--methods` with `graft` expanded per `--backends`.
+fn expand_methods(methods: &[String], backends: &[String]) -> anyhow::Result<Vec<String>> {
+    let mut out = Vec::new();
+    for m in methods {
+        if m != "graft" {
+            out.push(m.clone());
+            continue;
+        }
+        for b in backends {
+            match b.as_str() {
+                "reflink" => out.push("graft".to_owned()),
+                "fuse" => out.push("graft-fuse".to_owned()),
+                other => anyhow::bail!("unknown backend {other:?}; expected reflink or fuse"),
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn run(args: &RunArgs) -> anyhow::Result<()> {
+    let methods = expand_methods(&args.methods, &args.backends)?;
+    let args = &RunArgs {
+        methods,
+        ..args.clone()
+    };
     for m in &args.methods {
         anyhow::ensure!(
-            ["graft", "worktree", "clone"].contains(&m.as_str()),
+            ["graft", "graft-fuse", "worktree", "clone"].contains(&m.as_str()),
             "unknown method {m:?}"
         );
     }

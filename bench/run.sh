@@ -3,7 +3,7 @@
 # (results.csv, summary.md). AGENTS.md Phase 4.
 #
 #   bench/run.sh [--agents 1,4,8,16] [--fixtures small,medium,large]
-#                [--methods graft,worktree,clone] [--runs 3]
+#                [--methods graft,worktree,clone] [--backends reflink,fuse] [--runs 3]
 #                [--work DIR] [--image-size GIB] [--label NAME]
 #                [--machine "description"] [--margin-gib N]
 #
@@ -31,7 +31,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-cargo build --quiet --release --locked --manifest-path "$root/Cargo.toml" -p graft-cli -p graft-bench
+cargo build --quiet --release --locked --manifest-path "$root/Cargo.toml" -p graft-cli -p graft-daemon -p graft-bench
 graft="$root/target/release/graft"
 harness="$root/target/release/graft-bench"
 

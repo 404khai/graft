@@ -60,6 +60,7 @@ pub struct GraftMethod {
     graft: PathBuf,
     fixture: PathBuf,
     home: PathBuf,
+    backend: &'static str,
 }
 
 impl GraftMethod {
@@ -69,11 +70,17 @@ impl GraftMethod {
     /// # Errors
     ///
     /// If `graft init` or `graft trust` fails.
-    pub fn new(graft: &Path, fixture: &Path, cell: &Path) -> anyhow::Result<Self> {
+    pub fn new(
+        graft: &Path,
+        fixture: &Path,
+        cell: &Path,
+        backend: &'static str,
+    ) -> anyhow::Result<Self> {
         let m = Self {
             graft: graft.to_owned(),
             fixture: fixture.to_owned(),
             home: cell.join("graft-home"),
+            backend,
         };
         run(&mut m.cmd(&["init"]), "graft init")?;
         run(&mut m.cmd(&["trust"]), "graft trust")?;
@@ -92,7 +99,10 @@ impl GraftMethod {
 impl Method for GraftMethod {
     fn create(&mut self, i: usize) -> anyhow::Result<PathBuf> {
         let name = format!("agent{i}");
-        run(&mut self.cmd(&["new", &name]), "graft new")?;
+        run(
+            &mut self.cmd(&["new", &name, "--backend", self.backend]),
+            "graft new",
+        )?;
         Ok(PathBuf::from(run(
             &mut self.cmd(&["path", &name]),
             "graft path",
@@ -118,6 +128,8 @@ impl Method for GraftMethod {
 
     fn finish(&mut self) -> anyhow::Result<()> {
         run(&mut self.cmd(&["gc"]), "graft gc")?;
+        // Stop the cell's graftd (a no-op for reflink grafts).
+        run(&mut self.cmd(&["daemon", "stop"]), "graft daemon stop")?;
         std::fs::remove_dir_all(&self.home).context("removing the cell's GRAFT_HOME")
     }
 }
