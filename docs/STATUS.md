@@ -71,12 +71,16 @@ Status: in review (`test/worktree-benchmarks`)
 
 ## Phase 5 — Virtual filesystem: read path (Linux)
 
-Status: not started
+Status: in review (`feat/virtual-fs-reads`)
 
 - [ ] `graft new` on the large fixture completes in < 1 s regardless of repo size (*target*).
+  - Gated test asserts < 1 s for a 20k-file Root; large-fixture number pending from the bench workflow.
 - [ ] `ls -R`, `cat`, `grep -r`, `rg` and `cargo check` / `tsc --noEmit` produce identical results in a graft and in Root.
+  - Tests in `crates/graft-fs/tests/fuse_backend.rs` and `tests/e2e/virtual_grafts.rs` (CI `fuse` job); not yet verified on CI.
 - [ ] Daemon restart remounts existing grafts.
+  - Remount logic tested with a fake mounter on every platform; real kill -9 test runs in the CI `fuse` job.
 - [ ] Unmount on prune works even if a process holds files open (lazy unmount with a warning).
+  - Gated tests in the CI `fuse` job.
 
 ## Phase 6 — Delta store and op log
 
