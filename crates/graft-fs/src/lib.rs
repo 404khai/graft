@@ -2,7 +2,9 @@
 //!
 //! [`FsBackend`] is how grafts are materialised. [`ReflinkBackend`] gives
 //! each graft a real working tree whose unchanged files are reflinks of
-//! Root's (ADR 0003); FUSE and NFS backends arrive in later phases.
+//! Root's (ADR 0003). On Linux, `FuseBackend` serves grafts lazily from
+//! Root's object store (ADR 0006) through [`view::GraftView`], the
+//! platform-independent tree model. The NFS backend arrives later.
 //! [`unshared_bytes`] measures what a graft really costs on disk.
 //!
 //! It also provides the host probing that `graft doctor` reports:
@@ -25,10 +27,15 @@ mod backend;
 mod capabilities;
 mod clone;
 mod fstype;
+#[cfg(target_os = "linux")]
+mod fuse;
 mod reflink;
 #[allow(unsafe_code)] // FFI to statfs, clonefile and ioctl; see each SAFETY comment.
 mod sys;
 mod usage;
+pub mod view;
+#[cfg(target_os = "linux")]
+mod virtual_backend;
 
 pub use backend::{CreateReport, FsBackend, FsError, GraftSpec, ReflinkBackend, Result};
 pub use capabilities::{Availability, fuse_availability, nfs_client_availability};
@@ -36,3 +43,5 @@ pub use clone::{CloneReport, ReflinkCloner, clone_tree};
 pub use fstype::{FsType, available_bytes, filesystem_type, same_filesystem};
 pub use reflink::{REFLINK_MECHANISM, probe_reflink};
 pub use usage::{human_bytes, unshared_bytes};
+#[cfg(target_os = "linux")]
+pub use virtual_backend::{FuseBackend, Unmounted};

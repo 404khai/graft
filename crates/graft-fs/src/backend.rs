@@ -146,7 +146,7 @@ impl ReflinkBackend {
         self.mounts.join(format!(".tmp-{id}"))
     }
 
-    fn ensure_mounts(&self) -> Result<PathBuf> {
+    pub(crate) fn ensure_mounts(&self) -> Result<PathBuf> {
         let mut builder = std::fs::DirBuilder::new();
         builder.recursive(true);
         #[cfg(unix)]

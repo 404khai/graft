@@ -27,12 +27,15 @@ graft-mcp = { path = "crates/graft-mcp" }
 anyhow = "1.0.104"
 blake3 = "1.8.7"
 clap = { version = "4.6.7", features = ["derive"] }
+fuser = { version = "0.18.0", default-features = false }
 getrandom = "0.4.3"
 gix = { version = "0.90.0", default-features = false, features = ["parallel", "revision", "sha1", "status"] }
 libc = "0.2.191"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 toml = "1.1.8"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
