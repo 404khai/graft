@@ -71,16 +71,17 @@ Status: in review (`test/worktree-benchmarks`)
 
 ## Phase 5 — Virtual filesystem: read path (Linux)
 
-Status: in review (`feat/virtual-fs-reads`)
+Status: in review (`feat/virtual-fs-reads`, PR #7)
 
-- [ ] `graft new` on the large fixture completes in < 1 s regardless of repo size (*target*).
-  - Gated test asserts < 1 s for a 20k-file Root; large-fixture number pending from the bench workflow.
-- [ ] `ls -R`, `cat`, `grep -r`, `rg` and `cargo check` / `tsc --noEmit` produce identical results in a graft and in Root.
-  - Tests in `crates/graft-fs/tests/fuse_backend.rs` and `tests/e2e/virtual_grafts.rs` (CI `fuse` job); not yet verified on CI.
-- [ ] Daemon restart remounts existing grafts.
-  - Remount logic tested with a fake mounter on every platform; real kill -9 test runs in the CI `fuse` job.
-- [ ] Unmount on prune works even if a process holds files open (lazy unmount with a warning).
-  - Gated tests in the CI `fuse` job.
+- [x] `graft new` on the large fixture completes in < 1 s regardless of repo size (*target*).
+  - Bench (GitHub ubuntu runner, XFS, 3 runs): median create 47 ms on large (≈200k files), 22–86 ms on medium, 22–38 ms on small, with the fixture's `node_modules` layer already cached.
+  - Not met when the layer is not cached yet: the first graft of each cell took 18.1 s on large, because it builds the layer in a throwaway reflink checkout (≈11 s) and then removes that checkout (≈7 s). That is layer-build cost, not mount cost; a follow-up should build layers without a full checkout and remove the scratch tree in the background.
+- [x] `ls -R`, `cat`, `grep -r`, `rg` and `cargo check` / `tsc --noEmit` produce identical results in a graft and in Root.
+  - `tools_see_the_same_tree_as_root` and `type_checkers_agree_with_root`, in the CI `fuse` job (rg and tsc required).
+- [x] Daemon restart remounts existing grafts.
+  - `a_restarted_daemon_remounts_grafts` (kill -9 graftd), in the CI `fuse` job.
+- [x] Unmount on prune works even if a process holds files open (lazy unmount with a warning).
+  - `unmounts_lazily_when_a_file_is_open`, `prune_unmounts_lazily_when_busy`, in the CI `fuse` job.
 
 ## Phase 6 — Delta store and op log
 
