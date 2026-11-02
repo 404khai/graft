@@ -1345,6 +1345,7 @@ dependencies = [
  "clap",
  "graft-blueprint",
  "graft-core",
+ "graft-daemon",
  "graft-fs",
  "graft-root",
  "graft-store",

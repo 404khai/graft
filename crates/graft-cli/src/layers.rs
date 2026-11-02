@@ -20,6 +20,11 @@ use graft_store::Store;
 
 use crate::{Environment, Output};
 
+/// Whether any planned layer still has to be built.
+pub(crate) fn needs_build(planned: &[Planned], cache: &LayerCache) -> bool {
+    planned.iter().any(|p| !cache.is_ready(&p.key))
+}
+
 /// A layer of the base commit's `graft.toml`, with its key worked out.
 pub(crate) struct Planned {
     spec: LayerSpec,
@@ -194,8 +199,10 @@ fn build(spec: &LayerSpec, graft_dir: &Path, name: &GraftName, id: GraftId) -> a
     }
 }
 
-/// Builds missing layers and reflinks every layer into the new graft,
-/// recording its references. Holds each layer's lock from the readiness
+/// Builds missing layers and, if `materialize`, reflinks every layer into
+/// the new graft, recording its references. Virtual grafts pass
+/// `materialize = false`: graftd serves layers from the cache, and
+/// `graft_dir` is only used to build missing layers. Holds each layer's lock from the readiness
 /// check until its reference is recorded, so `graft gc` cannot remove it in
 /// between.
 pub(crate) fn apply(
@@ -205,6 +212,7 @@ pub(crate) fn apply(
     graft_dir: &Path,
     name: &GraftName,
     id: GraftId,
+    materialize: bool,
 ) -> anyhow::Result<Vec<Applied>> {
     let mut applied = Vec::with_capacity(planned.len());
     for p in planned {
@@ -217,6 +225,16 @@ pub(crate) fn apply(
         }
         store.record_layer(&p.key, &p.spec.path, &p.spec.build)?;
         store.add_layer_ref(id, &p.key)?;
+        if !materialize {
+            drop(lock);
+            applied.push(Applied {
+                path: p.spec.path.clone(),
+                key: p.key,
+                built,
+                copied_reason: None,
+            });
+            continue;
+        }
         let cloner = match graft_fs::same_filesystem(cache.dir(), graft_dir) {
             Ok(true) => ReflinkCloner::new(),
             _ => ReflinkCloner::copy_only(
@@ -239,8 +257,10 @@ pub(crate) fn apply(
             copied_reason: cloner.report().fallback,
         });
     }
-    let paths: Vec<&Path> = planned.iter().map(|p| p.spec.path.as_path()).collect();
-    graft_root::graft::exclude_paths(graft_dir, &paths)?;
+    if materialize {
+        let paths: Vec<&Path> = planned.iter().map(|p| p.spec.path.as_path()).collect();
+        graft_root::graft::exclude_paths(graft_dir, &paths)?;
+    }
     Ok(applied)
 }
 

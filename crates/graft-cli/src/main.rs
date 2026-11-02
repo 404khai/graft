@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod daemon;
 mod doctor;
 mod grafts;
 mod layers;
@@ -53,6 +54,8 @@ enum Command {
     Trust(layers::TrustArgs),
     /// Remove layers no graft uses.
     Gc(layers::GcArgs),
+    /// Show or stop graftd, the daemon that serves virtual grafts.
+    Daemon(daemon::Args),
     /// Report platform, filesystem, reflink and FUSE/NFS support.
     Doctor(doctor::Args),
 }
@@ -136,6 +139,7 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Prune(args) => ok(grafts::prune(&args, &env))?,
         Command::Trust(args) => ok(layers::trust(&args, &env))?,
         Command::Gc(args) => ok(layers::gc(&args, &env))?,
+        Command::Daemon(args) => ok(daemon::run(&args, &env))?,
         Command::Doctor(args) => {
             let (stdout, code) = doctor::run(&args, &env);
             (Output::stdout(stdout), code)
