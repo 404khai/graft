@@ -44,7 +44,12 @@ impl Mounter for Fake {
         Ok(path)
     }
 
-    fn unmount(&self, root: RootId, graft: &GraftName) -> Result<Option<bool>, String> {
+    fn unmount(
+        &self,
+        root: RootId,
+        _mounts: &Path,
+        graft: &GraftName,
+    ) -> Result<Option<bool>, String> {
         let mut m = self.mounted.lock().unwrap();
         let before = m.len();
         m.retain(|(r, g, _, _)| !(*r == root && g == graft));

@@ -102,8 +102,9 @@ impl FuseBackend {
         }
     }
 
-    /// Unmounts the graft, lazily if a process holds files open. `None` if
-    /// this backend had not mounted it.
+    /// Unmounts the graft, lazily if a process holds files open. A stale
+    /// mount this backend does not own (its server died) is detached
+    /// lazily. `None` if nothing was mounted.
     ///
     /// # Errors
     ///
@@ -115,7 +116,8 @@ impl FuseBackend {
             .unwrap_or_else(PoisonError::into_inner)
             .remove(name);
         let Some(m) = taken else {
-            return Ok(None);
+            let path = self.path(name);
+            return crate::fuse::detach_stale(&path).map_err(io_err("detaching", &path));
         };
         let path = m.path().to_owned();
         m.unmount().map(Some).map_err(io_err("unmounting", &path))

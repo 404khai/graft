@@ -45,7 +45,14 @@ pub trait Mounter: Send + Sync {
     /// # Errors
     ///
     /// A message for the client.
-    fn unmount(&self, root: RootId, graft: &GraftName) -> Result<Option<bool>, String>;
+    /// `mounts` is the Root's mounts directory, for detaching a stale mount
+    /// left by a daemon that died.
+    fn unmount(
+        &self,
+        root: RootId,
+        mounts: &Path,
+        graft: &GraftName,
+    ) -> Result<Option<bool>, String>;
 
     /// Every mounted graft.
     fn mounts(&self) -> Vec<(RootId, GraftName, PathBuf)>;
@@ -280,7 +287,8 @@ async fn dispatch(state: &Arc<State>, line: &str) -> Response {
                     Err(e) => graft_error(e),
                 }
             } else {
-                match blocking(move || s.mounter.unmount(root, &name)).await {
+                let mounts = s.home.root_dir(&root).join("mounts");
+                match blocking(move || s.mounter.unmount(root, &mounts, &name)).await {
                     Ok(how) => ok(&Unmounted {
                         was_mounted: how.is_some(),
                         lazy: how == Some(true),

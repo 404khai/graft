@@ -257,6 +257,16 @@ fn needs_cleanup(path: &Path) -> bool {
     }
 }
 
+/// Lazily detaches a mount at `path` that no live session serves.
+pub(crate) fn detach_stale(path: &Path) -> io::Result<Option<Unmounted>> {
+    if !needs_cleanup(path) {
+        return Ok(None);
+    }
+    tracing::warn!(path = %path.display(), "detaching a stale mount");
+    fusermount_unmount(path, true)?;
+    Ok(Some(Unmounted::Lazy))
+}
+
 /// Mounts `view` read-only at `path` (an existing, empty directory),
 /// detaching anything left mounted there by a daemon that died.
 pub(crate) fn mount(view: GraftView, path: &Path) -> io::Result<Mounted> {

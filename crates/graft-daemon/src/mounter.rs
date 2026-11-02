@@ -42,7 +42,12 @@ impl Mounter for Unsupported {
         ))
     }
 
-    fn unmount(&self, _root: RootId, _graft: &GraftName) -> Result<Option<bool>, String> {
+    fn unmount(
+        &self,
+        _root: RootId,
+        _mounts: &Path,
+        _graft: &GraftName,
+    ) -> Result<Option<bool>, String> {
         Ok(None)
     }
 
@@ -99,11 +104,16 @@ mod fuse {
                 .map_err(|e| e.to_string())
         }
 
-        fn unmount(&self, root: RootId, graft: &GraftName) -> Result<Option<bool>, String> {
-            let roots = self.roots.lock().unwrap_or_else(PoisonError::into_inner);
-            let Some(backend) = roots.get(&root) else {
-                return Ok(None);
-            };
+        fn unmount(
+            &self,
+            root: RootId,
+            mounts: &Path,
+            graft: &GraftName,
+        ) -> Result<Option<bool>, String> {
+            let mut roots = self.roots.lock().unwrap_or_else(PoisonError::into_inner);
+            let backend = roots
+                .entry(root)
+                .or_insert_with(|| FuseBackend::new(mounts.to_owned()));
             match backend.unmount(graft) {
                 Ok(how) => Ok(how.map(|h| h == Unmounted::Lazy)),
                 Err(e) => Err(e.to_string()),
