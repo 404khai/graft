@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use graft_core::{GraftName, RootId, Timestamp};
+use graft_core::{BackendKind, GraftName, RootId, Timestamp};
 use graft_store::{Registration, RootRecord, Store, StoreError};
 
 const CHILD_DIR_ENV: &str = "GRAFT_STORE_TEST_CHILD_DIR";
@@ -43,10 +43,12 @@ fn child_writer() {
     let base = "e".repeat(40).parse().unwrap();
     for i in 0..GRAFTS_PER_CHILD {
         let name: GraftName = format!("c{index}-g{i}").parse().unwrap();
-        store.create_graft(&name, &base).unwrap();
+        store
+            .create_graft(&name, &base, BackendKind::Reflink)
+            .unwrap();
     }
     // All children contend for one name; exactly one may win.
-    match store.create_graft(&"shared".parse().unwrap(), &base) {
+    match store.create_graft(&"shared".parse().unwrap(), &base, BackendKind::Reflink) {
         Ok(_) => println!("shared=won"),
         Err(StoreError::NameTaken { .. }) => println!("shared=taken"),
         Err(e) => panic!("unexpected error: {e}"),

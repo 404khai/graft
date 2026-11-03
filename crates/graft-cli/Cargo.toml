@@ -22,6 +22,7 @@ anyhow.workspace = true
 clap.workspace = true
 graft-blueprint.workspace = true
 graft-core.workspace = true
+graft-daemon.workspace = true
 graft-fs.workspace = true
 graft-root.workspace = true
 graft-store.workspace = true
@@ -32,6 +33,10 @@ tracing-subscriber.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true
 tempfile.workspace = true
+
+[features]
+# End-to-end tests that mount FUSE grafts (Linux). Also need GRAFT_TEST_FUSE=1.
+fuse-tests = []
 
 [lints]
 workspace = true

@@ -72,7 +72,7 @@ jobs:
       - name: Mount a dedicated XFS volume on the large /mnt disk (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update && sudo apt-get install -y btrfs-progs xfsprogs
+          sudo apt-get update && sudo apt-get install -y btrfs-progs xfsprogs fuse3
           sudo mkdir -p /mnt/graft-bench && sudo chown "$(id -u):$(id -g)" /mnt/graft-bench
           sudo env SIZE=60G scripts/mount-test-filesystems.sh /mnt/graft-bench "$(id -u):$(id -g)"
           df -h /mnt/graft-bench/mnt/xfs
@@ -81,6 +81,7 @@ jobs:
         run: >
           bench/run.sh --work /mnt/graft-bench/mnt/xfs
           --runs "${{ inputs.runs }}" --agents "${{ inputs.agents }}"
+          --backends reflink,fuse
           --machine "GitHub Actions ubuntu-latest runner"
       # The runner's own APFS disk: a sparse image inside the VM was too slow
       # to finish in the job limit. Large is limited to 1 and 4 agents (one

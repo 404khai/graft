@@ -11,6 +11,9 @@ publish.workspace = true
 # Tests that need loop-mounted filesystems prepared by root. Also require
 # $GRAFT_TEST_FS_MOUNTS; see tests/privileged.rs.
 privileged-tests = []
+# Tests that mount FUSE filesystems (Linux, /dev/fuse and fusermount3).
+# Also require $GRAFT_TEST_FUSE=1; see tests/fuse_backend.rs.
+fuse-tests = []
 
 [dependencies]
 graft-core.workspace = true
@@ -19,6 +22,9 @@ libc.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+fuser.workspace = true
 
 [lints]
 workspace = true

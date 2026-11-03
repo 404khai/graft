@@ -104,3 +104,23 @@ jobs:
           for fs in ext4 btrfs xfs; do
             cargo run --locked -q -p graft-cli -- doctor "$RUNNER_TEMP/graft-fs/mnt/$fs"
           done
+
+  fuse:
+    name: fuse tests (linux)
+    runs-on: ubuntu-latest
+    env:
+      GRAFT_TEST_FUSE: "1"
+      # Comparisons with rg and tsc must run here, never silently skip.
+      GRAFT_TEST_REQUIRE_RG: "1"
+      GRAFT_TEST_REQUIRE_TSC: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y fuse3 ripgrep
+      - run: npm install -g typescript
+      - name: Check FUSE is usable
+        run: ls -l /dev/fuse "$(command -v fusermount3)"
+      - run: cargo build --workspace --locked
+      - run: cargo test --locked -p graft-fs --features fuse-tests --test fuse_backend
+      - run: cargo test --locked -p graft-cli --features fuse-tests --test e2e virtual_grafts

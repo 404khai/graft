@@ -38,14 +38,15 @@ fn unknown_subcommand_fails() {
 }
 
 #[test]
-fn graftd_is_a_stub_that_fails() {
+fn graftd_reports_its_version() {
     // The daemon binary lives in another package; only check it when built.
     let exe = std::path::Path::new(env!("CARGO_BIN_EXE_graft")).with_file_name("graftd");
     if !exe.exists() {
         return;
     }
     assert_cmd::Command::new(exe)
+        .arg("--version")
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("not implemented"));
+        .success()
+        .stdout(predicate::str::starts_with("graftd "));
 }

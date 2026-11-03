@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use graft_core::{
-    CommandHash, CommitId, GraftId, GraftName, GraftState, LayerKey, RootId, Timestamp,
+    BackendKind, CommandHash, CommitId, GraftId, GraftName, GraftState, LayerKey, RootId, Timestamp,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
@@ -73,6 +73,8 @@ pub struct GraftRecord {
     pub base_commit: CommitId,
     /// Lifecycle state.
     pub state: GraftState,
+    /// The filesystem backend that materialises it.
+    pub backend: BackendKind,
     /// When the graft was created.
     pub created_at: Timestamp,
     /// When its record last changed.
@@ -355,6 +357,7 @@ impl Store {
         &mut self,
         name: &GraftName,
         base_commit: &CommitId,
+        backend: BackendKind,
     ) -> Result<GraftRecord> {
         let now = Timestamp::now();
         let record = GraftRecord {
@@ -362,12 +365,13 @@ impl Store {
             name: name.clone(),
             base_commit: base_commit.clone(),
             state: GraftState::Created,
+            backend,
             created_at: now,
             updated_at: now,
         };
         let result = self.conn.execute(
-            "INSERT INTO grafts (graft_id, name, base_commit, state, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO grafts (graft_id, name, base_commit, state, created_at, updated_at, backend)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             (
                 record.id.to_string(),
                 record.name.as_str(),
@@ -375,6 +379,7 @@ impl Store {
                 record.state.as_str(),
                 now.as_millis(),
                 now.as_millis(),
+                record.backend.as_str(),
             ),
         );
         match result {
@@ -390,7 +395,7 @@ impl Store {
     }
 
     const GRAFT_COLUMNS: &'static str =
-        "graft_id, name, base_commit, state, created_at, updated_at";
+        "graft_id, name, base_commit, state, created_at, updated_at, backend";
 
     fn decode_graft(&self, row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<GraftRecord>> {
         let id: String = row.get(0)?;
@@ -399,6 +404,7 @@ impl Store {
         let state: String = row.get(3)?;
         let created_at: i64 = row.get(4)?;
         let updated_at: i64 = row.get(5)?;
+        let backend: String = row.get(6)?;
         Ok((|| {
             Ok(GraftRecord {
                 id: id
@@ -413,6 +419,9 @@ impl Store {
                 state: state
                     .parse()
                     .map_err(|e| self.corrupt(format!("grafts.state: {e}")))?,
+                backend: backend
+                    .parse()
+                    .map_err(|e| self.corrupt(format!("grafts.backend: {e}")))?,
                 created_at: Timestamp::from_millis(created_at),
                 updated_at: Timestamp::from_millis(updated_at),
             })
@@ -804,7 +813,9 @@ mod tests {
     #[test]
     fn graft_lifecycle() {
         let (_dir, mut store) = fresh();
-        let g = store.create_graft(&name("auth"), &commit()).unwrap();
+        let g = store
+            .create_graft(&name("auth"), &commit(), BackendKind::Reflink)
+            .unwrap();
         assert_eq!(g.state, GraftState::Created);
         assert_eq!(store.graft(&name("auth")).unwrap(), Some(g.clone()));
         assert_eq!(store.graft_by_id(g.id).unwrap(), Some(g.clone()));
@@ -824,15 +835,21 @@ mod tests {
     #[test]
     fn names_are_unique_among_unpruned_grafts() {
         let (_dir, mut store) = fresh();
-        let first = store.create_graft(&name("auth"), &commit()).unwrap();
-        let err = store.create_graft(&name("auth"), &commit()).unwrap_err();
+        let first = store
+            .create_graft(&name("auth"), &commit(), BackendKind::Reflink)
+            .unwrap();
+        let err = store
+            .create_graft(&name("auth"), &commit(), BackendKind::Reflink)
+            .unwrap_err();
         assert!(matches!(err, StoreError::NameTaken { .. }), "{err:?}");
         assert_eq!(err.to_string(), "a graft named auth already exists");
 
         // Once pruned, the name is free again; the pruned record remains.
         store.set_state(first.id, GraftState::Pruned).unwrap();
         assert_eq!(store.graft(&name("auth")).unwrap(), None);
-        let second = store.create_graft(&name("auth"), &commit()).unwrap();
+        let second = store
+            .create_graft(&name("auth"), &commit(), BackendKind::Reflink)
+            .unwrap();
         assert_ne!(first.id, second.id);
         assert_eq!(store.grafts().unwrap().len(), 2);
 
@@ -846,7 +863,9 @@ mod tests {
     #[test]
     fn delete_graft_removes_the_row_and_its_op_log() {
         let (_dir, mut store) = fresh();
-        let g = store.create_graft(&name("gone"), &commit()).unwrap();
+        let g = store
+            .create_graft(&name("gone"), &commit(), BackendKind::Reflink)
+            .unwrap();
         store
             .conn
             .execute(
@@ -867,7 +886,9 @@ mod tests {
     #[test]
     fn finds_an_interrupted_prune() {
         let (_dir, mut store) = fresh();
-        let g = store.create_graft(&name("half"), &commit()).unwrap();
+        let g = store
+            .create_graft(&name("half"), &commit(), BackendKind::Reflink)
+            .unwrap();
         assert_eq!(store.pruned_graft(&name("half")).unwrap(), None);
         store.set_state(g.id, GraftState::Pruned).unwrap();
         assert_eq!(store.pruned_graft(&name("half")).unwrap().unwrap().id, g.id);
@@ -885,7 +906,9 @@ mod tests {
     fn grafts_are_listed_oldest_first() {
         let (_dir, mut store) = fresh();
         for n in ["c", "a", "b"] {
-            store.create_graft(&name(n), &commit()).unwrap();
+            store
+                .create_graft(&name(n), &commit(), BackendKind::Reflink)
+                .unwrap();
         }
         let grafts = store.grafts().unwrap();
         let mut expected = grafts.clone();
@@ -919,8 +942,12 @@ mod tests {
         store
             .record_layer(&key, Path::new("node_modules"), "npm ci")
             .unwrap();
-        let a = store.create_graft(&name("a"), &commit()).unwrap();
-        let b = store.create_graft(&name("b"), &commit()).unwrap();
+        let a = store
+            .create_graft(&name("a"), &commit(), BackendKind::Reflink)
+            .unwrap();
+        let b = store
+            .create_graft(&name("b"), &commit(), BackendKind::Reflink)
+            .unwrap();
         store.add_layer_ref(a.id, &key).unwrap();
         store.add_layer_ref(a.id, &key).unwrap();
         store.add_layer_ref(b.id, &key).unwrap();
@@ -948,7 +975,9 @@ mod tests {
         let (_dir, mut store) = fresh();
         let key = LayerKey::from_bytes([5; 32]);
         store.record_layer(&key, Path::new("x"), "b").unwrap();
-        let g = store.create_graft(&name("g"), &commit()).unwrap();
+        let g = store
+            .create_graft(&name("g"), &commit(), BackendKind::Reflink)
+            .unwrap();
         store.add_layer_ref(g.id, &key).unwrap();
         // Bypassing delete_layer's check still cannot drop a referenced layer.
         let raw = store.conn.execute("DELETE FROM layers", []);

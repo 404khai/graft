@@ -1,14 +1,15 @@
 //! `graft new`, `ls`, `path`, `status`, `diff` and `prune`.
 //!
 //! These orchestrate the store (records), the Root (pin refs) and the
-//! filesystem backend (working trees). `graftd` takes this over when the
-//! daemon arrives.
+//! filesystem backend (working trees). Virtual (FUSE) grafts are mounted
+//! by `graftd`, which these commands start on demand (ADR 0007).
 
 use std::fmt::Write as _;
 use std::path::Path;
 
 use anyhow::{Context, bail};
-use graft_core::{GraftName, GraftState};
+use graft_core::{BackendKind, GraftHome, GraftName, GraftState};
+use graft_daemon::Client;
 use graft_fs::{FsBackend, GraftSpec, ReflinkBackend, human_bytes};
 use graft_root::graft::{GraftRepo, unified_diff};
 use graft_root::layer::LayerCache;
@@ -27,6 +28,11 @@ pub(crate) struct NewArgs {
     /// HEAD.
     #[arg(long, value_name = "REF")]
     from: Option<String>,
+    /// Filesystem backend: `reflink` (a real working tree) or `fuse` (a
+    /// virtual, read-only tree served by graftd; Linux). Defaults to
+    /// `$GRAFT_FS`, then `fs.backend` in `config.toml`, then `reflink`.
+    #[arg(long, value_name = "BACKEND")]
+    backend: Option<BackendKind>,
 }
 
 /// Arguments for commands that take one graft name.
@@ -56,6 +62,7 @@ pub(crate) struct PruneArgs {
 }
 
 struct Ctx {
+    home: GraftHome,
     located: Located,
     backend: ReflinkBackend,
     layers: LayerCache,
@@ -66,6 +73,7 @@ fn open(env: &Environment) -> anyhow::Result<Ctx> {
     let located = locate(home, Path::new("."))?;
     let root_dir = home.root_dir(&located.record.id);
     Ok(Ctx {
+        home: home.clone(),
         located,
         backend: ReflinkBackend::new(root_dir.join("mounts")),
         layers: LayerCache::new(root_dir.join("layers")),
@@ -86,13 +94,55 @@ fn short(record: &GraftRecord) -> &str {
     record.base_commit.short(7)
 }
 
+/// The backend for a new graft: `--backend`, `$GRAFT_FS`, config, default.
+fn choose_backend(args: &NewArgs, env: &Environment) -> anyhow::Result<BackendKind> {
+    if let Some(b) = args.backend {
+        return Ok(b);
+    }
+    if let Some(v) = std::env::var_os(BackendKind::ENV).filter(|v| !v.is_empty()) {
+        let v = v.to_string_lossy();
+        return v.parse().with_context(|| format!("${}", BackendKind::ENV));
+    }
+    Ok(env
+        .config
+        .as_ref()
+        .and_then(|c| c.as_ref().ok())
+        .and_then(|c| c.fs.backend)
+        .unwrap_or_default())
+}
+
+/// Connects to graftd, starting it if needed, and warns once if its version
+/// differs from ours.
+fn daemon(home: &GraftHome, out: &mut Output) -> anyhow::Result<Client> {
+    let mut client = Client::connect_or_start(home)?;
+    let ping = client.ping()?;
+    if ping.version != env!("CARGO_PKG_VERSION") {
+        out.warnings.push(format!(
+            "graftd {} is running but this is graft {}; stop it with `graft daemon stop` once no grafts are in use",
+            ping.version,
+            env!("CARGO_PKG_VERSION")
+        ));
+    }
+    Ok(client)
+}
+
 /// Creates a graft.
 pub(crate) fn new(args: &NewArgs, env: &Environment) -> anyhow::Result<Output> {
     let name = parse_name(&args.name)?;
+    if choose_backend(args, env)?.is_virtual() {
+        new_virtual(args, env, &name)
+    } else {
+        new_reflink(args, env, &name)
+    }
+}
+
+/// Creates a reflink graft: a real working tree (ADR 0003).
+fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::Result<Output> {
     let Ctx {
         mut located,
         backend,
         layers: cache,
+        ..
     } = open(env)?;
     let rev = args.from.as_deref().unwrap_or("HEAD");
     let base = located.repo.resolve_commit(rev)?;
@@ -106,31 +156,34 @@ pub(crate) fn new(args: &NewArgs, env: &Environment) -> anyhow::Result<Output> {
     )?;
 
     // The record reserves the name before any files exist.
-    let record = located.store.create_graft(&name, &base)?;
+    let record = located
+        .store
+        .create_graft(name, &base, BackendKind::Reflink)?;
     let spec = GraftSpec {
         id: record.id,
-        name: &name,
+        name,
         base: &base,
     };
     let created = backend
         .create(&located.repo, &spec)
         .map_err(anyhow::Error::from)
         .and_then(|report| {
-            located.repo.pin(record.id, &base, &name)?;
+            located.repo.pin(record.id, &base, name)?;
             let applied = layers::apply(
                 &planned,
                 &cache,
                 &mut located.store,
                 &report.path,
-                &name,
+                name,
                 record.id,
+                true,
             )?;
             Ok((report, applied))
         });
     let (report, applied) = match created {
         Ok(created) => created,
         Err(e) => {
-            let _ = backend.prune(&name, record.id);
+            let _ = backend.prune(name, record.id);
             let _ = located.repo.unpin(record.id);
             let _ = located.store.delete_graft(record.id);
             return Err(e.context(format!("creating graft {name}")));
@@ -188,13 +241,123 @@ pub(crate) fn new(args: &NewArgs, env: &Environment) -> anyhow::Result<Output> {
     Ok(out)
 }
 
+/// Creates a FUSE graft: a record, a pin and layer references, then graftd
+/// mounts it. No files are written, whatever the size of the repo.
+fn new_virtual(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::Result<Output> {
+    let Ctx {
+        home,
+        mut located,
+        backend,
+        layers: cache,
+    } = open(env)?;
+    let rev = args.from.as_deref().unwrap_or("HEAD");
+    let base = located.repo.resolve_commit(rev)?;
+    let planned = layers::plan(
+        &located.repo,
+        &located.store,
+        &cache,
+        &base,
+        args.from.as_deref(),
+    )?;
+    let mut out = Output::default();
+    // Reach graftd before recording anything, so an unsupported platform
+    // leaves nothing behind.
+    let mut client = daemon(&home, &mut out)?;
+    let record = located.store.create_graft(name, &base, BackendKind::Fuse)?;
+    // Layers that are not cached yet are built in a throwaway reflink
+    // checkout of the same base (ADR 0006).
+    let builder = ReflinkBackend::new(backend.mounts().join(".layer-build"));
+    let created = (|| -> anyhow::Result<_> {
+        located.repo.pin(record.id, &base, name)?;
+        let applied = if layers::needs_build(&planned, &cache) {
+            let spec = GraftSpec {
+                id: record.id,
+                name,
+                base: &base,
+            };
+            let scratch = builder.create(&located.repo, &spec)?;
+            let applied = layers::apply(
+                &planned,
+                &cache,
+                &mut located.store,
+                &scratch.path,
+                name,
+                record.id,
+                false,
+            );
+            builder.prune(name, record.id)?;
+            applied?
+        } else {
+            layers::apply(
+                &planned,
+                &cache,
+                &mut located.store,
+                &backend.path(name),
+                name,
+                record.id,
+                false,
+            )?
+        };
+        let path = client.mount(&located.record.id, name)?;
+        Ok((path, applied))
+    })();
+    let (path, applied) = match created {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = client.unmount(&located.record.id, name);
+            let _ = std::fs::remove_dir(backend.path(name));
+            let _ = builder.prune(name, record.id);
+            let _ = located.repo.unpin(record.id);
+            let _ = located.store.delete_graft(record.id);
+            return Err(e.context(format!("creating graft {name}")));
+        }
+    };
+    located.store.set_state(record.id, GraftState::Live)?;
+    let _ = writeln!(
+        out.stdout,
+        "Created graft {name} at {} (base {}, virtual: served by graftd, read-only)",
+        path.display(),
+        base.short(7)
+    );
+    for layer in &applied {
+        let how = if layer.built { "built" } else { "reused" };
+        let _ = writeln!(
+            out.stdout,
+            "  layer {}: {how} ({})",
+            layer.path.display(),
+            &layer.key.to_string()[..12]
+        );
+    }
+    Ok(out)
+}
+
 /// Lists grafts.
 pub(crate) fn ls(env: &Environment) -> anyhow::Result<Output> {
     let Ctx {
-        located, backend, ..
+        home,
+        located,
+        backend,
+        ..
     } = open(env)?;
     let grafts = located.store.grafts()?;
     let mut out = Output::default();
+    // Asking graftd also restarts it (and so remounts) after a crash.
+    let mounted: Option<Vec<GraftName>> = if grafts.iter().any(|g| g.backend.is_virtual()) {
+        match daemon(&home, &mut out).and_then(|mut c| Ok(c.mounts()?)) {
+            Ok(list) => Some(
+                list.into_iter()
+                    .filter(|m| m.root == located.record.id.to_string())
+                    .filter_map(|m| m.graft.parse().ok())
+                    .collect(),
+            ),
+            Err(e) => {
+                out.warnings.push(format!("cannot reach graftd: {e:#}"));
+                Some(Vec::new())
+            }
+        }
+    } else {
+        None
+    };
     if grafts.is_empty() {
         out.stdout
             .push_str("No grafts. Create one with `graft new <name>`.\n");
@@ -209,7 +372,15 @@ pub(crate) fn ls(env: &Environment) -> anyhow::Result<Output> {
     ]];
     for g in &grafts {
         let path = backend.path(&g.name);
-        let (changed, disk) = if path.is_dir() {
+        let (changed, disk) = if g.backend.is_virtual() {
+            let up = mounted.as_ref().is_some_and(|m| m.contains(&g.name));
+            // Read-only until the delta store: nothing changed, nothing stored.
+            if up {
+                ("0".to_owned(), human_bytes(0))
+            } else {
+                ("-".to_owned(), "unmounted".to_owned())
+            }
+        } else if path.is_dir() {
             let changed = backend
                 .diff(&g.name, &g.base_commit)
                 .map_or_else(|e| format!("error: {e}"), |c| c.len().to_string());
@@ -273,6 +444,10 @@ fn status_one(ctx: &Ctx, record: &GraftRecord) -> anyhow::Result<String> {
         path.display(),
         short(record)
     );
+    if record.backend.is_virtual() {
+        out.push_str("  nothing changed since base (virtual graft, read-only)\n");
+        return Ok(out);
+    }
     if !path.is_dir() {
         out.push_str("  working tree is missing; `graft prune --force` removes the record\n");
         return Ok(out);
@@ -316,6 +491,10 @@ pub(crate) fn diff(args: &NameArgs, env: &Environment) -> anyhow::Result<Output>
         located, backend, ..
     } = open(env)?;
     let record = find(&located.store, &name)?;
+    if record.backend.is_virtual() {
+        // A read-only graft has no changes to show.
+        return Ok(Output::default());
+    }
     let graft = GraftRepo::open(&backend.path(&name))?;
     let text: String = graft
         .diff_since(&record.base_commit)?
@@ -375,6 +554,9 @@ pub(crate) fn prune(args: &PruneArgs, env: &Environment) -> anyhow::Result<Outpu
             .with_context(|| format!("no graft named {name}; see `graft ls`"))?,
     };
     let path = ctx.backend.path(&name);
+    if record.backend.is_virtual() {
+        return prune_virtual(&mut ctx, &record);
+    }
     if record.state != GraftState::Pruned
         && !args.force
         && path.is_dir()
@@ -392,4 +574,36 @@ pub(crate) fn prune(args: &PruneArgs, env: &Environment) -> anyhow::Result<Outpu
     ctx.located.repo.unpin(record.id)?;
     ctx.located.store.delete_graft(record.id)?;
     Ok(Output::stdout(format!("Pruned graft {name}\n")))
+}
+
+/// Prunes a FUSE graft: graftd unmounts it (lazily if busy), then the empty
+/// mount point, pin and record go. A virtual graft is read-only, so no work
+/// can be lost.
+fn prune_virtual(ctx: &mut Ctx, record: &GraftRecord) -> anyhow::Result<Output> {
+    let name = &record.name;
+    let mut out = Output::default();
+    if record.state != GraftState::Pruned {
+        ctx.located.store.set_state(record.id, GraftState::Pruned)?;
+    }
+    let mut client = daemon(&ctx.home, &mut out)?;
+    let unmounted = client.unmount(&ctx.located.record.id, name)?;
+    if unmounted.lazy {
+        out.warnings.push(format!(
+            "graft {name} was in use, so it was unmounted lazily: processes with open files keep them until they close them"
+        ));
+    }
+    let mount_point = ctx.backend.path(name);
+    match std::fs::remove_dir(&mount_point) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(e)
+                .with_context(|| format!("removing the mount point {}", mount_point.display()));
+        }
+    }
+    ReflinkBackend::new(ctx.backend.mounts().join(".layer-build")).prune(name, record.id)?;
+    ctx.located.repo.unpin(record.id)?;
+    ctx.located.store.delete_graft(record.id)?;
+    out.stdout = format!("Pruned graft {name}\n");
+    Ok(out)
 }

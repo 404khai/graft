@@ -7,6 +7,11 @@
 //! [log]
 //! # A tracing filter directive. `$GRAFT_LOG` overrides it.
 //! filter = "graft=debug"
+//!
+//! [fs]
+//! # Backend for new grafts: "reflink" or "fuse". `$GRAFT_FS` and
+//! # `graft new --backend` override it.
+//! backend = "reflink"
 //! ```
 
 use std::io::ErrorKind;
@@ -14,6 +19,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use crate::backend::BackendKind;
 use crate::error::{GraftError, Result};
 use crate::home::GraftHome;
 
@@ -26,6 +32,16 @@ pub const CONFIG_FILE_NAME: &str = "config.toml";
 pub struct Config {
     /// Logging settings.
     pub log: LogConfig,
+    /// Filesystem backend settings.
+    pub fs: FsConfig,
+}
+
+/// The `[fs]` table.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FsConfig {
+    /// Backend for new grafts. `None` means [`BackendKind::default`].
+    pub backend: Option<BackendKind>,
 }
 
 /// The `[log]` table.
@@ -87,6 +103,13 @@ mod tests {
         let home = GraftHome::from_path(dir.path()).unwrap();
         assert_eq!(Config::load(&home).unwrap(), Config::default());
         assert_eq!(Config::load_file(&home.config_file()).unwrap(), None);
+    }
+
+    #[test]
+    fn reads_fs_backend() {
+        let config = Config::parse("[fs]\nbackend = \"fuse\"\n").unwrap();
+        assert_eq!(config.fs.backend, Some(BackendKind::Fuse));
+        assert!(Config::parse("[fs]\nbackend = \"nfs\"\n").is_err());
     }
 
     #[test]

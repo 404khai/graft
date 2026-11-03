@@ -7,6 +7,8 @@
 //! git repositories that back reflink grafts, sharing Root's object store.
 //! Objects are read lazily; nothing here shells out to `git`.
 //!
+//! [`tree`] reads trees and blobs one at a time for virtual grafts.
+//!
 //! [`layer`] owns the layer cache: shared directory trees such as
 //! `node_modules`, keyed by the hash of their declared inputs.
 
@@ -18,6 +20,7 @@ use graft_core::{CommitId, RootId};
 
 pub mod graft;
 pub mod layer;
+pub mod tree;
 
 /// Errors from opening or reading a repository.
 #[derive(Debug, thiserror::Error)]

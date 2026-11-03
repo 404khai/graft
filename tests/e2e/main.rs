@@ -12,6 +12,7 @@ mod grafts;
 mod layers;
 mod repo_policy;
 mod root;
+mod virtual_grafts;
 
 use std::path::Path;
 
