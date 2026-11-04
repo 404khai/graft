@@ -12,7 +12,8 @@ use serde::de::DeserializeOwned;
 
 use crate::paths;
 use crate::protocol::{
-    GraftRef, JSONRPC, MountInfo, Mounted, Ping, Request, Response, RpcError, Unmounted,
+    ActorParams, GraftRef, JSONRPC, MountInfo, Mounted, Ping, Request, Response, RootRef, RpcError,
+    Swept, Unmounted,
 };
 
 /// Environment variable naming the `graftd` binary to start.
@@ -258,6 +259,51 @@ impl Client {
     /// As for [`Client::call`].
     pub fn unmount(&mut self, root: &RootId, graft: &GraftName) -> Result<Unmounted, ClientError> {
         self.call("unmount", &graft_ref(root, graft))
+    }
+
+    /// Prunes a FUSE graft: unmounts it (lazily if busy) and removes its
+    /// mount point, staging files, `.git`, delta and unreferenced blobs.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Client::call`].
+    pub fn prune(&mut self, root: &RootId, graft: &GraftName) -> Result<Unmounted, ClientError> {
+        self.call("prune", &graft_ref(root, graft))
+    }
+
+    /// Sets the actor recorded on a mounted graft's following ops.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Client::call`].
+    pub fn set_actor(
+        &mut self,
+        root: &RootId,
+        graft: &GraftName,
+        actor: Option<&str>,
+    ) -> Result<(), ClientError> {
+        self.call(
+            "set_actor",
+            &ActorParams {
+                root: root.to_string(),
+                graft: graft.to_string(),
+                actor: actor.map(str::to_owned),
+            },
+        )
+    }
+
+    /// Deletes Root `root`'s blobs that no graft references.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Client::call`].
+    pub fn gc(&mut self, root: &RootId) -> Result<Swept, ClientError> {
+        self.call(
+            "gc",
+            &RootRef {
+                root: root.to_string(),
+            },
+        )
     }
 
     /// Every mounted graft.

@@ -24,6 +24,7 @@ type MountRow = (RootId, GraftName, PathBuf, usize);
 #[derive(Default)]
 struct Fake {
     mounted: Mutex<Vec<MountRow>>,
+    actors: Mutex<Vec<(String, Option<String>)>>,
     unmounted_all: Mutex<bool>,
 }
 
@@ -54,6 +55,24 @@ impl Mounter for Fake {
         let before = m.len();
         m.retain(|(r, g, _, _)| !(*r == root && g == graft));
         Ok((m.len() != before).then_some(false))
+    }
+
+    fn prune(&self, root: RootId, mounts: &Path, graft: &GraftRecord) -> Result<bool, String> {
+        self.unmount(root, mounts, &graft.name).map(|_| false)
+    }
+
+    fn set_actor(
+        &self,
+        _root: RootId,
+        graft: &GraftName,
+        actor: Option<String>,
+    ) -> Result<(), String> {
+        self.actors.lock().unwrap().push((graft.to_string(), actor));
+        Ok(())
+    }
+
+    fn sweep(&self, _root: RootId, _mounts: &Path) -> Result<(u64, u64), String> {
+        Ok((2, 10))
     }
 
     fn mounts(&self) -> Vec<(RootId, GraftName, PathBuf)> {
@@ -203,8 +222,21 @@ fn serves_the_protocol_and_shuts_down() {
         METHOD_NOT_FOUND
     );
 
+    c.set_actor(&env.root, &virt, Some("run-1")).unwrap();
+    assert_eq!(
+        *fake.actors.lock().unwrap(),
+        [("virt".to_owned(), Some("run-1".to_owned()))]
+    );
+    let swept = c.gc(&env.root).unwrap();
+    assert_eq!((swept.blobs, swept.bytes), (2, 10));
     let u = c.unmount(&env.root, &virt).unwrap();
     assert!(u.was_mounted && !u.lazy);
+    // Prune goes through the mounter, and only for fuse grafts.
+    c.mount(&env.root, &virt).unwrap();
+    c.prune(&env.root, &virt).unwrap();
+    assert!(fake.mounted.lock().unwrap().is_empty());
+    let err = c.prune(&env.root, &"real".parse().unwrap()).unwrap_err();
+    assert!(err.to_string().contains("reflink backend"), "{err}");
     assert!(!c.unmount(&env.root, &virt).unwrap().was_mounted);
 
     // Garbage on the wire gets a parse error, and the connection survives.

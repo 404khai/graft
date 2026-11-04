@@ -8,17 +8,15 @@ use std::sync::Arc;
 use graft_core::{BackendKind, GraftHome, GraftName, GraftState, RootId};
 use graft_fs::view::LayerMount;
 use graft_root::Repo;
-use graft_root::layer::LayerCache;
 use graft_store::{GraftRecord, Store};
-use serde::de::DeserializeOwned;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Notify;
 
 use crate::paths;
 use crate::protocol::{
-    GRAFT_ERROR, GraftRef, INVALID_PARAMS, INVALID_REQUEST, JSONRPC, METHOD_NOT_FOUND, MountInfo,
-    Mounted, PARSE_ERROR, Ping, Request, Response, Unmounted,
+    ActorParams, GRAFT_ERROR, GraftRef, INVALID_PARAMS, INVALID_REQUEST, JSONRPC, METHOD_NOT_FOUND,
+    MountInfo, Mounted, PARSE_ERROR, Ping, Request, Response, RootRef, Swept, Unmounted,
 };
 
 /// What `graftd` needs from a filesystem backend. Implemented over
@@ -53,6 +51,34 @@ pub trait Mounter: Send + Sync {
         mounts: &Path,
         graft: &GraftName,
     ) -> Result<Option<bool>, String>;
+
+    /// Unmounts a graft (lazily if busy) and removes everything the
+    /// backend stored for it: mount point, staging files, `.git`, delta
+    /// rows and blobs nothing else uses. `Ok(true)` if the unmount was lazy.
+    ///
+    /// # Errors
+    ///
+    /// A message for the client.
+    fn prune(&self, root: RootId, mounts: &Path, graft: &GraftRecord) -> Result<bool, String>;
+
+    /// Sets the actor recorded on a mounted graft's following ops.
+    ///
+    /// # Errors
+    ///
+    /// A message for the client, e.g. if it is not mounted.
+    fn set_actor(
+        &self,
+        root: RootId,
+        graft: &GraftName,
+        actor: Option<String>,
+    ) -> Result<(), String>;
+
+    /// Deletes blobs of Root `root` that no graft references.
+    ///
+    /// # Errors
+    ///
+    /// A message for the client.
+    fn sweep(&self, root: RootId, mounts: &Path) -> Result<(u64, u64), String>;
 
     /// Every mounted graft.
     fn mounts(&self) -> Vec<(RootId, GraftName, PathBuf)>;
@@ -129,10 +155,6 @@ struct State {
     shutdown: Notify,
 }
 
-fn params<T: DeserializeOwned>(value: serde_json::Value) -> Result<T, Response> {
-    serde_json::from_value(value).map_err(|e| Response::err(None, INVALID_PARAMS, e.to_string()))
-}
-
 fn parse_ref(r: &GraftRef) -> Result<(RootId, GraftName), String> {
     let root = r
         .root
@@ -140,29 +162,6 @@ fn parse_ref(r: &GraftRef) -> Result<(RootId, GraftName), String> {
         .map_err(|e| format!("bad Root ID {:?}: {e}", r.root))?;
     let graft = r.graft.parse().map_err(|e| format!("{e}"))?;
     Ok((root, graft))
-}
-
-/// The layers of `graft`, as mounts from the Root's layer cache.
-fn layer_mounts(
-    store: &Store,
-    root_dir: &Path,
-    graft: &GraftRecord,
-) -> Result<Vec<LayerMount>, String> {
-    let cache = LayerCache::new(root_dir.join("layers"));
-    let keys = store.graft_layers(graft.id).map_err(|e| e.to_string())?;
-    let all = store.layers().map_err(|e| e.to_string())?;
-    keys.into_iter()
-        .map(|key| {
-            let record = all
-                .iter()
-                .find(|l| l.key == key)
-                .ok_or_else(|| format!("layer {key} is referenced but not recorded"))?;
-            Ok(LayerMount {
-                path: record.path.clone(),
-                source: cache.path(&key),
-            })
-        })
-        .collect()
 }
 
 /// Mounts one graft after checking its record says it should be mounted.
@@ -198,10 +197,28 @@ fn mount_graft(state: &State, root: RootId, name: &GraftName) -> Result<PathBuf,
         return Ok(path);
     }
     let repo = Repo::discover(&record.path).map_err(|e| e.to_string())?;
-    let layers = layer_mounts(&store, &root_dir, &graft)?;
+    let layers = graft_fs::layer_mounts(&store, &root_dir, graft.id).map_err(|e| e.to_string())?;
     state
         .mounter
         .mount(root, &root_dir.join("mounts"), &repo, &graft, layers)
+}
+
+/// Prunes graft `name` of Root `root` through the mounter. The record may
+/// already be marked pruned by the CLI.
+fn prune_graft(state: &State, root: RootId, name: &GraftName) -> Result<bool, String> {
+    let root_dir = state.home.root_dir(&root);
+    let store = Store::open(&root_dir).map_err(|e| e.to_string())?;
+    let graft = match store.graft(name).map_err(|e| e.to_string())? {
+        Some(g) => g,
+        None => store
+            .pruned_graft(name)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("no graft named {name}"))?,
+    };
+    if graft.backend != BackendKind::Fuse {
+        return Err(format!("graft {name} uses the {} backend", graft.backend));
+    }
+    state.mounter.prune(root, &root_dir.join("mounts"), &graft)
 }
 
 /// Mounts every live fuse graft of every Root. Failures are logged.
@@ -245,57 +262,98 @@ async fn blocking<T: Send + 'static>(
         .map_err(|e| format!("internal error: {e}"))?
 }
 
-async fn dispatch(state: &Arc<State>, line: &str) -> Response {
-    let value: serde_json::Value = match serde_json::from_str(line) {
-        Ok(v) => v,
-        Err(e) => return Response::err(None, PARSE_ERROR, e.to_string()),
-    };
-    let request: Request = match serde_json::from_value(value) {
-        Ok(r) => r,
-        Err(e) => return Response::err(None, INVALID_REQUEST, e.to_string()),
-    };
-    if request.jsonrpc != JSONRPC {
-        return Response::err(Some(request.id), INVALID_REQUEST, "jsonrpc must be \"2.0\"");
+/// A failed call: a JSON-RPC error code and a message.
+type Failure = (i64, String);
+
+fn invalid(e: impl std::fmt::Display) -> Failure {
+    (INVALID_PARAMS, e.to_string())
+}
+
+fn failed(e: impl std::fmt::Display) -> Failure {
+    (GRAFT_ERROR, e.to_string())
+}
+
+fn value(v: &impl serde::Serialize) -> Result<serde_json::Value, Failure> {
+    serde_json::to_value(v).map_err(failed)
+}
+
+fn graft_params(p: serde_json::Value) -> Result<(RootId, GraftName), Failure> {
+    let r: GraftRef = serde_json::from_value(p).map_err(invalid)?;
+    parse_ref(&r).map_err(invalid)
+}
+
+async fn mount_like(
+    state: &Arc<State>,
+    method: &str,
+    p: serde_json::Value,
+) -> Result<serde_json::Value, Failure> {
+    let (root, name) = graft_params(p)?;
+    let s = Arc::clone(state);
+    match method {
+        "mount" => {
+            let path = blocking(move || mount_graft(&s, root, &name))
+                .await
+                .map_err(failed)?;
+            value(&Mounted { path })
+        }
+        "prune" => {
+            let lazy = blocking(move || prune_graft(&s, root, &name))
+                .await
+                .map_err(failed)?;
+            value(&Unmounted {
+                was_mounted: true,
+                lazy,
+            })
+        }
+        _ => {
+            let mounts = s.home.root_dir(&root).join("mounts");
+            let how = blocking(move || s.mounter.unmount(root, &mounts, &name))
+                .await
+                .map_err(failed)?;
+            value(&Unmounted {
+                was_mounted: how.is_some(),
+                lazy: how == Some(true),
+            })
+        }
     }
-    let id = request.id;
-    let graft_error = |e: String| Response::err(Some(id), GRAFT_ERROR, e);
-    let ok = |v: &dyn erased::Ser| match v.to_value() {
-        Ok(v) => Response::ok(id, v),
-        Err(e) => graft_error(e.to_string()),
-    };
-    match request.method.as_str() {
-        "ping" => ok(&Ping {
+}
+
+async fn handle(
+    state: &Arc<State>,
+    method: &str,
+    p: serde_json::Value,
+) -> Result<serde_json::Value, Failure> {
+    match method {
+        "ping" => value(&Ping {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             pid: std::process::id(),
         }),
-        "mount" | "unmount" => {
-            let r: GraftRef = match params(request.params) {
-                Ok(r) => r,
-                Err(mut resp) => {
-                    resp.id = Some(id);
-                    return resp;
-                }
-            };
-            let (root, name) = match parse_ref(&r) {
-                Ok(p) => p,
-                Err(e) => return Response::err(Some(id), INVALID_PARAMS, e),
-            };
+        "mount" | "unmount" | "prune" => mount_like(state, method, p).await,
+        "set_actor" => {
+            let a: ActorParams = serde_json::from_value(p).map_err(invalid)?;
+            let (root, name) = parse_ref(&GraftRef {
+                root: a.root,
+                graft: a.graft,
+            })
+            .map_err(invalid)?;
+            state
+                .mounter
+                .set_actor(root, &name, a.actor)
+                .map_err(failed)?;
+            value(&())
+        }
+        "gc" => {
+            let r: RootRef = serde_json::from_value(p).map_err(invalid)?;
+            let root: RootId = r
+                .root
+                .parse()
+                .map_err(|e| invalid(format!("bad Root ID: {e}")))?;
             let s = Arc::clone(state);
-            if request.method == "mount" {
-                match blocking(move || mount_graft(&s, root, &name)).await {
-                    Ok(path) => ok(&Mounted { path }),
-                    Err(e) => graft_error(e),
-                }
-            } else {
-                let mounts = s.home.root_dir(&root).join("mounts");
-                match blocking(move || s.mounter.unmount(root, &mounts, &name)).await {
-                    Ok(how) => ok(&Unmounted {
-                        was_mounted: how.is_some(),
-                        lazy: how == Some(true),
-                    }),
-                    Err(e) => graft_error(e),
-                }
-            }
+            let mounts = s.home.root_dir(&root).join("mounts");
+            let (blobs, bytes) = blocking(move || s.mounter.sweep(root, &mounts))
+                .await
+                .map_err(failed)?;
+            value(&Swept { blobs, bytes })
         }
         "mounts" => {
             let list: Vec<MountInfo> = state
@@ -308,25 +366,31 @@ async fn dispatch(state: &Arc<State>, line: &str) -> Response {
                     path,
                 })
                 .collect();
-            ok(&list)
+            value(&list)
         }
         "shutdown" => {
             state.shutdown.notify_one();
-            ok(&())
+            value(&())
         }
-        other => Response::err(Some(id), METHOD_NOT_FOUND, format!("no method {other:?}")),
+        other => Err((METHOD_NOT_FOUND, format!("no method {other:?}"))),
     }
 }
 
-/// Lets `dispatch` serialise results of different types uniformly.
-mod erased {
-    pub(super) trait Ser {
-        fn to_value(&self) -> serde_json::Result<serde_json::Value>;
+async fn dispatch(state: &Arc<State>, line: &str) -> Response {
+    let value: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => return Response::err(None, PARSE_ERROR, e.to_string()),
+    };
+    let request: Request = match serde_json::from_value(value) {
+        Ok(r) => r,
+        Err(e) => return Response::err(None, INVALID_REQUEST, e.to_string()),
+    };
+    if request.jsonrpc != JSONRPC {
+        return Response::err(Some(request.id), INVALID_REQUEST, "jsonrpc must be \"2.0\"");
     }
-    impl<T: serde::Serialize> Ser for T {
-        fn to_value(&self) -> serde_json::Result<serde_json::Value> {
-            serde_json::to_value(self)
-        }
+    match handle(state, &request.method, request.params).await {
+        Ok(v) => Response::ok(request.id, v),
+        Err((code, message)) => Response::err(Some(request.id), code, message),
     }
 }
 
