@@ -339,11 +339,15 @@ fn layer_writes_stay_private() {
         std::fs::read_to_string(path.join("node_modules/pkg/index.js")).unwrap(),
         "ok"
     );
-    let err = std::fs::write(path.join("node_modules/pkg/index.js"), "no").unwrap_err();
-    assert_eq!(err.raw_os_error(), Some(graft_fs::view::Errno::EROFS.0));
+    std::fs::write(path.join("node_modules/pkg/index.js"), "mine").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(path.join("node_modules/pkg/index.js")).unwrap(),
+        "mine"
+    );
     assert_eq!(
         std::fs::read_to_string(layer.join("pkg/index.js")).unwrap(),
-        "ok"
+        "ok",
+        "the layer cache is never written"
     );
     backend.prune(&name, id).unwrap();
 }

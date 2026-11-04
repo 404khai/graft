@@ -162,6 +162,7 @@ impl FuseBackend {
         let owner = std::fs::metadata(&mounts).map_err(io_err("inspecting", &mounts))?;
         let mounted = (|| {
             use std::os::unix::fs::MetadataExt;
+            self.ensure_record(root, spec)?;
             let objects = ObjectStore::open(root);
             let journal = Journal {
                 store: Store::open(&self.root_dir)?,
@@ -254,7 +255,8 @@ fn git_init(objects: &ObjectStore, spec: &GraftSpec<'_>, layers: &[LayerMount]) 
 
 impl FuseBackend {
     /// Records the Root and graft in the store if they are not there yet,
-    /// for grafts created through [`FsBackend::create`] rather than the CLI.
+    /// for grafts mounted without the CLI (tests and [`FsBackend::create`]).
+    /// A no-op in graftd, which only mounts recorded grafts.
     fn ensure_record(&self, root: &Repo, spec: &GraftSpec<'_>) -> Result<()> {
         let mut store = if Store::db_path(&self.root_dir).is_file() {
             Store::open(&self.root_dir)?
@@ -285,7 +287,6 @@ impl FsBackend for FuseBackend {
         if std::fs::symlink_metadata(&target).is_ok() {
             return Err(FsError::AlreadyExists { path: target });
         }
-        self.ensure_record(root, spec)?;
         let path = self.mount(root, spec, Vec::new())?;
         Ok(CreateReport {
             path,
