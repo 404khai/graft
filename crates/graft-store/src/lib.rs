@@ -367,9 +367,24 @@ impl Store {
         base_commit: &CommitId,
         backend: BackendKind,
     ) -> Result<GraftRecord> {
+        self.create_graft_with_id(GraftId::random()?, name, base_commit, backend)
+    }
+
+    /// As [`Store::create_graft`], with a given ID.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Store::create_graft`]; SQLite errors if the ID is taken.
+    pub fn create_graft_with_id(
+        &mut self,
+        id: GraftId,
+        name: &GraftName,
+        base_commit: &CommitId,
+        backend: BackendKind,
+    ) -> Result<GraftRecord> {
         let now = Timestamp::now();
         let record = GraftRecord {
-            id: GraftId::random()?,
+            id,
             name: name.clone(),
             base_commit: base_commit.clone(),
             state: GraftState::Created,

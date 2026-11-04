@@ -472,6 +472,24 @@ impl Store {
         Ok(max.and_then(|m| u64::try_from(m).ok()).unwrap_or(0))
     }
 
+    /// Discards graft `id`'s delta and staging rows (its op log stays until
+    /// the graft's record is deleted).
+    ///
+    /// # Errors
+    ///
+    /// SQLite errors.
+    pub fn clear_delta(&mut self, id: GraftId) -> Result<()> {
+        for table in ["delta", "staged"] {
+            self.conn
+                .execute(
+                    &format!("DELETE FROM {table} WHERE graft_id = ?1"),
+                    [id.to_string()],
+                )
+                .map_err(|e| self.sql(e))?;
+        }
+        Ok(())
+    }
+
     /// Every delta blob any graft of this Root references.
     ///
     /// # Errors
