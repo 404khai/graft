@@ -721,7 +721,105 @@ Sandboxing.
 
 ---
 
-### Phase 8 — Bud and Ring
+### Phase 8 — Performance: faster than worktrees
+
+**Goal:** a graft is faster than a `git worktree` on every measured workload, on every supported platform, with no loss of functionality or correctness.
+
+Speed never buys correctness. Every optimisation in this phase keeps all behaviour from Phases 0–7 exactly: the conformance suite, op log replay, crash consistency, git filters and attributes, layer isolation and Prune safety. An optimisation that cannot keep them is not shipped. If a target can only be met by weakening a guarantee, record it under `## Blocked` (§12) and ask.
+
+**Definitions**
+- *Worktree baseline:* the harness's `worktree` method (`git worktree add --detach`, then the fixture's install command), on the same machine, filesystem and fixture.
+- *Beats:* the graft's median is lower than the worktree's median, and the difference is larger than the run-to-run spread of either. Where both medians are below the harness's measurement floor, the graft's must not be higher.
+- *Default backend:* the backend `graft new` uses on a platform with no `--backend`, `$GRAFT_FS` or config.
+
+**Scope**
+- **Measure first.** Extend the Phase 4 harness with workloads run *inside* each workspace, on every backend:
+  - cold build and test of the medium fixture;
+  - incremental rebuild after a one-file edit;
+  - test run alone;
+  - `git status`, `git diff` and `git commit` of a small change;
+  - `rg` across the tree, and a stat-heavy walk (`find`, `ls -R`);
+  - write throughput: 10,000 small files, and one 1 GiB file.
+
+  Profile every metric where a graft loses (flamegraphs or `perf`/Instruments) and commit a short note per hot path in `bench/results/profiles/`.
+- **Cold start and fixed overhead.**
+  - Build missing layers without a full throwaway checkout (for example in a writable virtual graft), and remove any scratch tree off the critical path.
+  - Cut per-command cost: start-up, database open and migration check, layer planning, cached toolchain output.
+  - Keep `graftd` warm.
+- **FUSE (Linux).**
+  - Passthrough for unmodified and copied-up files where the kernel supports it (`FUSE_PASSTHROUGH`, Linux 6.9+).
+  - Entry and attribute caching with explicit kernel invalidation on every change.
+  - Writeback cache, `readdirplus`, larger reads and readahead, and multi-threaded dispatch with `clone_fd`.
+- **NFS (macOS).** Attribute and directory caching with correct invalidation, tuned `rsize`/`wsize`, and asynchronous writes that still honour `fsync` through `COMMIT`.
+- **Delta store and op log.** Group commit and batched journaling that still lose at most the in-flight operation on a crash. No double copy on copy-up.
+- **git inside a graft.** Answer `git status` from the delta (for example through `core.fsmonitor` and a precomputed index) instead of statting the whole tree. Results must be identical to a plain `git status`.
+- **Reflink backend.** Parallel cloning and cheaper cleanliness checks that still never reflink a file not proven to match the base blob.
+- **Bounded memory.** Every cache has a size limit, configurable in `config.toml`.
+- **Fallbacks.** Each kernel- or OS-dependent mechanism falls back to the existing correct path when unavailable, with one warning. `graft doctor` reports which mechanisms are active.
+- **Decisions.** One ADR per mechanism, stating the invariant it preserves and the test that proves it. A final ADR chooses each platform's default backend from the measured results.
+- **Regression guard.** The bench workflow compares grafts against worktrees on every metric and fails its job when a graft loses. It stays on demand, not a required check (§6).
+
+**Acceptance criteria**
+- [ ] On the default backend, a graft beats the worktree baseline on create time, time to first passing test (cold layer cache included), disk added and prune time. This holds for every fixture (small, medium, large) and agent count (1, 4, 8, 16), on Linux (ext4, and XFS or btrfs) and macOS (APFS).
+- [ ] On the default backend, every in-graft workload above (build, rebuild, test, git, search, walk, writes) beats the worktree baseline on Linux and macOS.
+- [ ] No backend is slower than the worktree baseline on any metric. Where reflinks are unavailable (ext4) the reflink backend at least matches it.
+- [ ] The full conformance suite, op log replay property test, crash-consistency test and e2e suite pass on every backend with every optimisation enabled. Existing tests are only ever added to, never weakened, skipped or retuned.
+- [ ] Every caching mechanism has a test proving that a change made in a graft is visible to every reader of that graft immediately, and is never visible in Root or another graft.
+- [ ] `fsync` and crash guarantees are unchanged from Phase 6 (tested with `kill -9` of `graftd` mid-write, with every optimisation enabled).
+- [ ] Every fallback path is tested, and `graft doctor` reports which mechanisms are active.
+- [ ] Peak `graftd` memory stays within the configured cache limits on the large fixture with 16 grafts.
+- [ ] Results are reproducible within ±10% over three runs. Where a machine (such as a CI VM) cannot reproduce them, the criterion is measured on one that can, and the PR says which.
+
+**Branch:** `perf/beat-worktrees`
+
+**PR title:** `perf(repo): make grafts faster than worktrees on every measured workload`
+
+This phase may be split into stacked PRs (§7), for example one per mechanism. Each uses its own `perf/<mechanism>` branch.
+
+**PR description**
+```markdown
+## Summary
+Makes grafts faster than git worktrees on every workload the harness measures, on Linux and macOS, without changing any behaviour.
+
+## Why
+Graft replaces worktrees only if it is also the faster choice: to create, to start working in, and to build, test and run git in, every minute an agent spends inside it.
+
+## What changed
+- bench: in-graft workloads, worktree comparison gate, profiles.
+- graft-fs: FUSE passthrough, kernel caching with invalidation, NFS tuning.
+- graft-store: group commit and batched journaling with unchanged crash guarantees.
+- graft-cli / graft-root: cold-layer path, fixed-overhead cuts, fsmonitor-backed git status.
+- ADRs per mechanism and for the default backend per platform.
+
+## How to test
+cargo test --workspace
+GRAFT_TEST_FUSE=1 cargo test --workspace --features fuse-tests
+./bench/run.sh --backends reflink,fuse --agents 1,4,8,16
+
+## Acceptance criteria
+- [ ] default backend beats worktrees on create, ready, disk, prune (every fixture, agent count, platform)
+- [ ] default backend beats worktrees on every in-graft workload
+- [ ] no backend slower than worktrees on any metric
+- [ ] all correctness suites pass unchanged with optimisations on
+- [ ] cache visibility and isolation tests
+- [ ] crash and fsync guarantees unchanged
+- [ ] fallbacks tested and reported by doctor
+- [ ] graftd memory within limits
+- [ ] ±10% reproducibility
+
+## Benchmarks
+(graft vs worktree, per metric, fixture, agent count and platform: machine, method, numbers)
+
+## New dependencies
+(list)
+
+## Not in this PR
+—
+```
+
+---
+
+### Phase 9 — Bud and Ring
 
 **Goal:** constant-time fork, checkpoint and rewind.
 
@@ -772,7 +870,7 @@ graft bud auth auth-alt && graft ring auth before-refactor && graft rewind auth 
 
 ---
 
-### Phase 9 — Sandboxed run
+### Phase 10 — Sandboxed run
 
 **Goal:** an agent started through Graft cannot write outside its graft.
 
@@ -826,7 +924,7 @@ Ports, databases, services; next phase.
 
 ---
 
-### Phase 10 — Blueprints
+### Phase 11 — Blueprints
 
 **Goal:** each graft gets its own runnable environment.
 
@@ -902,7 +1000,7 @@ Radar.
 
 ---
 
-### Phase 11 — Radar
+### Phase 12 — Radar
 
 **Goal:** overlapping work between live grafts is detected while agents work, not at merge time.
 
@@ -957,7 +1055,7 @@ Integrate queue.
 
 ---
 
-### Phase 12 — Integrate
+### Phase 13 — Integrate
 
 **Goal:** finished grafts land in Root through a safe, ordered queue that produces normal git history.
 
@@ -1013,7 +1111,7 @@ Scheduler.
 
 ---
 
-### Phase 13 — Scheduler
+### Phase 14 — Scheduler
 
 **Goal:** split a multi-part task into grafts that rarely collide, and order them so interfaces land first.
 
@@ -1071,7 +1169,7 @@ MCP server.
 
 ---
 
-### Phase 14 — MCP server
+### Phase 15 — MCP server
 
 **Goal:** any MCP-capable agent can create, use and integrate grafts without a human running commands.
 
@@ -1125,7 +1223,7 @@ n/a
 
 ---
 
-### Phase 15 — Materialize, hardening and first release
+### Phase 16 — Materialize, hardening and first release
 
 **Goal:** a release people can rely on.
 
