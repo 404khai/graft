@@ -32,7 +32,8 @@ npm test
 echo "npm test in the graft: $(ms "$start") ms"
 
 # Edit a module and an npm-managed file inside the graft, and test again.
-first=$(git ls-files 'src/*' | head -1)
+# No `| head -1`: it would SIGPIPE git, which pipefail turns into a failure.
+first=$(git ls-files 'src/*' | sed -n 1p)
 echo "// edited in a graft" >> "$first"
 npm test
 git status --porcelain --untracked-files=all > "$work/git-status"
