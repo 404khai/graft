@@ -71,11 +71,11 @@ Status: in review (`test/worktree-benchmarks`)
 
 ## Phase 5 — Virtual filesystem: read path (Linux)
 
-Status: in review (`feat/virtual-fs-reads`, PR #7)
+Status: done (PR #7)
 
 - [x] `graft new` on the large fixture completes in < 1 s regardless of repo size (*target*).
   - Bench (GitHub ubuntu runner, XFS, 3 runs): median create 47 ms on large (≈200k files), 22–86 ms on medium, 22–38 ms on small, with the fixture's `node_modules` layer already cached.
-  - Not met when the layer is not cached yet: the first graft of each cell took 18.1 s on large, because it builds the layer in a throwaway reflink checkout (≈11 s) and then removes that checkout (≈7 s). That is layer-build cost, not mount cost; a follow-up should build layers without a full checkout and remove the scratch tree in the background.
+  - Not met when the layer is not cached yet: the first graft of each cell took 18.1 s on large, because it builds the layer in a throwaway reflink checkout (≈11 s) and then removes that checkout (≈7 s). That is layer-build cost, not mount cost; fixing it is in scope for Phase 8 (performance).
 - [x] `ls -R`, `cat`, `grep -r`, `rg` and `cargo check` / `tsc --noEmit` produce identical results in a graft and in Root.
   - `tools_see_the_same_tree_as_root` and `type_checkers_agree_with_root`, in the CI `fuse` job (rg and tsc required).
 - [x] Daemon restart remounts existing grafts.
@@ -109,7 +109,21 @@ Status: not started
 - [ ] Medium fixture builds and tests inside a graft on macOS.
 - [ ] Benchmarks recorded against the reflink backend on the same machine.
 
-## Phase 8 — Bud and Ring
+## Phase 8 — Performance: faster than worktrees
+
+Status: not started
+
+- [ ] On the default backend, a graft beats the worktree baseline on create time, time to first passing test (cold layer cache included), disk added and prune time, for every fixture and agent count, on Linux (ext4, and XFS or btrfs) and macOS (APFS).
+- [ ] On the default backend, every in-graft workload (build, rebuild, test, git, search, walk, writes) beats the worktree baseline on Linux and macOS.
+- [ ] No backend is slower than the worktree baseline on any metric; on ext4 the reflink backend at least matches it.
+- [ ] Conformance suite, op log replay property test, crash-consistency test and e2e suite pass on every backend with every optimisation enabled; existing tests are only added to.
+- [ ] Every caching mechanism is tested for immediate visibility within a graft and isolation from Root and other grafts.
+- [ ] `fsync` and crash guarantees are unchanged from Phase 6 (`kill -9` of `graftd` mid-write, optimisations enabled).
+- [ ] Every fallback path is tested, and `graft doctor` reports which mechanisms are active.
+- [ ] Peak `graftd` memory stays within the configured cache limits on the large fixture with 16 grafts.
+- [ ] Results are reproducible within ±10% over three runs on a machine that can reproduce them.
+
+## Phase 9 — Bud and Ring
 
 Status: not started
 
@@ -117,7 +131,7 @@ Status: not started
 - [ ] Rewinding then re-applying produces an identical delta (test).
 - [ ] Pruning a graft does not remove blobs used by its buds or rings.
 
-## Phase 9 — Sandboxed run
+## Phase 10 — Sandboxed run
 
 Status: not started
 
@@ -125,7 +139,7 @@ Status: not started
 - [ ] Common agents and toolchains run normally inside the sandbox (test with a fixture script that runs git, cargo/npm and a network call if allowed).
 - [ ] Clear error messages when the kernel lacks Landlock support.
 
-## Phase 10 — Blueprints
+## Phase 11 — Blueprints
 
 Status: not started
 
@@ -133,7 +147,7 @@ Status: not started
 - [ ] Prune removes the graft's database, volumes and port reservations.
 - [ ] Template rendering errors are reported with file and line.
 
-## Phase 11 — Radar
+## Phase 12 — Radar
 
 Status: not started
 
@@ -142,7 +156,7 @@ Status: not started
 - [ ] A seeded behavioural conflict (both pass alone, fail together) is detected by speculative merge.
 - [ ] Radar adds < 5% overhead to write latency (*target*).
 
-## Phase 12 — Integrate
+## Phase 13 — Integrate
 
 Status: not started
 
@@ -152,7 +166,7 @@ Status: not started
 - [ ] Root never receives a commit that failed the gate (test).
 - [ ] Output is plain git history: `git log` and `git fsck` are clean.
 
-## Phase 13 — Scheduler
+## Phase 14 — Scheduler
 
 Status: not started
 
@@ -161,7 +175,7 @@ Status: not started
 - [ ] Admission rejects a write to a symbol claimed by another live graft and names that graft.
 - [ ] Plans are deterministic for the same input.
 
-## Phase 14 — MCP server
+## Phase 15 — MCP server
 
 Status: not started
 
@@ -169,7 +183,7 @@ Status: not started
 - [ ] Tool schemas are documented and covered by snapshot tests.
 - [ ] Destructive tools refuse without confirmation.
 
-## Phase 15 — Materialize, hardening and first release
+## Phase 16 — Materialize, hardening and first release
 
 Status: not started
 
