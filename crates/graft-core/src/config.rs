@@ -9,7 +9,7 @@
 //! filter = "graft=debug"
 //!
 //! [fs]
-//! # Backend for new grafts: "reflink" or "fuse". `$GRAFT_FS` and
+//! # Backend for new grafts: "reflink", "fuse" (Linux) or "nfs" (macOS). `$GRAFT_FS` and
 //! # `graft new --backend` override it.
 //! backend = "reflink"
 //! ```
@@ -109,7 +109,7 @@ mod tests {
     fn reads_fs_backend() {
         let config = Config::parse("[fs]\nbackend = \"fuse\"\n").unwrap();
         assert_eq!(config.fs.backend, Some(BackendKind::Fuse));
-        assert!(Config::parse("[fs]\nbackend = \"nfs\"\n").is_err());
+        assert!(Config::parse("[fs]\nbackend = \"zfs\"\n").is_err());
     }
 
     #[test]

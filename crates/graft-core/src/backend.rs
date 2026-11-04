@@ -17,11 +17,26 @@ pub enum BackendKind {
     /// A virtual tree served by `graftd` over FUSE from Root's object store
     /// (Linux).
     Fuse,
+    /// A virtual tree served by `graftd` over NFS version 3 on loopback (macOS,
+    /// ADR 0009).
+    Nfs,
 }
 
 impl BackendKind {
+    /// The virtual backend this platform's `graftd` can mount, if any.
+    #[must_use]
+    pub const fn platform_virtual() -> Option<Self> {
+        if cfg!(target_os = "linux") {
+            Some(Self::Fuse)
+        } else if cfg!(target_os = "macos") {
+            Some(Self::Nfs)
+        } else {
+            None
+        }
+    }
+
     /// Every backend.
-    pub const ALL: [Self; 2] = [Self::Reflink, Self::Fuse];
+    pub const ALL: [Self; 3] = [Self::Reflink, Self::Fuse, Self::Nfs];
 
     /// Environment variable selecting the backend for `graft new`.
     pub const ENV: &'static str = "GRAFT_FS";
@@ -32,13 +47,14 @@ impl BackendKind {
         match self {
             Self::Reflink => "reflink",
             Self::Fuse => "fuse",
+            Self::Nfs => "nfs",
         }
     }
 
     /// Whether grafts on this backend are served by `graftd`.
     #[must_use]
     pub const fn is_virtual(self) -> bool {
-        matches!(self, Self::Fuse)
+        matches!(self, Self::Fuse | Self::Nfs)
     }
 }
 
@@ -50,7 +66,7 @@ impl fmt::Display for BackendKind {
 
 /// Error returned when parsing an unknown [`BackendKind`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("unknown filesystem backend {0:?}; expected \"reflink\" or \"fuse\"")]
+#[error("unknown filesystem backend {0:?}; expected \"reflink\", \"fuse\" or \"nfs\"")]
 pub struct UnknownBackend(pub String);
 
 impl FromStr for BackendKind {
@@ -73,7 +89,8 @@ mod tests {
         for b in BackendKind::ALL {
             assert_eq!(b.as_str().parse::<BackendKind>().unwrap(), b);
         }
-        assert!("nfs".parse::<BackendKind>().is_err());
+        assert!("zfs".parse::<BackendKind>().is_err());
+        assert!(BackendKind::Nfs.is_virtual() && !BackendKind::Reflink.is_virtual());
         assert_eq!(BackendKind::default(), BackendKind::Reflink);
     }
 }
