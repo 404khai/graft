@@ -3,8 +3,7 @@
 //! Every `FsBackend` must pass every check here. Each check gets a freshly
 //! created graft of the fixture Root and exercises one behaviour through the
 //! ordinary filesystem API, then checks what `diff` and `prune` report.
-//! Read-only backends (FUSE before the delta store) run [`run_read_only`],
-//! which checks reads and lifecycle and that every write is refused.
+//! Later backends (NFS) reuse this module unchanged.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -107,7 +106,7 @@ fn s(path: &str, kind: ChangeKind) -> (String, ChangeKind) {
 }
 
 /// Runs every check against `backend`.
-#[allow(dead_code)] // Each test binary uses one of the two entry points.
+#[allow(dead_code)] // Not every test binary that includes this module runs it.
 pub fn run(backend: &dyn FsBackend, fixture: &Fixture) {
     reads_match_root(backend, fixture);
     create_and_write(backend, fixture);
@@ -120,80 +119,6 @@ pub fn run(backend: &dyn FsBackend, fixture: &Fixture) {
     independent_grafts(backend, fixture);
     prune_leaves_nothing(backend, fixture);
     refuses_an_existing_path(backend, fixture);
-}
-
-/// Runs the checks that apply to a read-only backend.
-#[allow(dead_code)] // Each test binary uses one of the two entry points.
-pub fn run_read_only(backend: &dyn FsBackend, fixture: &Fixture) {
-    reads_match_root(backend, fixture);
-    writes_are_refused(backend, fixture);
-    independent_read_only_grafts(backend, fixture);
-    prune_leaves_nothing_read_only(backend, fixture);
-    refuses_an_existing_path(backend, fixture);
-}
-
-fn writes_are_refused(backend: &dyn FsBackend, f: &Fixture) {
-    let g = create(backend, f, "readonly");
-    let p = &g.path;
-    let erofs = |r: std::io::Result<()>, what: &str| {
-        let Err(e) = r else {
-            panic!("{what} succeeded in a read-only graft");
-        };
-        assert_eq!(
-            e.raw_os_error(),
-            Some(graft_fs::view::Errno::EROFS.0),
-            "{what}: {e}"
-        );
-    };
-    erofs(
-        std::fs::write(p.join("README.md"), "x").map(drop),
-        "overwrite",
-    );
-    erofs(std::fs::write(p.join("new.txt"), "x").map(drop), "create");
-    erofs(std::fs::remove_file(p.join("README.md")), "unlink");
-    erofs(
-        std::fs::rename(p.join("README.md"), p.join("moved")),
-        "rename",
-    );
-    erofs(std::fs::create_dir(p.join("dir")), "mkdir");
-    erofs(std::fs::remove_dir(p.join("src")), "rmdir");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        erofs(
-            std::fs::set_permissions(p.join("README.md"), std::fs::Permissions::from_mode(0o600)),
-            "chmod",
-        );
-        erofs(std::os::unix::fs::symlink("x", p.join("link")), "symlink");
-    }
-    assert_eq!(
-        std::fs::read_to_string(p.join("README.md")).unwrap(),
-        "hello\n"
-    );
-    assert_eq!(changes(&g, &f.base), Vec::new());
-    backend.prune(&g.name, g.id).unwrap();
-}
-
-fn independent_read_only_grafts(backend: &dyn FsBackend, f: &Fixture) {
-    let a = create(backend, f, "ro-a");
-    let b = create(backend, f, "ro-b");
-    assert_ne!(a.path, b.path);
-    backend.prune(&a.name, a.id).unwrap();
-    assert_eq!(
-        std::fs::read_to_string(b.path.join("README.md")).unwrap(),
-        "hello\n",
-        "pruning a must not touch b"
-    );
-    backend.prune(&b.name, b.id).unwrap();
-}
-
-fn prune_leaves_nothing_read_only(backend: &dyn FsBackend, f: &Fixture) {
-    let g = create(backend, f, "ro-prune");
-    assert!(g.path.join("src/lib.rs").is_file());
-    backend.prune(&g.name, g.id).unwrap();
-    assert!(!g.path.exists());
-    backend.prune(&g.name, g.id).unwrap(); // idempotent
-    assert!(f.dir.path().join("README.md").exists());
 }
 
 fn reads_match_root(backend: &dyn FsBackend, f: &Fixture) {

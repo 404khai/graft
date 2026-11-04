@@ -18,6 +18,7 @@ fuse-tests = []
 [dependencies]
 graft-core.workspace = true
 graft-root.workspace = true
+graft-store.workspace = true
 libc.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true

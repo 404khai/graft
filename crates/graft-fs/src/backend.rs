@@ -45,6 +45,25 @@ pub enum FsError {
     /// Reading or writing git state failed.
     #[error(transparent)]
     Root(#[from] graft_root::RootError),
+
+    /// Reading or writing the metadata store failed.
+    #[error(transparent)]
+    Store(#[from] graft_store::StoreError),
+
+    /// Opening a virtual graft's tree failed.
+    #[error(transparent)]
+    View(#[from] crate::view::ViewError),
+
+    /// Working out a virtual graft's changes failed.
+    #[error(transparent)]
+    Changes(#[from] crate::ChangesError),
+
+    /// The graft is not mounted, so its live state is unavailable.
+    #[error("graft {name} is not mounted")]
+    NotMounted {
+        /// The graft.
+        name: GraftName,
+    },
 }
 
 /// Result alias using [`FsError`].

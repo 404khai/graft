@@ -1,18 +1,20 @@
 //! The FUSE backend: grafts as read-only virtual trees (ADR 0006).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
-use graft_core::{CommitId, GraftId, GraftName};
+use graft_core::{BackendKind, CommitId, GraftId, GraftName, Timestamp};
 use graft_root::Repo;
-use graft_root::graft::{Change, CheckoutStats};
+use graft_root::graft::{Change, ChangeKind, CheckoutStats, FileDiff, GraftRepo, branch_name};
 use graft_root::tree::ObjectStore;
+use graft_store::blobs::BlobStore;
+use graft_store::{RootRecord, Store};
 
 use crate::backend::{CreateReport, FsBackend, FsError, GraftSpec, ReflinkBackend, Result};
 use crate::clone::CloneReport;
-use crate::view::{GraftView, LayerMount};
+use crate::view::{GitInit, GraftView, Journal, LayerMount};
 
 pub use crate::fuse::Unmounted;
 
@@ -29,17 +31,98 @@ fn io_err<'a>(action: &'static str, path: &'a Path) -> impl FnOnce(io::Error) ->
 #[derive(Debug)]
 pub struct FuseBackend {
     dirs: ReflinkBackend,
+    /// `$GRAFT_HOME/roots/<root-id>`: the store, blobs and per-graft state.
+    root_dir: PathBuf,
     mounted: Mutex<HashMap<GraftName, crate::fuse::Mounted>>,
 }
 
 impl FuseBackend {
-    /// A backend mounting grafts under `mounts`.
+    /// A backend mounting grafts under `mounts`
+    /// (`$GRAFT_HOME/roots/<root-id>/mounts`).
     #[must_use]
     pub fn new(mounts: PathBuf) -> Self {
+        let root_dir = mounts.parent().map(Path::to_owned).unwrap_or_default();
         Self {
             dirs: ReflinkBackend::new(mounts),
+            root_dir,
             mounted: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The Root's blob store.
+    #[must_use]
+    pub fn blobs(&self) -> BlobStore {
+        BlobStore::new(self.root_dir.join("blobs"))
+    }
+
+    /// Graft `id`'s private directory: staging files and `.git`.
+    #[must_use]
+    pub fn graft_dir(&self, id: GraftId) -> PathBuf {
+        self.root_dir.join("grafts").join(id.to_string())
+    }
+
+    fn view(&self, name: &GraftName) -> Option<Arc<GraftView>> {
+        self.mounted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .map(|m| Arc::clone(m.view()))
+    }
+
+    /// Sets the actor recorded on the graft's following ops.
+    ///
+    /// # Errors
+    ///
+    /// [`FsError::NotMounted`].
+    pub fn set_actor(&self, name: &GraftName, actor: Option<String>) -> Result<()> {
+        self.view(name)
+            .ok_or_else(|| FsError::NotMounted { name: name.clone() })?
+            .set_actor(actor);
+        Ok(())
+    }
+
+    /// What graft `name` changed against its base, from its delta, with
+    /// contents, hiding added paths its ignore rules exclude (as git
+    /// status does).
+    ///
+    /// # Errors
+    ///
+    /// [`FsError::NotMounted`], plus read and git errors.
+    pub fn diffs(&self, name: &GraftName) -> Result<Vec<FileDiff>> {
+        let view = self
+            .view(name)
+            .ok_or_else(|| FsError::NotMounted { name: name.clone() })?;
+        let diffs = view.diffs()?;
+        let added: Vec<PathBuf> = diffs
+            .iter()
+            .filter(|d| d.change.kind == ChangeKind::Added)
+            .map(|d| d.change.path.clone())
+            .collect();
+        if added.is_empty() {
+            return Ok(diffs);
+        }
+        let ignored = GraftRepo::open(&self.path(name))?.ignored(&added)?;
+        Ok(crate::without_ignored(diffs, &ignored))
+    }
+
+    /// Deletes blobs no graft of this Root references, holding every
+    /// mounted graft's write lock so none is being stored meanwhile.
+    /// Returns blobs and bytes removed.
+    ///
+    /// # Errors
+    ///
+    /// Store and I/O errors.
+    pub fn sweep_blobs(&self) -> Result<(u64, u64)> {
+        let views: Vec<Arc<GraftView>> = self
+            .mounted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .map(|m| Arc::clone(m.view()))
+            .collect();
+        let _locks: Vec<_> = views.iter().filter_map(|v| v.write_lock()).collect();
+        let keep: HashSet<_> = Store::open(&self.root_dir)?.referenced_blobs()?;
+        Ok(self.blobs().sweep(&keep)?)
     }
 
     /// Names of the grafts this backend has mounted.
@@ -79,14 +162,23 @@ impl FuseBackend {
         let owner = std::fs::metadata(&mounts).map_err(io_err("inspecting", &mounts))?;
         let mounted = (|| {
             use std::os::unix::fs::MetadataExt;
-            let view = GraftView::new(
-                ObjectStore::open(root),
+            let objects = ObjectStore::open(root);
+            let journal = Journal {
+                store: Store::open(&self.root_dir)?,
+                blobs: self.blobs(),
+                graft: spec.id,
+                dir: self.graft_dir(spec.id),
+                git_init: Some(git_init(&objects, spec, &layers)),
+            };
+            let view = GraftView::writable(
+                objects,
                 spec.base,
                 layers,
                 owner.uid(),
                 owner.gid(),
+                journal,
             )?;
-            crate::fuse::mount(view, &target).map_err(io_err("mounting", &target))
+            crate::fuse::mount(Arc::new(view), &target).map_err(io_err("mounting", &target))
         })();
         match mounted {
             Ok(m) => {
@@ -147,6 +239,42 @@ impl FuseBackend {
     }
 }
 
+/// Creates a virtual graft's `.git` on first use (ADR 0008).
+fn git_init(objects: &ObjectStore, spec: &GraftSpec<'_>, layers: &[LayerMount]) -> GitInit {
+    let objects = objects.clone();
+    let branch = branch_name(spec.name);
+    let base = spec.base.clone();
+    let layer_paths: Vec<PathBuf> = layers.iter().map(|l| l.path.clone()).collect();
+    Box::new(move |dir: &Path| {
+        let paths: Vec<&Path> = layer_paths.iter().map(PathBuf::as_path).collect();
+        graft_root::graft::init_virtual_git(&objects.root(), dir, &branch, &base, &paths)
+            .map_err(|e| e.to_string())
+    })
+}
+
+impl FuseBackend {
+    /// Records the Root and graft in the store if they are not there yet,
+    /// for grafts created through [`FsBackend::create`] rather than the CLI.
+    fn ensure_record(&self, root: &Repo, spec: &GraftSpec<'_>) -> Result<()> {
+        let mut store = if Store::db_path(&self.root_dir).is_file() {
+            Store::open(&self.root_dir)?
+        } else {
+            let (id, first_commit) = root.derive_root_id()?;
+            let record = RootRecord {
+                id,
+                path: root.workdir().to_owned(),
+                first_commit,
+                registered_at: Timestamp::now(),
+            };
+            Store::create(&self.root_dir, &record)?.0
+        };
+        if store.graft_by_id(spec.id)?.is_none() {
+            store.create_graft_with_id(spec.id, spec.name, spec.base, BackendKind::Fuse)?;
+        }
+        Ok(())
+    }
+}
+
 impl FsBackend for FuseBackend {
     fn kind(&self) -> &'static str {
         "fuse"
@@ -157,6 +285,7 @@ impl FsBackend for FuseBackend {
         if std::fs::symlink_metadata(&target).is_ok() {
             return Err(FsError::AlreadyExists { path: target });
         }
+        self.ensure_record(root, spec)?;
         let path = self.mount(root, spec, Vec::new())?;
         Ok(CreateReport {
             path,
@@ -169,18 +298,49 @@ impl FsBackend for FuseBackend {
         self.dirs.path(name)
     }
 
-    fn diff(&self, _name: &GraftName, _base: &CommitId) -> Result<Vec<Change>> {
-        // Read-only until the delta store: nothing can have changed.
-        Ok(Vec::new())
+    fn diff(&self, name: &GraftName, _base: &CommitId) -> Result<Vec<Change>> {
+        Ok(self.diffs(name)?.into_iter().map(|d| d.change).collect())
     }
 
-    fn prune(&self, name: &GraftName, _id: GraftId) -> Result<()> {
+    fn prune(&self, name: &GraftName, id: GraftId) -> Result<()> {
         self.unmount(name)?;
-        self.remove_mount_point(name)
+        self.remove_mount_point(name)?;
+        let dir = self.graft_dir(id);
+        if dir.exists() {
+            let grafts = self.root_dir.join("grafts");
+            let parent = dir.parent().and_then(|p| p.canonicalize().ok());
+            if parent != grafts.canonicalize().ok() {
+                return Err(FsError::OutsideMounts {
+                    path: dir,
+                    mounts: grafts,
+                });
+            }
+            std::fs::remove_dir_all(&dir).map_err(io_err("removing", &dir))?;
+        }
+        if Store::db_path(&self.root_dir).is_file() {
+            Store::open(&self.root_dir)?.clear_delta(id)?;
+            self.sweep_blobs()?;
+        }
+        Ok(())
     }
 
-    fn disk_usage(&self, _name: &GraftName) -> Result<u64> {
-        Ok(0)
+    fn disk_usage(&self, name: &GraftName) -> Result<u64> {
+        let store = Store::open(&self.root_dir)?;
+        let Some(record) = store.graft(name)? else {
+            return Ok(0);
+        };
+        let blobs = self.blobs();
+        let unique: HashSet<_> = store.delta(record.id)?.blobs().collect();
+        let mut bytes: u64 = unique
+            .iter()
+            .filter_map(|h| std::fs::metadata(blobs.path(h)).ok())
+            .map(|m| m.len())
+            .sum();
+        let dir = self.graft_dir(record.id);
+        if dir.exists() {
+            bytes += crate::unshared_bytes(&dir).map_err(io_err("measuring", &dir))?;
+        }
+        Ok(bytes)
     }
 }
 

@@ -1447,6 +1447,7 @@ dependencies = [
  "fuser",
  "graft-core",
  "graft-root",
+ "graft-store",
  "libc",
  "tempfile",
  "thiserror",
