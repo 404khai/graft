@@ -1,6 +1,6 @@
 # On-disk format
 
-**Format version: 4** (metadata schema v3)
+**Format version: 5** (metadata schema v4)
 
 This file describes everything Graft persists. Any change to a structure
 below bumps the format version, adds a migration, and updates this file in
@@ -28,7 +28,13 @@ $GRAFT_HOME/
 └── roots/
     └── <root-id>/              one directory per Root, mode 0700
         ├── graft.db            SQLite metadata (+ graft.db-wal, graft.db-shm)
-        ├── blobs/              (delta store phase) delta blobs
+        ├── blobs/              mode 0700, delta blobs (ADR 0008)
+        │   ├── <aa>/<rest>     a blob, named by its blake3 hash, mode 0444
+        │   └── tmp/            blobs being written; renamed into place
+        ├── grafts/             per virtual graft, mode 0700
+        │   └── <graft-id>/
+        │       ├── work/<n>    staging files of files open for writing
+        │       └── git/        the graft's .git, created on first use
         ├── layers/             mode 0700, the layer cache (ADR 0004)
         │   ├── <layer-key>/    a complete layer (directory tree)
         │   ├── <layer-key>.lock  OS file lock held by builders and gc
@@ -50,6 +56,7 @@ Entries in `roots/` whose name is not a valid Root ID, or that contain no
 | 2 | Adds `mounts/`, graft repositories and `refs/graft/<graft-id>` pins in Root | None: additive; v1 never created these |
 | 3 | Adds `layers/` and schema v2 (`layers`, `layer_refs`, `trusted_commands`) | Schema v1 → v2 runs automatically on open; tables only added |
 | 4 | Adds `run/` (graftd) and schema v3 (`grafts.backend`) | Schema v2 → v3 runs automatically on open; existing grafts become `reflink` |
+| 5 | Adds `blobs/`, `grafts/` and schema v4 (`delta`, `staged`, `op_log.mode/mtime/target`) | Schema v3 → v4 runs automatically on open; tables and nullable columns only added |
 
 ## `config.toml`
 
@@ -166,11 +173,53 @@ Created in v1 and written from the delta store phase on. `WITHOUT ROWID`.
 | `graft_id` | TEXT | References `grafts`, `ON DELETE CASCADE` |
 | `seq` | INTEGER | Per-graft sequence number, from 1 |
 | `at` | INTEGER | Timestamp |
-| `kind` | TEXT | Operation kind (defined in the delta store phase) |
+| `kind` | TEXT | `create`, `write`, `truncate`, `mkdir`, `symlink`, `unlink`, `rmdir`, `rename`, `chmod` or `touch` |
 | `path` | BLOB | Repo-relative path |
 | `path_to` | BLOB | Destination for renames, else `NULL` |
 | `blob` | TEXT | Resulting `BlobHash`, if any |
 | `actor` | TEXT | Optional caller-supplied actor or tool-call ID |
+| `mode` | INTEGER | (v4) Permission bits, for `create`/`write`/`truncate`/`mkdir`/`chmod` |
+| `mtime` | INTEGER | (v4) Explicit modification time in ms, for `touch` |
+| `target` | BLOB | (v4) Symlink target, for `symlink` |
+
+`path` is the source of a `rename` and `path_to` its destination; `blob`
+is the file's new contents for `create`, `write` and `truncate`. A
+graft's op log replayed from empty through `Delta::apply` reproduces its
+`delta` rows exactly (ADR 0008).
+
+### `delta` (v4)
+
+`WITHOUT ROWID`. One row per path that the graft overrides; paths are
+graft-relative bytes, `/`-separated.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `graft_id` | TEXT | References `grafts`, `ON DELETE CASCADE` |
+| `path` | BLOB | Graft-relative path |
+| `kind` | TEXT | `file`, `symlink`, `dir` or `tombstone` |
+| `blob` | TEXT | A file's contents as a `BlobHash`, or `NULL` |
+| `lower` | BLOB | A file whose contents are the lower tree's at this path (after a rename or mode change), or `NULL`. A file has exactly one of `blob` and `lower` |
+| `target` | BLOB | A symlink's target |
+| `mode` | INTEGER | Permission bits of a file or directory |
+| `mtime` | INTEGER | Modification time in ms, or `NULL` for the base commit's time |
+| `opaque` | INTEGER | 1 if a directory hides everything the lower tree has below it |
+
+Primary key `(graft_id, path)`. Index `delta_by_blob` on `blob`. A
+`tombstone` hides the path and everything the lower tree has below it. The
+lower tree is the base commit's tree with the graft's layers overlaid.
+
+### `staged` (v4)
+
+`WITHOUT ROWID`. Files open for writing whose contents are in
+`grafts/<graft-id>/work/<id>` and not yet journaled. graftd journals them
+on the next mount after a crash.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `graft_id` | TEXT | References `grafts`, `ON DELETE CASCADE` |
+| `id` | INTEGER | Staging file number |
+| `path` | BLOB | The file's current path in the graft |
+| `mode` | INTEGER | Its permission bits |
 
 Primary key: `(graft_id, seq)`.
 
@@ -236,15 +285,21 @@ A graft is built in `mounts/.tmp-<graft-id>/` and renamed into place when
 complete, so `mounts/<name>/` is never half-built. A leftover `.tmp-*`
 directory is a failed or interrupted `graft new`, and prune removes it.
 
-### FUSE grafts (v4)
+### FUSE grafts (v4, writable from v5)
 
-A graft with `backend = 'fuse'` stores no files. `mounts/<name>/` is an
-empty directory (mode `0700`) used as the mount point; `graftd` mounts the
-base commit's tree there, read-only, with each of the graft's layers
-(`layer_refs`) served from `layers/<key>/` at its path (ADR 0006). There is
-no `.git` inside the mount yet. A graft that should be mounted is one with
-`backend = 'fuse'` in state `live`; `graftd` remounts every such graft when
-it starts.
+A graft with `backend = 'fuse'` stores no working tree. `mounts/<name>/`
+is an empty directory (mode `0700`) used as the mount point; `graftd`
+mounts the graft's delta over its lower tree there (ADRs 0006 and 0008).
+Changed file contents are blobs in `blobs/`; `.git` inside the mount is
+served from `grafts/<graft-id>/git/`, which has the same layout as a
+reflink graft's `.git` plus `core.checkStat = minimal` and
+`core.trustctime = false`, and is created on first use. A graft that
+should be mounted is one with `backend = 'fuse'` in state `live`;
+`graftd` remounts every such graft when it starts.
+
+Blobs are shared by content across a Root's grafts. A blob no `delta` row
+references is deleted by `graft gc` or `graft prune`, under graftd's write
+locks (or holding `run/graftd.lock` when no daemon runs).
 
 ## `run/` (v4)
 
@@ -274,9 +329,12 @@ replaced. The protocol is in ADR 0007.
 For a FUSE graft, step 2 creates the empty `mounts/<name>/`; step 4 builds
 missing layers in a temporary reflink graft `mounts/.tmp-<id>/` that is
 removed afterwards, and records the references without copying anything;
-then `graftd` mounts the graft before step 5. Prune asks `graftd` to unmount
-it (lazily if busy) and then removes the empty mount point with `rmdir`,
-never recursively.
+then `graftd` mounts the graft before step 5. Prune refuses if the delta has
+changes against the base or `.git` has commits Root lacks, unless
+`--force`. It asks `graftd` to unmount the graft (lazily if busy), which
+then removes the empty mount point with `rmdir` (never recursively),
+`grafts/<graft-id>/`, the graft's `delta` and `staged` rows, and
+unreferenced blobs; the CLI then deletes the pin ref and the record.
 
 `graft prune` marks the row `pruned`, removes `mounts/<name>/` and any
 `mounts/.tmp-<id>/`, deletes `refs/graft/<id>`, and finally deletes the row

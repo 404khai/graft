@@ -85,13 +85,18 @@ Status: in review (`feat/virtual-fs-reads`, PR #7)
 
 ## Phase 6 — Delta store and op log
 
-Status: not started
+Status: in review (`feat/delta-oplog`)
 
 - [ ] Full backend conformance suite passes, including concurrent writers.
+  - `passes_the_conformance_suite` in `crates/graft-fs/tests/fuse_backend.rs` (CI `fuse` job). The same operations pass through the view API on every platform (`crates/graft-fs/tests/view_writes.rs`).
 - [ ] Property test: replaying the op log from empty reproduces the delta exactly.
+  - `crates/graft-store/tests/delta_props.rs`: replay equals the stored delta, and the overlay equals a plain filesystem model (300 cases each).
 - [ ] `git status` inside a graft matches `graft status`.
+  - `git_status_matches_graft_status` (CI `fuse` job).
 - [ ] Building and running the test suite of the medium fixture inside a graft succeeds.
+  - `scripts/fuse-medium-fixture.sh` (CI `fuse` job).
 - [ ] A crash (kill -9 of graftd) mid-write loses at most the in-flight operation; the delta is consistent on restart.
+  - `a_crash_mid_write_loses_at_most_the_operation_in_flight` (CI `fuse` job); `a_crash_loses_nothing_written_before_it` through the view API.
 
 ## Phase 7 — macOS virtual backend
 
