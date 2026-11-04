@@ -58,6 +58,13 @@ struct Cli {
 enum Cmd {
     /// Run the benchmark matrix and write results.csv and summary.md.
     Run(RunArgs),
+    /// Generate one fixture repository under `dir` and print its path.
+    Fixture {
+        /// The fixture: small, medium or large.
+        name: String,
+        /// Where to put it.
+        dir: PathBuf,
+    },
     /// Regenerate summary.md from an existing results.csv.
     Summarize {
         /// The results directory (containing results.csv and header.md).
@@ -514,6 +521,14 @@ fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Cmd::Run(args) => run(&args),
         Cmd::Summarize { dir } => summarize(&dir),
+        Cmd::Fixture { name, dir } => {
+            let path = fixture::ensure(&dir, &fixture::spec(&name)?)?;
+            #[allow(clippy::print_stdout)] // The path is this command's output.
+            {
+                println!("{}", path.display());
+            }
+            Ok(())
+        }
     }
 }
 
