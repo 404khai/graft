@@ -268,6 +268,8 @@ pub fn ensure(root: &Path, spec: &Spec) -> anyhow::Result<PathBuf> {
             "--ignore-scripts",
             "--package-lock-only",
         ])
+        // Progress, not output: `graft-bench fixture` prints only the path.
+        .stdout(std::process::Stdio::from(std::io::stderr()))
         .status()
         .context("running npm (is Node installed?)")?;
     if !status.success() {
