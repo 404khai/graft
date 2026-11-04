@@ -326,21 +326,10 @@ impl FsBackend for FuseBackend {
 
     fn disk_usage(&self, name: &GraftName) -> Result<u64> {
         let store = Store::open(&self.root_dir)?;
-        let Some(record) = store.graft(name)? else {
-            return Ok(0);
-        };
-        let blobs = self.blobs();
-        let unique: HashSet<_> = store.delta(record.id)?.blobs().collect();
-        let mut bytes: u64 = unique
-            .iter()
-            .filter_map(|h| std::fs::metadata(blobs.path(h)).ok())
-            .map(|m| m.len())
-            .sum();
-        let dir = self.graft_dir(record.id);
-        if dir.exists() {
-            bytes += crate::unshared_bytes(&dir).map_err(io_err("measuring", &dir))?;
+        match store.graft(name)? {
+            Some(record) => crate::virtual_disk_usage(&store, &self.root_dir, record.id),
+            None => Ok(0),
         }
-        Ok(bytes)
     }
 }
 

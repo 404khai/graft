@@ -253,3 +253,29 @@ pub fn layer_mounts(
         })
         .collect()
 }
+
+/// Bytes a virtual graft stores of its own: the distinct blobs its delta
+/// references (counted in full even when another graft shares them) plus
+/// its staging files and `.git` (`grafts/<id>/` under `root_dir`).
+///
+/// # Errors
+///
+/// Store and I/O errors.
+pub fn virtual_disk_usage(store: &Store, root_dir: &std::path::Path, id: GraftId) -> FsResult<u64> {
+    let blobs = BlobStore::new(root_dir.join("blobs"));
+    let unique: std::collections::HashSet<_> = store.delta(id)?.blobs().collect();
+    let mut bytes: u64 = unique
+        .iter()
+        .filter_map(|h| std::fs::metadata(blobs.path(h)).ok())
+        .map(|m| m.len())
+        .sum();
+    let dir = root_dir.join("grafts").join(id.to_string());
+    if dir.exists() {
+        bytes += crate::unshared_bytes(&dir).map_err(|source| FsError::Io {
+            action: "measuring",
+            path: dir.clone(),
+            source,
+        })?;
+    }
+    Ok(bytes)
+}
