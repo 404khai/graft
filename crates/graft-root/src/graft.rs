@@ -235,6 +235,12 @@ fn write_config(root: &Repo, git_dir: &Path) -> Result<()> {
 /// Creates the graft's `.git` directory in `dest` (which must exist and be
 /// empty), sharing Root's object store.
 fn init_git_dir(root: &Repo, dest: &Path, branch: &str, base: &CommitId) -> Result<()> {
+    init_git_dir_at(root, &dest.join(".git"), branch, base)
+}
+
+/// Creates a graft's git directory at `git_dir`, sharing Root's object
+/// store.
+fn init_git_dir_at(root: &Repo, git_dir: &Path, branch: &str, base: &CommitId) -> Result<()> {
     if root
         .repo
         .config_snapshot()
@@ -245,7 +251,7 @@ fn init_git_dir(root: &Repo, dest: &Path, branch: &str, base: &CommitId) -> Resu
             reason: "Roots that set core.worktree are not supported".to_owned(),
         });
     }
-    let git_dir = dest.join(".git");
+    let git_dir = git_dir.to_owned();
     for dir in [
         git_dir.join("objects/info"),
         git_dir.join("objects/pack"),
@@ -638,11 +644,20 @@ fn materialize(
 ///
 /// If the exclude file cannot be written.
 pub fn exclude_paths(workdir: &Path, paths: &[&Path]) -> Result<()> {
+    exclude_paths_in(&workdir.join(".git"), paths)
+}
+
+/// As [`exclude_paths`], for the git directory `git_dir`.
+///
+/// # Errors
+///
+/// If the exclude file cannot be written.
+pub fn exclude_paths_in(git_dir: &Path, paths: &[&Path]) -> Result<()> {
     use std::io::Write as _;
     if paths.is_empty() {
         return Ok(());
     }
-    let file = workdir.join(".git/info/exclude");
+    let file = git_dir.join("info/exclude");
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir).map_err(io_err(dir))?;
     }
@@ -818,6 +833,49 @@ impl GraftRepo {
         }
         changes.sort();
         Ok(changes)
+    }
+
+    /// Which of `paths` (untracked, relative) git would hide as ignored:
+    /// matched by `.gitignore` files in the working tree, `info/exclude` or
+    /// the global excludes file, directly or through a parent directory.
+    ///
+    /// # Errors
+    ///
+    /// If the index or ignore rules cannot be read.
+    pub fn ignored(&self, paths: &[PathBuf]) -> Result<HashSet<PathBuf>> {
+        let index = self
+            .repo
+            .index_or_empty()
+            .map_err(|e| git_err("reading the graft index")(boxed(e)))?;
+        let mut stack = self
+            .repo
+            .excludes(
+                &index,
+                None,
+                gix::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+            )
+            .map_err(|e| git_err("loading ignore rules")(boxed(e)))?;
+        let mut out = HashSet::new();
+        for path in paths {
+            let mut excluded = false;
+            let mut prefix = PathBuf::new();
+            let comps: Vec<_> = path.components().collect();
+            for (i, c) in comps.iter().enumerate() {
+                prefix.push(c);
+                let mode = (i + 1 < comps.len()).then_some(Mode::DIR);
+                let platform = stack
+                    .at_path(&prefix, mode)
+                    .map_err(|e| git_err("matching ignore rules")(boxed(e)))?;
+                if platform.is_excluded() {
+                    excluded = true;
+                    break;
+                }
+            }
+            if excluded {
+                out.insert(path.clone());
+            }
+        }
+        Ok(out)
     }
 
     /// Paths with changes not committed in the graft: staged, unstaged or
@@ -1003,6 +1061,69 @@ pub fn unified_diff(diff: &FileDiff) -> String {
         }
     }
     out
+}
+
+/// Creates the git directory of a virtual graft at `git_dir` (ADR 0008): the
+/// same minimal repository as a reflink graft's, plus an index of `base`
+/// whose stat data matches what the mount reports (committer time, blob
+/// size), so `git status` does not have to read every file. Inode numbers
+/// are allocated lazily by the mount, so only mtime and size are compared
+/// (`core.checkStat = minimal`). `layers` are excluded from git.
+///
+/// # Errors
+///
+/// Git and I/O errors; `git_dir` may be partially written.
+pub fn init_virtual_git(
+    root: &Repo,
+    git_dir: &Path,
+    branch: &str,
+    base: &CommitId,
+    layers: &[&Path],
+) -> Result<()> {
+    std::fs::create_dir_all(git_dir).map_err(io_err(git_dir))?;
+    init_git_dir_at(root, git_dir, branch, base)?;
+    let config = git_dir.join("config");
+    let mut text = std::fs::read(&config).map_err(io_err(&config))?;
+    text.extend_from_slice(b"[core]\n\tcheckStat = minimal\n\ttrustctime = false\n");
+    std::fs::write(&config, text).map_err(io_err(&config))?;
+    exclude_paths_in(git_dir, layers)?;
+
+    let repo =
+        gix::open(git_dir).map_err(|e| git_err("opening the graft's git directory")(boxed(e)))?;
+    let commit = repo
+        .find_commit(oid(base)?)
+        .map_err(|e| git_err("reading the base commit")(boxed(e)))?;
+    let secs = commit
+        .time()
+        .map_err(|e| git_err("reading the commit time")(boxed(e)))?
+        .seconds;
+    let secs = u32::try_from(secs).unwrap_or(0);
+    let tree = commit
+        .tree_id()
+        .map_err(|e| git_err("reading the base tree")(boxed(e)))?
+        .detach();
+    let mut index = repo
+        .index_from_tree(&tree)
+        .map_err(|e| git_err("building the graft index")(boxed(e)))?;
+    for entry in index.entries_mut() {
+        if entry.mode == Mode::COMMIT {
+            continue;
+        }
+        let size = repo
+            .find_header(entry.id)
+            .map_err(|e| git_err("reading an object header")(boxed(e)))?
+            .size();
+        entry.stat = Stat {
+            mtime: gix::index::entry::stat::Time { secs, nsecs: 0 },
+            ctime: gix::index::entry::stat::Time { secs, nsecs: 0 },
+            size: u32::try_from(size).unwrap_or(u32::MAX),
+            ..Stat::default()
+        };
+    }
+    index
+        .write(gix::index::write::Options::default())
+        .map_err(|e| git_err("writing the graft index")(boxed(e)))?;
+    Ok(())
 }
 
 #[cfg(test)]
