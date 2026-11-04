@@ -165,30 +165,55 @@ mod fuse {
             std::fs::read_to_string(path.join("README.md")).unwrap(),
             "hello\n"
         );
-        let err = std::fs::write(path.join("README.md"), "x").unwrap_err();
-        assert_eq!(err.raw_os_error(), Some(30), "EROFS");
-
-        graft_d(home.path())
-            .current_dir(repo.path())
-            .arg("ls")
-            .assert()
-            .success()
-            .stdout(predicate::str::is_match(r"v\s+[0-9a-f]{7}\s+live\s+0\s+0 B").unwrap());
         graft_d(home.path())
             .current_dir(repo.path())
             .args(["status", "v"])
             .assert()
             .success()
             .stdout(predicate::str::contains("nothing changed"));
+
+        // Writes land in the graft's delta, never in Root.
+        std::fs::write(path.join("README.md"), "changed\n").unwrap();
+        std::fs::write(path.join("new.txt"), "new\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("README.md")).unwrap(),
+            "hello\n"
+        );
+        graft_d(home.path())
+            .current_dir(repo.path())
+            .arg("ls")
+            .assert()
+            .success()
+            .stdout(predicate::str::is_match(r"v\s+[0-9a-f]{7}\s+live\s+2\s").unwrap());
+        graft_d(home.path())
+            .current_dir(repo.path())
+            .args(["status", "v"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("  M README.md\n  A new.txt\n"));
         graft_d(home.path())
             .current_dir(repo.path())
             .args(["diff", "v"])
             .assert()
             .success()
-            .stdout("");
+            .stdout(predicate::str::contains("-hello\n+changed\n"));
+        graft_d(home.path())
+            .current_dir(repo.path())
+            .args(["log", "v"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("write").and(predicate::str::contains("create")));
+
+        // Prune refuses to lose the changes, unless forced.
         graft_d(home.path())
             .current_dir(repo.path())
             .args(["prune", "v"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("changes since base"));
+        graft_d(home.path())
+            .current_dir(repo.path())
+            .args(["prune", "v", "--force"])
             .assert()
             .success()
             .stdout("Pruned graft v\n");
@@ -196,6 +221,16 @@ mod fuse {
         let mounts = path.parent().unwrap();
         let left: Vec<_> = std::fs::read_dir(mounts).unwrap().flatten().collect();
         assert!(left.is_empty(), "prune left {left:?}");
+        let root_dir = mounts.parent().unwrap();
+        let files: Vec<_> = ["blobs", "grafts"]
+            .iter()
+            .flat_map(|d| walk_files(&root_dir.join(d)))
+            .collect();
+        assert_eq!(
+            files,
+            Vec::<std::path::PathBuf>::new(),
+            "prune left blobs or graft state"
+        );
         let refs = Command::new("git")
             .args(["for-each-ref", "refs/graft"])
             .current_dir(repo.path())
@@ -213,6 +248,84 @@ mod fuse {
             .stdout(predicate::str::contains("No grafts"));
     }
 
+    fn walk_files(dir: &Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(walk_files(&p));
+            } else {
+                out.push(p);
+            }
+        }
+        out
+    }
+
+    fn daemon_pid(home: &Path) -> String {
+        let status = graft_d(home).args(["daemon", "status"]).output().unwrap();
+        let status = String::from_utf8(status.stdout).unwrap();
+        status
+            .split("(pid ")
+            .nth(1)
+            .and_then(|s| s.split(')').next())
+            .unwrap()
+            .to_owned()
+    }
+
+    fn kill9(pid: &str) {
+        assert!(
+            Command::new("kill")
+                .args(["-9", pid])
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+
+    /// AGENTS.md Phase 6: `kill -9` of graftd mid-write loses at most the
+    /// in-flight operation, and the delta is consistent on restart.
+    #[test]
+    fn a_crash_mid_write_loses_at_most_the_operation_in_flight() {
+        use std::io::Write as _;
+        require_fuse();
+        let home = tempfile::tempdir().unwrap();
+        let _daemon = Daemon(home.path());
+        let repo = crate::git_repo();
+        init(home.path(), repo.path());
+        let path = new_fuse(home.path(), repo.path(), "crash");
+        // Completed operations.
+        std::fs::write(path.join("done.txt"), "done\n").unwrap();
+        std::fs::create_dir(path.join("dir")).unwrap();
+        // A file still open for writing when the daemon dies.
+        let mut open = std::fs::File::create(path.join("open.txt")).unwrap();
+        open.write_all(b"written before the crash\n").unwrap();
+        kill9(&daemon_pid(home.path()));
+        drop(open);
+        graft_d(home.path())
+            .current_dir(repo.path())
+            .args(["status", "crash"])
+            .assert()
+            .success()
+            .stdout(
+                predicate::str::contains("A done.txt").and(predicate::str::contains("A open.txt")),
+            );
+        assert_eq!(
+            std::fs::read_to_string(path.join("done.txt")).unwrap(),
+            "done\n"
+        );
+        assert!(path.join("dir").is_dir());
+        assert_eq!(
+            std::fs::read_to_string(path.join("open.txt")).unwrap(),
+            "written before the crash\n"
+        );
+        graft_d(home.path())
+            .current_dir(repo.path())
+            .args(["prune", "crash", "--force"])
+            .assert()
+            .success();
+    }
+
     #[test]
     fn a_restarted_daemon_remounts_grafts() {
         require_fuse();
@@ -221,25 +334,8 @@ mod fuse {
         let repo = crate::git_repo();
         init(home.path(), repo.path());
         let path = new_fuse(home.path(), repo.path(), "survivor");
-        let status = graft_d(home.path())
-            .args(["daemon", "status"])
-            .output()
-            .unwrap();
-        let status = String::from_utf8(status.stdout).unwrap();
-        let pid = status
-            .split("(pid ")
-            .nth(1)
-            .and_then(|s| s.split(')').next())
-            .unwrap()
-            .to_owned();
-        assert!(
-            Command::new("kill")
-                .args(["-9", &pid])
-                .status()
-                .unwrap()
-                .success()
-        );
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        std::fs::write(path.join("kept.txt"), "kept\n").unwrap();
+        kill9(&daemon_pid(home.path()));
         // The mount is stale until a command restarts graftd.
         assert!(std::fs::read_to_string(path.join("README.md")).is_err());
         graft_d(home.path())
@@ -252,9 +348,13 @@ mod fuse {
             std::fs::read_to_string(path.join("README.md")).unwrap(),
             "hello\n"
         );
+        assert_eq!(
+            std::fs::read_to_string(path.join("kept.txt")).unwrap(),
+            "kept\n"
+        );
         graft_d(home.path())
             .current_dir(repo.path())
-            .args(["prune", "survivor"])
+            .args(["prune", "survivor", "--force"])
             .assert()
             .success();
     }
