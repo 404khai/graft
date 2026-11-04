@@ -85,7 +85,7 @@ Status: done (PR #7)
 
 ## Phase 6 — Delta store and op log
 
-Status: in review (`feat/delta-oplog`, PR #9)
+Status: done (PR #9)
 
 - [x] Full backend conformance suite passes, including concurrent writers.
   - `passes_the_conformance_suite` in `crates/graft-fs/tests/fuse_backend.rs` (CI `fuse` job). The same operations pass through the view API on every platform (`crates/graft-fs/tests/view_writes.rs`).
