@@ -354,6 +354,12 @@ pub(crate) fn gc(args: &GcArgs, env: &Environment) -> anyhow::Result<Output> {
         }
     }
 
+    let blobs = if args.dry_run {
+        None
+    } else {
+        Some(sweep_blobs(home, &located)?)
+    };
+
     let verb = if args.dry_run {
         "Would remove"
     } else {
@@ -365,5 +371,47 @@ pub(crate) fn gc(args: &GcArgs, env: &Environment) -> anyhow::Result<Output> {
         let _ = write!(out, "; skipped {busy} being built");
     }
     out.push_str(".\n");
+    if let Some((count, bytes)) = blobs.filter(|(count, _)| *count > 0) {
+        let _ = writeln!(
+            out,
+            "Removed {count} unreferenced blob(s), freeing {}.",
+            human_bytes(bytes)
+        );
+    }
     Ok(Output::stdout(out))
+}
+
+/// Deletes delta blobs no graft references. graftd does it under every
+/// graft's write lock; without a daemon, holding its lock keeps one from
+/// starting (and storing blobs) meanwhile.
+fn sweep_blobs(
+    home: &graft_core::GraftHome,
+    located: &graft_store::registry::Located,
+) -> anyhow::Result<(u64, u64)> {
+    let root = located.record.id;
+    if let Ok(mut client) = graft_daemon::Client::connect(home) {
+        let swept = client.gc(&root)?;
+        return Ok((swept.blobs, swept.bytes));
+    }
+    let lock_path = graft_daemon::paths::lock_file(home);
+    let Ok(lock) = std::fs::OpenOptions::new()
+        .write(true)
+        .create(false)
+        .open(&lock_path)
+    else {
+        // graftd never ran here, so there are no virtual grafts or blobs.
+        return Ok((0, 0));
+    };
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            anyhow::bail!("graftd is starting; rerun `graft gc` in a moment")
+        }
+        Err(std::fs::TryLockError::Error(e)) => {
+            return Err(e).with_context(|| format!("locking {}", lock_path.display()));
+        }
+    }
+    let keep = located.store.referenced_blobs()?;
+    let blobs = graft_store::blobs::BlobStore::new(home.root_dir(&root).join("blobs"));
+    Ok(blobs.sweep(&keep)?)
 }

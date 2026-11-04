@@ -10,6 +10,7 @@ mod doctor;
 mod grafts;
 mod layers;
 mod root;
+mod virtual_grafts;
 
 use std::io::Write;
 use std::process::ExitCode;
@@ -48,6 +49,8 @@ enum Command {
     Status(grafts::StatusArgs),
     /// Show a graft's changes as a unified diff.
     Diff(grafts::NameArgs),
+    /// Show a graft's op log: every write, rename and delete, in order.
+    Log(grafts::LogArgs),
     /// Remove a graft. Refuses if work would be lost, unless --force.
     Prune(grafts::PruneArgs),
     /// Approve the layer build commands declared in graft.toml.
@@ -136,6 +139,7 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Path(args) => ok(grafts::path(&args, &env))?,
         Command::Status(args) => ok(grafts::status(&args, &env))?,
         Command::Diff(args) => ok(grafts::diff(&args, &env))?,
+        Command::Log(args) => ok(grafts::log(&args, &env))?,
         Command::Prune(args) => ok(grafts::prune(&args, &env))?,
         Command::Trust(args) => ok(layers::trust(&args, &env))?,
         Command::Gc(args) => ok(layers::gc(&args, &env))?,

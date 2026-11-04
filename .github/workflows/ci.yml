@@ -124,3 +124,5 @@ jobs:
       - run: cargo build --workspace --locked
       - run: cargo test --locked -p graft-fs --features fuse-tests --test fuse_backend
       - run: cargo test --locked -p graft-cli --features fuse-tests --test e2e virtual_grafts
+      - name: Medium fixture builds and tests inside a fuse graft
+        run: scripts/fuse-medium-fixture.sh "$RUNNER_TEMP/medium"

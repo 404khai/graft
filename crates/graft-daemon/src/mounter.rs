@@ -51,6 +51,24 @@ impl Mounter for Unsupported {
         Ok(None)
     }
 
+    fn prune(&self, _root: RootId, _mounts: &Path, _graft: &GraftRecord) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    fn set_actor(
+        &self,
+        _root: RootId,
+        graft: &GraftName,
+        _actor: Option<String>,
+    ) -> Result<(), String> {
+        Err(format!("graft {graft} is not mounted"))
+    }
+
+    fn sweep(&self, _root: RootId, _mounts: &Path) -> Result<(u64, u64), String> {
+        // Only fuse grafts store blobs, and they need Linux.
+        Ok((0, 0))
+    }
+
     fn mounts(&self) -> Vec<(RootId, GraftName, PathBuf)> {
         Vec::new()
     }
@@ -118,6 +136,44 @@ mod fuse {
                 Ok(how) => Ok(how.map(|h| h == Unmounted::Lazy)),
                 Err(e) => Err(e.to_string()),
             }
+        }
+
+        fn prune(&self, root: RootId, mounts: &Path, graft: &GraftRecord) -> Result<bool, String> {
+            let mut roots = self.roots.lock().unwrap_or_else(PoisonError::into_inner);
+            let backend = roots
+                .entry(root)
+                .or_insert_with(|| FuseBackend::new(mounts.to_owned()));
+            let lazy = backend
+                .unmount(&graft.name)
+                .map_err(|e| e.to_string())?
+                .is_some_and(|h| h == Unmounted::Lazy);
+            backend
+                .prune(&graft.name, graft.id)
+                .map_err(|e| e.to_string())?;
+            Ok(lazy)
+        }
+
+        fn set_actor(
+            &self,
+            root: RootId,
+            graft: &GraftName,
+            actor: Option<String>,
+        ) -> Result<(), String> {
+            let roots = self.roots.lock().unwrap_or_else(PoisonError::into_inner);
+            roots
+                .get(&root)
+                .ok_or_else(|| format!("graft {graft} is not mounted"))?
+                .set_actor(graft, actor)
+                .map_err(|e| e.to_string())
+        }
+
+        fn sweep(&self, root: RootId, mounts: &Path) -> Result<(u64, u64), String> {
+            let mut roots = self.roots.lock().unwrap_or_else(PoisonError::into_inner);
+            roots
+                .entry(root)
+                .or_insert_with(|| FuseBackend::new(mounts.to_owned()))
+                .sweep_blobs()
+                .map_err(|e| e.to_string())
         }
 
         fn mounts(&self) -> Vec<(RootId, GraftName, PathBuf)> {

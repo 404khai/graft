@@ -125,3 +125,30 @@ pub struct MountInfo {
     /// The mount point.
     pub path: std::path::PathBuf,
 }
+
+/// Params of `set_actor`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActorParams {
+    /// The Root's ID.
+    pub root: String,
+    /// The graft's name.
+    pub graft: String,
+    /// The actor to record on following ops, or `None` to clear it.
+    pub actor: Option<String>,
+}
+
+/// Params of `gc`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RootRef {
+    /// The Root's ID.
+    pub root: String,
+}
+
+/// Result of `gc`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Swept {
+    /// Blobs removed.
+    pub blobs: u64,
+    /// Bytes freed.
+    pub bytes: u64,
+}

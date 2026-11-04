@@ -80,6 +80,13 @@ fn open(env: &Environment) -> anyhow::Result<Ctx> {
     })
 }
 
+impl Ctx {
+    /// `$GRAFT_HOME/roots/<root-id>`.
+    fn root_dir(&self) -> std::path::PathBuf {
+        self.home.root_dir(&self.located.record.id)
+    }
+}
+
 fn parse_name(name: &str) -> anyhow::Result<GraftName> {
     Ok(name.parse()?)
 }
@@ -333,17 +340,18 @@ fn new_virtual(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
 
 /// Lists grafts.
 pub(crate) fn ls(env: &Environment) -> anyhow::Result<Output> {
+    let ctx = open(env)?;
     let Ctx {
         home,
         located,
         backend,
         ..
-    } = open(env)?;
+    } = &ctx;
     let grafts = located.store.grafts()?;
     let mut out = Output::default();
     // Asking graftd also restarts it (and so remounts) after a crash.
     let mounted: Option<Vec<GraftName>> = if grafts.iter().any(|g| g.backend.is_virtual()) {
-        match daemon(&home, &mut out).and_then(|mut c| Ok(c.mounts()?)) {
+        match daemon(home, &mut out).and_then(|mut c| Ok(c.mounts()?)) {
             Ok(list) => Some(
                 list.into_iter()
                     .filter(|m| m.root == located.record.id.to_string())
@@ -374,9 +382,14 @@ pub(crate) fn ls(env: &Environment) -> anyhow::Result<Output> {
         let path = backend.path(&g.name);
         let (changed, disk) = if g.backend.is_virtual() {
             let up = mounted.as_ref().is_some_and(|m| m.contains(&g.name));
-            // Read-only until the delta store: nothing changed, nothing stored.
             if up {
-                ("0".to_owned(), human_bytes(0))
+                let root_dir = ctx.root_dir();
+                let changed =
+                    crate::virtual_grafts::diffs(located, &root_dir, &path, g, &mut out.warnings)
+                        .map_or_else(|e| format!("error: {e:#}"), |d| d.len().to_string());
+                let disk = crate::virtual_grafts::disk(located, &root_dir, g)
+                    .map_or_else(|e| format!("error: {e:#}"), human_bytes);
+                (changed, disk)
             } else {
                 ("-".to_owned(), "unmounted".to_owned())
             }
@@ -435,7 +448,11 @@ pub(crate) fn path(args: &NameArgs, env: &Environment) -> anyhow::Result<Output>
     )))
 }
 
-fn status_one(ctx: &Ctx, record: &GraftRecord) -> anyhow::Result<String> {
+fn status_one(
+    ctx: &Ctx,
+    record: &GraftRecord,
+    warnings: &mut Vec<String>,
+) -> anyhow::Result<String> {
     let path = ctx.backend.path(&record.name);
     let mut out = format!(
         "graft {} ({}) at {}, base {}\n",
@@ -445,7 +462,19 @@ fn status_one(ctx: &Ctx, record: &GraftRecord) -> anyhow::Result<String> {
         short(record)
     );
     if record.backend.is_virtual() {
-        out.push_str("  nothing changed since base (virtual graft, read-only)\n");
+        let diffs =
+            crate::virtual_grafts::diffs(&ctx.located, &ctx.root_dir(), &path, record, warnings)?;
+        if diffs.is_empty() {
+            out.push_str("  nothing changed since base\n");
+        }
+        for d in diffs {
+            let _ = writeln!(
+                out,
+                "  {} {}",
+                d.change.kind.code(),
+                d.change.path.display()
+            );
+        }
         return Ok(out);
     }
     if !path.is_dir() {
@@ -469,31 +498,48 @@ pub(crate) fn status(args: &StatusArgs, env: &Environment) -> anyhow::Result<Out
         Some(n) => Some(parse_name(n)?),
         None => ctx.located.inside_graft.clone(),
     };
-    if let Some(name) = name {
-        let record = find(&ctx.located.store, &name)?;
-        return Ok(Output::stdout(status_one(&ctx, &record)?));
-    }
-    let grafts = ctx.located.store.grafts()?;
+    let mut out = Output::default();
+    let grafts = match name {
+        Some(name) => vec![find(&ctx.located.store, &name)?],
+        None => ctx.located.store.grafts()?,
+    };
     if grafts.is_empty() {
         return Ok(Output::stdout("No grafts.\n".to_owned()));
     }
-    let mut out = String::new();
-    for g in grafts {
-        out.push_str(&status_one(&ctx, &g)?);
+    // Reaching graftd remounts virtual grafts after a crash.
+    if grafts.iter().any(|g| g.backend.is_virtual()) {
+        daemon(&ctx.home, &mut out)?;
     }
-    Ok(Output::stdout(out))
+    for g in grafts {
+        let text = status_one(&ctx, &g, &mut out.warnings)?;
+        out.stdout.push_str(&text);
+    }
+    Ok(out)
 }
 
 /// Prints a unified diff of a graft against its base.
 pub(crate) fn diff(args: &NameArgs, env: &Environment) -> anyhow::Result<Output> {
     let name = parse_name(&args.name)?;
     let Ctx {
-        located, backend, ..
+        home,
+        located,
+        backend,
+        ..
     } = open(env)?;
     let record = find(&located.store, &name)?;
     if record.backend.is_virtual() {
-        // A read-only graft has no changes to show.
-        return Ok(Output::default());
+        let mut out = Output::default();
+        daemon(&home, &mut out)?;
+        let root_dir = home.root_dir(&located.record.id);
+        let diffs = crate::virtual_grafts::diffs(
+            &located,
+            &root_dir,
+            &backend.path(&name),
+            &record,
+            &mut out.warnings,
+        )?;
+        out.stdout = diffs.iter().map(unified_diff).collect();
+        return Ok(out);
     }
     let graft = GraftRepo::open(&backend.path(&name))?;
     let text: String = graft
@@ -555,7 +601,7 @@ pub(crate) fn prune(args: &PruneArgs, env: &Environment) -> anyhow::Result<Outpu
     };
     let path = ctx.backend.path(&name);
     if record.backend.is_virtual() {
-        return prune_virtual(&mut ctx, &record);
+        return prune_virtual(&mut ctx, &record, args.force);
     }
     if record.state != GraftState::Pruned
         && !args.force
@@ -579,31 +625,83 @@ pub(crate) fn prune(args: &PruneArgs, env: &Environment) -> anyhow::Result<Outpu
 /// Prunes a FUSE graft: graftd unmounts it (lazily if busy), then the empty
 /// mount point, pin and record go. A virtual graft is read-only, so no work
 /// can be lost.
-fn prune_virtual(ctx: &mut Ctx, record: &GraftRecord) -> anyhow::Result<Output> {
+fn prune_virtual(ctx: &mut Ctx, record: &GraftRecord, force: bool) -> anyhow::Result<Output> {
     let name = &record.name;
     let mut out = Output::default();
+    let mut client = daemon(&ctx.home, &mut out)?;
+    if record.state != GraftState::Pruned && !force {
+        let mount = ctx.backend.path(name);
+        if let Some(why) =
+            crate::virtual_grafts::work_at_risk(&ctx.located, &ctx.root_dir(), &mount, record)?
+        {
+            bail!(
+                "graft {name} has work that pruning would lose:\n{why}\
+                 Commit it and integrate it into Root, or rerun with --force to discard it."
+            );
+        }
+    }
     if record.state != GraftState::Pruned {
         ctx.located.store.set_state(record.id, GraftState::Pruned)?;
     }
-    let mut client = daemon(&ctx.home, &mut out)?;
-    let unmounted = client.unmount(&ctx.located.record.id, name)?;
-    if unmounted.lazy {
+    // graftd unmounts and removes the mount point, staging files, .git,
+    // delta and blobs nothing else uses.
+    let pruned = client.prune(&ctx.located.record.id, name)?;
+    if pruned.lazy {
         out.warnings.push(format!(
             "graft {name} was in use, so it was unmounted lazily: processes with open files keep them until they close them"
         ));
-    }
-    let mount_point = ctx.backend.path(name);
-    match std::fs::remove_dir(&mount_point) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => {
-            return Err(e)
-                .with_context(|| format!("removing the mount point {}", mount_point.display()));
-        }
     }
     ReflinkBackend::new(ctx.backend.mounts().join(".layer-build")).prune(name, record.id)?;
     ctx.located.repo.unpin(record.id)?;
     ctx.located.store.delete_graft(record.id)?;
     out.stdout = format!("Pruned graft {name}\n");
     Ok(out)
+}
+
+/// Arguments for `graft log`.
+#[derive(Debug, clap::Args)]
+pub(crate) struct LogArgs {
+    /// The graft's name.
+    name: String,
+}
+
+/// Prints a graft's op log, oldest first.
+pub(crate) fn log(args: &LogArgs, env: &Environment) -> anyhow::Result<Output> {
+    use graft_store::delta::Op;
+    let name = parse_name(&args.name)?;
+    let ctx = open(env)?;
+    let record = find(&ctx.located.store, &name)?;
+    let records = ctx.located.store.op_log(record.id)?;
+    if records.is_empty() {
+        let note = if record.backend.is_virtual() {
+            "nothing written yet"
+        } else {
+            "only virtual (fuse) grafts keep an op log"
+        };
+        return Ok(Output::stdout(format!("graft {name}: {note}\n")));
+    }
+    let show = |p: &[u8]| String::from_utf8_lossy(p).into_owned();
+    let mut out = String::new();
+    for r in records {
+        let detail = match &r.op {
+            Op::Write {
+                path, blob, mode, ..
+            } => {
+                format!("{} ({}, {mode:o})", show(path), &blob.to_string()[..12])
+            }
+            Op::Rename { from, to } => format!("{} -> {}", show(from), show(to)),
+            Op::Symlink { path, target } => format!("{} -> {}", show(path), show(target)),
+            Op::Mkdir { path, mode } | Op::Chmod { path, mode } => {
+                format!("{} ({mode:o})", show(path))
+            }
+            Op::Touch { path, mtime } => format!("{} (mtime {mtime})", show(path)),
+            Op::Unlink { path } | Op::Rmdir { path } => show(path),
+        };
+        let _ = write!(out, "{:>6}  {}  {:<8}  {detail}", r.seq, r.at, r.op.kind());
+        if let Some(actor) = &r.actor {
+            let _ = write!(out, "  [{actor}]");
+        }
+        out.push('\n');
+    }
+    Ok(Output::stdout(out))
 }

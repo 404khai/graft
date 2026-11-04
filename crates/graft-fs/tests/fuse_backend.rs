@@ -34,11 +34,128 @@ fn backend_in(parent: &Path) -> FuseBackend {
 }
 
 #[test]
-fn passes_the_read_only_conformance_suite() {
+fn passes_the_conformance_suite() {
     require_fuse();
     let tmp = tempfile::tempdir().unwrap();
     let fixture = Fixture::new_in(tmp.path());
-    conformance::run_read_only(&backend_in(tmp.path()), &fixture);
+    let backend = backend_in(tmp.path());
+    conformance::run(&backend, &fixture);
+    // Pruning every graft left no blobs, staging files or graft state.
+    let leftovers: Vec<_> = walk(&tmp.path().join("blobs"))
+        .into_iter()
+        .chain(walk(&tmp.path().join("grafts")))
+        .filter(|p| p.is_file())
+        .collect();
+    assert_eq!(leftovers, Vec::<std::path::PathBuf>::new());
+}
+
+fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(walk(&p));
+        }
+        out.push(p);
+    }
+    out
+}
+
+/// `git status` inside a graft agrees with what the delta says changed.
+#[test]
+fn git_status_matches_graft_status() {
+    use std::os::unix::fs::PermissionsExt;
+    require_fuse();
+    let tmp = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new_in(tmp.path());
+    let backend = backend_in(tmp.path());
+    let g = create(&backend, &fixture, "status");
+    let p = &g.path;
+    std::fs::write(p.join("README.md"), "changed\n").unwrap();
+    std::fs::write(p.join("src/new.rs"), "new\n").unwrap();
+    std::fs::create_dir(p.join("dir")).unwrap();
+    std::fs::write(p.join("dir/nested.txt"), "n").unwrap();
+    std::fs::rename(p.join("src/lib.rs"), p.join("src/moved.rs")).unwrap();
+    std::fs::set_permissions(p.join("large.bin"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink("README.md", p.join("link")).unwrap();
+    // Ignored files are hidden from both.
+    std::fs::write(p.join(".gitignore"), "*.log\ntarget/\n").unwrap();
+    std::fs::write(p.join("debug.log"), "x").unwrap();
+    std::fs::create_dir_all(p.join("target/debug")).unwrap();
+    std::fs::write(p.join("target/debug/out"), "x").unwrap();
+    // Rewriting a file with its own contents is not a change.
+    std::fs::write(
+        p.join("large.bin.copy"),
+        std::fs::read(p.join("large.bin")).unwrap(),
+    )
+    .unwrap();
+    std::fs::remove_file(p.join("large.bin.copy")).unwrap();
+
+    let out = Command::new("git")
+        .args([
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--no-renames",
+        ])
+        .current_dir(p)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut from_git: Vec<(String, char)> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| {
+            let code = match &l[..2] {
+                "??" => 'A',
+                c if c.contains('D') => 'D',
+                _ => 'M',
+            };
+            (l[3..].to_owned(), code)
+        })
+        .collect();
+    from_git.sort();
+    let mut from_delta: Vec<(String, char)> = backend
+        .diff(&g.name, &fixture.base)
+        .unwrap()
+        .into_iter()
+        .map(|c| (c.path.display().to_string(), c.kind.code()))
+        .collect();
+    from_delta.sort();
+    assert_eq!(from_delta, from_git);
+    assert!(
+        from_delta.iter().any(|(p, _)| p == "src/moved.rs"),
+        "{from_delta:?}"
+    );
+    backend.prune(&g.name, g.id).unwrap();
+}
+
+/// `git commit` works inside a graft: objects go to the graft's own
+/// repository, never Root's.
+#[test]
+fn git_commit_inside_a_graft() {
+    require_fuse();
+    let tmp = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new_in(tmp.path());
+    let backend = backend_in(tmp.path());
+    let g = create(&backend, &fixture, "commit");
+    std::fs::write(g.path.join("README.md"), "committed\n").unwrap();
+    conformance::git(&g.path, &["add", "-A"]);
+    conformance::git(&g.path, &["commit", "-q", "-m", "in a graft"]);
+    assert_eq!(conformance::git(&g.path, &["status", "--porcelain"]), "");
+    let head = conformance::git(&g.path, &["rev-parse", "HEAD"]);
+    let root_has = Command::new("git")
+        .args(["cat-file", "-e", &head])
+        .current_dir(fixture.dir.path())
+        .status()
+        .unwrap();
+    assert!(!root_has.success(), "the commit must not land in Root");
+    backend.prune(&g.name, g.id).unwrap();
 }
 
 /// Output of `cmd` run in `dir`, which must succeed.
@@ -102,13 +219,19 @@ fn tools_see_the_same_tree_as_root() {
             );
         }
     }
+    // Grafts have a .git and the plain copy does not: skip it on both sides.
     let runs: &[(&str, &[&str])] = &[
-        ("ls", &["-R"]),
-        ("ls", &["-lRn", "--time-style=+"]),
+        ("ls", &["-R", "--ignore=.git"]),
+        ("ls", &["-lRn", "--time-style=+", "--ignore=.git"]),
         ("cat", &["README.md", "src/lib.rs", "docs/deep/readme"]),
-        ("grep", &["-rn", "TODO", "."]),
+        ("grep", &["-rn", "--exclude-dir=.git", "TODO", "."]),
         ("sha256sum", &["large.bin"]),
-        ("find", &[".", "-type", "f"]),
+        (
+            "find",
+            &[
+                ".", "-path", "./.git", "-prune", "-o", "-type", "f", "-print",
+            ],
+        ),
     ];
     for (cmd, args) in runs {
         let mut ours = output(&g.path, cmd, args);
@@ -188,7 +311,7 @@ fn mounting_does_not_depend_on_repo_size() {
 }
 
 #[test]
-fn serves_layers_read_only() {
+fn layer_writes_stay_private() {
     require_fuse();
     let tmp = tempfile::tempdir().unwrap();
     let fixture = Fixture::new_in(tmp.path());
@@ -216,11 +339,15 @@ fn serves_layers_read_only() {
         std::fs::read_to_string(path.join("node_modules/pkg/index.js")).unwrap(),
         "ok"
     );
-    let err = std::fs::write(path.join("node_modules/pkg/index.js"), "no").unwrap_err();
-    assert_eq!(err.raw_os_error(), Some(graft_fs::view::Errno::EROFS.0));
+    std::fs::write(path.join("node_modules/pkg/index.js"), "mine").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(path.join("node_modules/pkg/index.js")).unwrap(),
+        "mine"
+    );
     assert_eq!(
         std::fs::read_to_string(layer.join("pkg/index.js")).unwrap(),
-        "ok"
+        "ok",
+        "the layer cache is never written"
     );
     backend.prune(&name, id).unwrap();
 }

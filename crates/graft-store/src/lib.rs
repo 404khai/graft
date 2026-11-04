@@ -16,10 +16,17 @@
 //! see [`SCHEMA_VERSION`] and `docs/on-disk-format.md`.
 //!
 //! [`registry`] finds and registers Roots for a repository.
+//!
+//! [`delta`] models a graft's delta and op log; [`Store::record`] journals
+//! each operation with the delta rows it changed, and [`blobs`] stores
+//! delta file contents by hash (ADR 0008).
 
 #![forbid(unsafe_code)]
 
+pub mod blobs;
+pub mod delta;
 mod error;
+mod journal;
 pub mod registry;
 mod schema;
 
@@ -32,6 +39,7 @@ use graft_core::{
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
 pub use error::{Result, StoreError};
+pub use journal::{Journaled, Staged, StagedChange};
 pub use schema::SCHEMA_VERSION;
 
 /// File name of the metadata database inside a Root's directory.
@@ -359,9 +367,24 @@ impl Store {
         base_commit: &CommitId,
         backend: BackendKind,
     ) -> Result<GraftRecord> {
+        self.create_graft_with_id(GraftId::random()?, name, base_commit, backend)
+    }
+
+    /// As [`Store::create_graft`], with a given ID.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Store::create_graft`]; SQLite errors if the ID is taken.
+    pub fn create_graft_with_id(
+        &mut self,
+        id: GraftId,
+        name: &GraftName,
+        base_commit: &CommitId,
+        backend: BackendKind,
+    ) -> Result<GraftRecord> {
         let now = Timestamp::now();
         let record = GraftRecord {
-            id: GraftId::random()?,
+            id,
             name: name.clone(),
             base_commit: base_commit.clone(),
             state: GraftState::Created,

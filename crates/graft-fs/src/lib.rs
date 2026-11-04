@@ -25,10 +25,12 @@
 
 mod backend;
 mod capabilities;
+mod changes;
 mod clone;
 mod fstype;
 #[cfg(target_os = "linux")]
 mod fuse;
+mod lower;
 mod reflink;
 #[allow(unsafe_code)] // FFI to statfs, clonefile and ioctl; see each SAFETY comment.
 mod sys;
@@ -36,12 +38,17 @@ mod usage;
 pub mod view;
 #[cfg(target_os = "linux")]
 mod virtual_backend;
+mod write;
 
 pub use backend::{CreateReport, FsBackend, FsError, GraftSpec, ReflinkBackend, Result};
 pub use capabilities::{Availability, fuse_availability, nfs_client_availability};
+pub use changes::{
+    ChangesError, layer_mounts, virtual_changes, virtual_diffs, virtual_disk_usage, without_ignored,
+};
 pub use clone::{CloneReport, ReflinkCloner, clone_tree};
 pub use fstype::{FsType, available_bytes, filesystem_type, same_filesystem};
 pub use reflink::{REFLINK_MECHANISM, probe_reflink};
 pub use usage::{human_bytes, unshared_bytes};
 #[cfg(target_os = "linux")]
 pub use virtual_backend::{FuseBackend, Unmounted};
+pub use write::{OpenMode, SetAttr};

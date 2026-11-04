@@ -78,6 +78,7 @@ pub struct CommitTree {
 #[derive(Clone)]
 pub struct ObjectStore {
     repo: gix::ThreadSafeRepository,
+    workdir: std::path::PathBuf,
     attributes_configured: bool,
 }
 
@@ -85,6 +86,7 @@ impl fmt::Debug for ObjectStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ObjectStore")
             .field("git_dir", &self.repo.git_dir())
+            .field("workdir", &self.workdir)
             .field("attributes_configured", &self.attributes_configured)
             .finish()
     }
@@ -119,7 +121,17 @@ impl ObjectStore {
     pub fn open(root: &Repo) -> Self {
         Self {
             attributes_configured: attributes_configured(&root.repo),
+            workdir: root.workdir.clone(),
             repo: root.repo.clone().into_sync(),
+        }
+    }
+
+    /// Root, opened for this thread.
+    #[must_use]
+    pub fn root(&self) -> Repo {
+        Repo {
+            repo: self.local(),
+            workdir: self.workdir.clone(),
         }
     }
 

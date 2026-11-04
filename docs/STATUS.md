@@ -85,13 +85,20 @@ Status: done (PR #7)
 
 ## Phase 6 — Delta store and op log
 
-Status: not started
+Status: done (PR #9)
 
-- [ ] Full backend conformance suite passes, including concurrent writers.
-- [ ] Property test: replaying the op log from empty reproduces the delta exactly.
-- [ ] `git status` inside a graft matches `graft status`.
-- [ ] Building and running the test suite of the medium fixture inside a graft succeeds.
-- [ ] A crash (kill -9 of graftd) mid-write loses at most the in-flight operation; the delta is consistent on restart.
+- [x] Full backend conformance suite passes, including concurrent writers.
+  - `passes_the_conformance_suite` in `crates/graft-fs/tests/fuse_backend.rs` (CI `fuse` job). The same operations pass through the view API on every platform (`crates/graft-fs/tests/view_writes.rs`).
+- [x] Property test: replaying the op log from empty reproduces the delta exactly.
+  - `crates/graft-store/tests/delta_props.rs`: replay equals the stored delta, and the overlay equals a plain filesystem model (300 cases each). Breaking tombstone handling on purpose makes it fail.
+- [x] `git status` inside a graft matches `graft status`.
+  - `git_status_matches_graft_status` (CI `fuse` job): adds, edits, renames, a chmod, a symlink, nested directories and ignored files.
+- [x] Building and running the test suite of the medium fixture inside a graft succeeds.
+  - `scripts/fuse-medium-fixture.sh` (CI `fuse` job): `npm test` passes in 221 ms inside the graft; after an edit inside it, `graft status` and `git status` agree. `graft new` took 4.5 s on that run because the `node_modules` layer was built cold (see Phase 8).
+- [x] A crash (kill -9 of graftd) mid-write loses at most the in-flight operation; the delta is consistent on restart.
+  - `a_crash_mid_write_loses_at_most_the_operation_in_flight` (CI `fuse` job: a completed write, a mkdir and a file still open when graftd is killed all survive); `a_crash_loses_nothing_written_before_it` through the view API.
+
+Not measured: write throughput and in-graft build time against Root (the benchmark harness has no in-graft workloads; Phase 8 adds them).
 
 ## Phase 7 — macOS virtual backend
 
