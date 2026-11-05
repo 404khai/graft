@@ -71,6 +71,14 @@ impl Mounter for Fake {
         Ok(())
     }
 
+    fn sync(&self, _root: RootId, graft: &GraftName) -> Result<(), String> {
+        self.actors
+            .lock()
+            .unwrap()
+            .push((format!("sync {graft}"), None));
+        Ok(())
+    }
+
     fn sweep(&self, _root: RootId, _mounts: &Path) -> Result<(u64, u64), String> {
         Ok((2, 10))
     }
@@ -227,6 +235,8 @@ fn serves_the_protocol_and_shuts_down() {
         *fake.actors.lock().unwrap(),
         [("virt".to_owned(), Some("run-1".to_owned()))]
     );
+    c.sync(&env.root, &virt).unwrap();
+    assert_eq!(fake.actors.lock().unwrap().last().unwrap().0, "sync virt");
     let swept = c.gc(&env.root).unwrap();
     assert_eq!((swept.blobs, swept.bytes), (2, 10));
     let u = c.unmount(&env.root, &virt).unwrap();
