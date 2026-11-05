@@ -43,7 +43,7 @@ pub struct Row {
 /// CSV header, matching [`Row::to_csv`].
 pub const CSV_HEADER: &str = "run,fixture,tracked_files,method,agents,create_median_s,create_total_s,ready_first_s,ready_median_s,disk_added_bytes,prune_median_s,status";
 
-fn csv_field(s: &str) -> String {
+pub(crate) fn csv_field(s: &str) -> String {
     if s.contains([',', '"', '\n']) {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
@@ -113,7 +113,7 @@ impl Row {
     }
 }
 
-fn split_csv(line: &str) -> Vec<String> {
+pub(crate) fn split_csv(line: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut quoted = false;
@@ -254,14 +254,14 @@ struct Group {
     files: usize,
 }
 
-fn method_order(m: &str) -> usize {
+pub(crate) fn method_order(m: &str) -> usize {
     ["graft", "graft-fuse", "graft-nfs", "worktree", "clone"]
         .iter()
         .position(|x| *x == m)
         .unwrap_or(9)
 }
 
-fn fixture_order(f: &str) -> usize {
+pub(crate) fn fixture_order(f: &str) -> usize {
     ["small", "medium", "large"]
         .iter()
         .position(|x| *x == f)

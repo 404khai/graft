@@ -7,7 +7,9 @@
 //! - `vendor/` holds dependency tarballs, so `npm ci --offline` needs no
 //!   network;
 //! - `graft.toml` declares `node_modules` as a layer;
-//! - `npm test` requires every dependency and a sample of modules.
+//! - `npm test` requires every dependency and a sample of modules;
+//! - `npm run build` bundles each `src/` directory into `dist/`, rebuilding
+//!   only directories whose files changed, like an incremental compiler.
 //!
 //! Contents come from a blake3 stream keyed by path, so a fixture is
 //! byte-identical on every machine and every run.
@@ -20,7 +22,7 @@ use std::process::Command;
 use anyhow::{Context, bail};
 
 /// Bump to regenerate cached fixtures after changing this module.
-const GENERATOR_VERSION: &str = "graft-bench fixtures v2";
+const GENERATOR_VERSION: &str = "graft-bench fixtures v3";
 const MARKER: &str = ".graft-bench-fixture";
 
 /// What one fixture contains.
@@ -65,6 +67,16 @@ pub const SPECS: [Spec; 3] = [
         dep_files: 50,
     },
 ];
+
+/// A fixture small enough for unit tests of the harness itself.
+#[cfg(test)]
+pub const TINY: Spec = Spec {
+    name: "tiny",
+    modules: 120,
+    module_bytes: 160,
+    deps: 1,
+    dep_files: 3,
+};
 
 /// Looks up a fixture by name.
 ///
@@ -116,6 +128,40 @@ fn test_js(spec: &Spec) -> String {
     js.push_str("console.log(\"ok\");\n");
     js
 }
+
+/// The build every method runs in the in-graft workloads: reads every
+/// module, writes one bundle per directory, and keeps a size-and-mtime
+/// signature per directory in `dist/.cache.json` so a rebuild after a
+/// one-file edit rewrites only that file's bundle.
+const BUILD_JS: &str = r#"const fs = require("fs");
+const path = require("path");
+const cacheFile = path.join("dist", ".cache.json");
+let cache = {};
+try { cache = JSON.parse(fs.readFileSync(cacheFile, "utf8")); } catch {}
+fs.mkdirSync("dist", { recursive: true });
+const next = {};
+let built = 0;
+for (const dir of fs.readdirSync("src").sort()) {
+  const files = fs.readdirSync(path.join("src", dir)).sort();
+  let sig = "";
+  for (const f of files) {
+    const st = fs.statSync(path.join("src", dir, f));
+    sig += `${f}:${st.size}:${st.mtimeMs};`;
+  }
+  next[dir] = sig;
+  const out = path.join("dist", `${dir}.js`);
+  if (cache[dir] === sig && fs.existsSync(out)) continue;
+  let bundle = "";
+  for (const f of files) {
+    const src = fs.readFileSync(path.join("src", dir, f), "utf8");
+    bundle += `exports[${JSON.stringify(f)}] = (function (module) {\n${src}\nreturn module.exports;\n})({});\n`;
+  }
+  fs.writeFileSync(out, bundle);
+  built++;
+}
+fs.writeFileSync(cacheFile, JSON.stringify(next));
+console.log(`built ${built} of ${Object.keys(next).length} bundles`);
+"#;
 
 fn sample(n: usize) -> impl Iterator<Item = usize> {
     let step = (n / 10).max(1);
@@ -229,17 +275,18 @@ pub fn ensure(root: &Path, spec: &Spec) -> anyhow::Result<PathBuf> {
     std::fs::write(
         dir.join("package.json"),
         format!(
-            "{{\n  \"name\": \"bench-{}\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"scripts\": {{ \"test\": \"node test.js\" }},\n  \"dependencies\": {{ {} }}\n}}\n",
+            "{{\n  \"name\": \"bench-{}\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"scripts\": {{ \"build\": \"node build.js\", \"test\": \"node test.js\" }},\n  \"dependencies\": {{ {} }}\n}}\n",
             spec.name,
             deps.join(", ")
         ),
     )?;
-    std::fs::write(dir.join(".gitignore"), "node_modules/\n")?;
+    std::fs::write(dir.join(".gitignore"), "node_modules/\ndist/\n")?;
     std::fs::write(
         dir.join("graft.toml"),
         "[[layer]]\npath = \"node_modules\"\ninputs = [\"package.json\", \"package-lock.json\"]\nbuild = \"npm ci --offline --no-audit --no-fund --ignore-scripts\"\n",
     )?;
     std::fs::write(dir.join("test.js"), test_js(spec))?;
+    std::fs::write(dir.join("build.js"), BUILD_JS)?;
     for i in 0..spec.modules {
         let path = dir.join(module_path(i));
         if i % 100 == 0 {
@@ -305,8 +352,9 @@ fn scratch_dir(root: &Path) -> anyhow::Result<PathBuf> {
 /// Tracked files in a fixture, as the summary reports them.
 #[must_use]
 pub fn tracked_files(spec: &Spec) -> usize {
-    // package.json, package-lock.json, .gitignore, graft.toml, test.js
-    spec.modules + spec.deps + 5
+    // package.json, package-lock.json, .gitignore, graft.toml, test.js,
+    // build.js
+    spec.modules + spec.deps + 6
 }
 
 #[cfg(test)]
