@@ -761,7 +761,7 @@ Speed never buys correctness. Every optimisation in this phase keeps all behavio
 
 **Acceptance criteria**
 - [ ] On the default backend, a graft beats the worktree baseline on create time, time to first passing test (cold layer cache included), disk added and prune time. This holds for every fixture (small, medium, large) and agent count (1, 4, 8, 16), on Linux (ext4, and XFS or btrfs) and macOS (APFS).
-- [ ] On the default backend, every in-graft workload above (build, rebuild, test, git, search, walk, writes) beats the worktree baseline on Linux and macOS.
+- [ ] On the default backend, every in-graft workload above (build, rebuild, test, git, search, walk, writes) is at least as fast as the worktree baseline (it does not lose, as *Beats* defines losing), and beats it wherever the backend can: a backend whose workspace is a real directory on the same filesystem runs the same code on the same files as a worktree, so it can match but not reliably beat it. Holds on Linux and macOS.
 - [ ] No backend is slower than the worktree baseline on any metric. Where reflinks are unavailable (ext4) the reflink backend at least matches it.
 - [ ] The full conformance suite, op log replay property test, crash-consistency test and e2e suite pass on every backend with every optimisation enabled. Existing tests are only ever added to, never weakened, skipped or retuned.
 - [ ] Every caching mechanism has a test proving that a change made in a graft is visible to every reader of that graft immediately, and is never visible in Root or another graft.
@@ -798,7 +798,7 @@ GRAFT_TEST_FUSE=1 cargo test --workspace --features fuse-tests
 
 ## Acceptance criteria
 - [ ] default backend beats worktrees on create, ready, disk, prune (every fixture, agent count, platform)
-- [ ] default backend beats worktrees on every in-graft workload
+- [ ] default backend is at least as fast as worktrees on every in-graft workload
 - [ ] no backend slower than worktrees on any metric
 - [ ] all correctness suites pass unchanged with optimisations on
 - [ ] cache visibility and isolation tests

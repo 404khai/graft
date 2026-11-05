@@ -13,15 +13,23 @@
 //!
 //! Every cell is repeated `--runs` times and the summary reports the median
 //! and the spread. Cells that would not fit in the free space are skipped and
-//! reported, never attempted. Run it through `bench/run.sh`.
+//! reported, never attempted.
+//!
+//! `graft-bench workloads` then measures what an agent does *inside* a
+//! workspace (build, test, git, search, walk, writes; see [`workloads`]),
+//! and `graft-bench gate` compares every graft method with the worktree
+//! baseline on everything recorded (see [`gate`]). Run it all through
+//! `bench/run.sh`.
 
 #![forbid(unsafe_code)]
 // A command-line tool: progress goes to stderr, nothing else prints.
 #![allow(clippy::print_stderr)]
 
 mod fixture;
+mod gate;
 mod methods;
 mod report;
+mod workloads;
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -65,11 +73,60 @@ enum Cmd {
         /// Where to put it.
         dir: PathBuf,
     },
-    /// Regenerate summary.md from an existing results.csv.
+    /// Regenerate summary.md and workloads.md from existing CSVs.
     Summarize {
         /// The results directory (containing results.csv and header.md).
         dir: PathBuf,
     },
+    /// Measure workloads inside one workspace per method, and write
+    /// workloads.csv and workloads.md.
+    Workloads(WorkloadArgs),
+    /// Compare every graft method with the worktree baseline and write
+    /// gate.md. Exits non-zero if the default method does not beat it on
+    /// every value, or any graft method loses on one.
+    Gate {
+        /// The results directory (results.csv and/or workloads.csv).
+        dir: PathBuf,
+        /// The method of this platform's default backend.
+        #[arg(long, default_value = "graft")]
+        default: String,
+    },
+}
+
+#[derive(Debug, Clone, clap::Args)]
+struct WorkloadArgs {
+    /// The `graft` binary to measure.
+    #[arg(long)]
+    graft: PathBuf,
+    /// Scratch directory for fixtures and workspaces, on the filesystem
+    /// being measured.
+    #[arg(long)]
+    work: PathBuf,
+    /// Where to write workloads.csv and workloads.md.
+    #[arg(long)]
+    out: PathBuf,
+    /// Fixtures to run.
+    #[arg(long, value_delimiter = ',', default_value = "medium")]
+    fixtures: Vec<String>,
+    /// Methods to compare (`clone` behaves like `worktree` inside, so it is
+    /// not run by default).
+    #[arg(long, value_delimiter = ',', default_value = "graft,worktree")]
+    methods: Vec<String>,
+    /// Filesystem backends for the `graft` method, as for `run`.
+    #[arg(long, value_delimiter = ',', default_value = "reflink")]
+    backends: Vec<String>,
+    /// Workloads to run (default: all).
+    #[arg(long, value_delimiter = ',')]
+    workloads: Vec<String>,
+    /// Fresh workspaces per method, each running every workload.
+    #[arg(long, default_value_t = 3)]
+    runs: usize,
+    /// Timed samples per workload per run, after one discarded warm-up.
+    #[arg(long, default_value_t = 5)]
+    samples: usize,
+    /// Short description of the machine for the summary header.
+    #[arg(long, default_value = "")]
+    machine: String,
 }
 
 #[derive(Debug, Clone, clap::Args)]
@@ -117,7 +174,7 @@ fn secs(d: Duration) -> f64 {
     d.as_secs_f64()
 }
 
-fn median(mut v: Vec<f64>) -> f64 {
+pub(crate) fn median(mut v: Vec<f64>) -> f64 {
     v.sort_by(f64::total_cmp);
     let n = v.len();
     if n % 2 == 1 {
@@ -298,7 +355,8 @@ fn load_average() -> String {
     })
 }
 
-fn header(args: &RunArgs, work_fs: &str) -> String {
+/// The machine and tool versions, as rows of the summary's header table.
+fn machine_rows(machine: &str, graft: &Path, work_fs: &str) -> String {
     let os = if cfg!(target_os = "macos") {
         format!("macOS {}", tool_version("sw_vers", &["-productVersion"]))
     } else {
@@ -318,10 +376,25 @@ fn header(args: &RunArgs, work_fs: &str) -> String {
     };
     let cores = std::thread::available_parallelism().map_or(0, std::num::NonZero::get);
     format!(
+        "| machine | {} |\n| OS | {os} ({}) |\n| CPU | {cpu}, {cores} threads |\n\
+         | filesystem | {work_fs} (dedicated volume) |\n| graft | {} |\n| git | {} |\n| node / npm | {} / {} |\n",
+        if machine.is_empty() {
+            "unspecified"
+        } else {
+            machine
+        },
+        std::env::consts::ARCH,
+        tool_version(&graft.to_string_lossy(), &["--version"]),
+        tool_version("git", &["--version"]),
+        tool_version("node", &["--version"]),
+        tool_version("npm", &["--version"]),
+    )
+}
+
+fn header(args: &RunArgs, work_fs: &str) -> String {
+    format!(
         "# Graft benchmark: grafts vs git worktrees vs full clones\n\n\
-         | | |\n| --- | --- |\n\
-         | machine | {} |\n| OS | {os} ({}) |\n| CPU | {cpu}, {cores} threads |\n\
-         | filesystem | {work_fs} (dedicated volume) |\n| graft | {} |\n| git | {} |\n| node / npm | {} / {} |\n\
+         | | |\n| --- | --- |\n{}\
          | runs | {} (after one discarded warm-up cell per fixture and method{}); cells with fewer than {MIN_SAMPLES} agents repeat until they have {MIN_SAMPLES} timed creations |\n\
          | load average at start | {} |\n| command | `{}` |\n\n\
          Each cell creates N workspaces one after another from the same fixture.\n\
@@ -330,16 +403,7 @@ fn header(args: &RunArgs, work_fs: &str) -> String {
          passing `npm test`. **disk added** is the drop in free space on the volume with all N workspaces \
          present, including Graft's layer cache and index. Local clones hardlink git objects, as `git clone` \
          does by default. Values are medians over runs, ± the spread ((max − min) / median).\n",
-        if args.machine.is_empty() {
-            "unspecified"
-        } else {
-            &args.machine
-        },
-        std::env::consts::ARCH,
-        tool_version(&args.graft.to_string_lossy(), &["--version"]),
-        tool_version("git", &["--version"]),
-        tool_version("node", &["--version"]),
-        tool_version("npm", &["--version"]),
+        machine_rows(&args.machine, &args.graft, work_fs),
         args.runs,
         if args.no_warmup {
             "; warm-up disabled"
@@ -514,16 +578,192 @@ fn run(args: &RunArgs) -> anyhow::Result<()> {
 }
 
 fn summarize(dir: &Path) -> anyhow::Result<()> {
-    let rows = report::read_csv(&dir.join("results.csv"))?;
-    let head = std::fs::read_to_string(dir.join("header.md")).unwrap_or_default();
-    std::fs::write(dir.join("summary.md"), report::summary(&rows, &head))?;
+    let results = dir.join("results.csv");
+    let workloads_csv = dir.join("workloads.csv");
+    anyhow::ensure!(
+        results.exists() || workloads_csv.exists(),
+        "no results.csv or workloads.csv in {}",
+        dir.display()
+    );
+    if results.exists() {
+        let rows = report::read_csv(&results)?;
+        let head = std::fs::read_to_string(dir.join("header.md")).unwrap_or_default();
+        std::fs::write(dir.join("summary.md"), report::summary(&rows, &head))?;
+    }
+    if workloads_csv.exists() {
+        let rows = workloads::read_csv(&workloads_csv)?;
+        let head = std::fs::read_to_string(dir.join("workloads-header.md")).unwrap_or_default();
+        std::fs::write(dir.join("workloads.md"), workloads::summary(&rows, &head))?;
+    }
     Ok(())
+}
+
+fn workloads_header(args: &WorkloadArgs, work_fs: &str) -> String {
+    format!(
+        "# Graft benchmark: workloads inside grafts vs git worktrees\n\n\
+         | | |\n| --- | --- |\n{}\
+         | runs | {} (a fresh workspace per method each run); {} timed samples per workload after one discarded warm-up |\n\
+         | load average at start | {} |\n| command | `{}` |\n\n\
+         Each run creates one ready workspace per method (setup not timed: grafts build or reuse the \
+         `node_modules` layer, worktrees run `npm ci`), then times each workload inside it. Values are medians \
+         over runs of each run's median sample, ± the spread ((max − min) / median). Workloads: \
+         ADR 0010.\n",
+        machine_rows(&args.machine, &args.graft, work_fs),
+        args.runs,
+        args.samples,
+        load_average(),
+        std::env::args().collect::<Vec<_>>().join(" "),
+    )
+}
+
+fn run_workloads(args: &WorkloadArgs) -> anyhow::Result<()> {
+    let methods = expand_methods(&args.methods, &args.backends)?;
+    for m in &methods {
+        anyhow::ensure!(
+            ["graft", "graft-fuse", "graft-nfs", "worktree", "clone"].contains(&m.as_str()),
+            "unknown method {m:?}"
+        );
+    }
+    anyhow::ensure!(
+        args.runs >= 1 && args.samples >= 1,
+        "--runs and --samples must be at least 1"
+    );
+    let selected = if args.workloads.is_empty() {
+        workloads::Workload::ALL.to_vec()
+    } else {
+        args.workloads
+            .iter()
+            .map(|w| workloads::Workload::parse(w))
+            .collect::<anyhow::Result<Vec<_>>>()?
+    };
+    let specs = args
+        .fixtures
+        .iter()
+        .map(|f| fixture::spec(f))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    std::fs::create_dir_all(&args.work)?;
+    std::fs::create_dir_all(&args.out)?;
+    let work = args.work.canonicalize()?;
+    let graft = args.graft.canonicalize().context("the --graft binary")?;
+    let fs = graft_fs::filesystem_type(&work)?;
+    let reflinks = graft_fs::probe_reflink(&work)?;
+    let head = workloads_header(
+        args,
+        &format!(
+            "{fs}, reflinks {}",
+            if reflinks { "supported" } else { "unsupported" }
+        ),
+    );
+    std::fs::write(args.out.join("workloads-header.md"), &head)?;
+    let csv_path = args.out.join("workloads.csv");
+    let mut csv = std::fs::File::create(&csv_path)?;
+    writeln!(csv, "{}", workloads::CSV_HEADER)?;
+
+    let mut rows = Vec::new();
+    for run_no in 1..=args.runs {
+        for spec in &specs {
+            let dir = fixture::ensure(&work.join("fixtures"), spec)?;
+            for method_name in &methods {
+                eprintln!(
+                    "graft-bench: workloads run {run_no}/{} {} {method_name}",
+                    args.runs, spec.name
+                );
+                let cell = work.join(format!("workloads-{}-{method_name}", spec.name));
+                if cell.exists() {
+                    std::fs::remove_dir_all(&cell)?;
+                }
+                std::fs::create_dir_all(&cell)?;
+                let mut record = |w: &str, outcome: Result<workloads::Samples, String>| {
+                    if let Err(why) = &outcome {
+                        eprintln!("graft-bench:   {w}: {why}");
+                    }
+                    let row = workloads::WorkloadRow {
+                        run: run_no,
+                        fixture: spec.name.to_owned(),
+                        method: method_name.clone(),
+                        workload: w.to_owned(),
+                        outcome,
+                    };
+                    writeln!(csv, "{}", row.to_csv())?;
+                    csv.flush()?;
+                    rows.push(row);
+                    anyhow::Ok(())
+                };
+                let setup = make_method(method_name, &graft, &dir, &cell).and_then(|mut m| {
+                    let ws = workloads::prepare(m.as_mut())?;
+                    Ok((m, ws))
+                });
+                match setup {
+                    Ok((mut method, ws)) => {
+                        workloads::run_all(&ws, &selected, args.samples, |w, outcome| {
+                            record(w.name(), outcome)
+                        })?;
+                        method.prune(0, &ws)?;
+                        method.finish()?;
+                    }
+                    Err(e) => {
+                        for w in &selected {
+                            record(w.name(), Err(format!("setup failed: {e:#}")))?;
+                        }
+                    }
+                }
+                let _ = std::fs::remove_dir_all(&cell);
+            }
+        }
+    }
+    std::fs::write(
+        args.out.join("workloads.md"),
+        workloads::summary(&rows, &head),
+    )?;
+    eprintln!("graft-bench: wrote {} and workloads.md", csv_path.display());
+    Ok(())
+}
+
+/// Writes `gate.md` and returns whether the gate passed.
+fn run_gate(dir: &Path, default: &str) -> anyhow::Result<bool> {
+    let mut checks = Vec::new();
+    let results = dir.join("results.csv");
+    if results.exists() {
+        checks.extend(gate::matrix_checks(&report::read_csv(&results)?));
+    }
+    let workloads_csv = dir.join("workloads.csv");
+    if workloads_csv.exists() {
+        checks.extend(gate::workload_checks(&workloads::read_csv(&workloads_csv)?));
+    }
+    anyhow::ensure!(
+        !checks.is_empty(),
+        "nothing to compare in {}: need graft and worktree rows in results.csv or workloads.csv",
+        dir.display()
+    );
+    checks.sort_by(|a, b| {
+        report::fixture_order(&a.fixture)
+            .cmp(&report::fixture_order(&b.fixture))
+            .then_with(|| a.fixture.cmp(&b.fixture))
+    });
+    let md = gate::render(&checks, default);
+    std::fs::write(dir.join("gate.md"), &md)?;
+    let passed = gate::passes(&checks, default);
+    eprintln!(
+        "graft-bench: gate {} ({}); see {}",
+        if passed { "passed" } else { "failed" },
+        default,
+        dir.join("gate.md").display()
+    );
+    Ok(passed)
 }
 
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Cmd::Run(args) => run(&args),
         Cmd::Summarize { dir } => summarize(&dir),
+        Cmd::Workloads(args) => run_workloads(&args),
+        Cmd::Gate { dir, default } => {
+            if run_gate(&dir, &default)? {
+                Ok(())
+            } else {
+                std::process::exit(1)
+            }
+        }
         Cmd::Fixture { name, dir } => {
             let path = fixture::ensure(&dir, &fixture::spec(&name)?)?;
             #[allow(clippy::print_stdout)] // The path is this command's output.

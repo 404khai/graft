@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
-# Run the whole benchmark matrix and write bench/results/<label>/
-# (results.csv, summary.md). AGENTS.md Phase 4.
+# Run the whole benchmark and write bench/results/<label>/: the create
+# matrix (results.csv, summary.md; AGENTS.md Phase 4), the in-graft
+# workloads (workloads.csv, workloads.md; Phase 8) and the gate against
+# worktrees (gate.md). Exits non-zero if the gate fails.
 #
-#   bench/run.sh [--agents 1,4,8,16] [--fixtures small,medium,large]
-#                [--methods graft,worktree,clone] [--backends reflink,fuse|nfs] [--runs 3]
+#   bench/run.sh [--suite all|matrix|workloads] [--agents 1,4,8,16]
+#                [--fixtures small,medium,large] [--workload-fixtures medium]
+#                [--methods graft,worktree,clone] [--backends reflink,fuse|nfs]
+#                [--runs 3] [--samples 5] [--workloads build-cold,test,...]
+#                [--default graft] [--no-gate]
 #                [--work DIR] [--image-size GIB] [--label NAME]
-#                [--machine "description"] [--margin-gib N]
+#                [--machine "description"] [--margin-gib N] [--no-warmup]
+#
+# --default names the method of the platform's default backend, which the
+# gate holds to "beats worktrees everywhere" (ADR 0010).
 #
 # Disk use is measured as the drop in free space, so the work directory
 # should be a dedicated, quiet volume:
@@ -18,18 +26,27 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-work="" image_gib="" label="" machine=""
-pass=()
+work="" image_gib="" label="" machine="" suite=all default=graft gate=1
+matrix=() inside=() workload_fixtures=()
 while [[ $# -gt 0 ]]; do
   case $1 in
     --work) work=$2; shift 2 ;;
     --image-size) image_gib=${2%[gG]}; shift 2 ;;
     --label) label=$2; shift 2 ;;
     --machine) machine=$2; shift 2 ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
-    *) pass+=("$1"); shift ;;
+    --suite) suite=$2; shift 2 ;;
+    --default) default=$2; shift 2 ;;
+    --no-gate) gate=0; shift ;;
+    --workload-fixtures) workload_fixtures=(--fixtures "$2"); shift 2 ;;
+    # Shared by both suites.
+    --methods|--backends|--runs) matrix+=("$1" "$2"); inside+=("$1" "$2"); shift 2 ;;
+    --samples|--workloads) inside+=("$1" "$2"); shift 2 ;;
+    --no-warmup) matrix+=("$1"); shift ;;
+    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
+    *) matrix+=("$1" "$2"); shift 2 ;;
   esac
 done
+case $suite in all|matrix|workloads) ;; *) echo "bench/run.sh: --suite must be all, matrix or workloads" >&2; exit 2 ;; esac
 
 cargo build --quiet --release --locked --manifest-path "$root/Cargo.toml" -p graft-cli -p graft-daemon -p graft-bench
 graft="$root/target/release/graft"
@@ -72,4 +89,13 @@ fi
 out="$root/bench/results/$label"
 echo "bench/run.sh: results go to $out" >&2
 
-"$harness" run --graft "$graft" --work "$work/bench" --out "$out" --machine "$machine" ${pass[@]+"${pass[@]}"}
+if [[ $suite != workloads ]]; then
+  "$harness" run --graft "$graft" --work "$work/bench" --out "$out" --machine "$machine" ${matrix[@]+"${matrix[@]}"}
+fi
+if [[ $suite != matrix ]]; then
+  "$harness" workloads --graft "$graft" --work "$work/bench" --out "$out" --machine "$machine" \
+    ${workload_fixtures[@]+"${workload_fixtures[@]}"} ${inside[@]+"${inside[@]}"}
+fi
+if (( gate )); then
+  "$harness" gate "$out" --default "$default"
+fi
