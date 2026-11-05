@@ -68,6 +68,8 @@ fn status(e: Errno) -> nfsstat3 {
         libc::ENOTEMPTY => nfsstat3::NFS3ERR_NOTEMPTY,
         libc::ENOTSUP => nfsstat3::NFS3ERR_NOTSUPP,
         libc::EBADF => nfsstat3::NFS3ERR_BADHANDLE,
+        // "Try again later": the client retries without timing out.
+        libc::EAGAIN => nfsstat3::NFS3ERR_JUKEBOX,
         _ => nfsstat3::NFS3ERR_IO,
     }
 }
@@ -394,7 +396,10 @@ impl NFSFileSystem for NfsFs {
 /// `path` with its parent resolved to a real path, without touching `path`
 /// itself (which could hang on a dead server).
 fn real_path(path: &Path) -> PathBuf {
-    match (path.parent().and_then(|p| p.canonicalize().ok()), path.file_name()) {
+    match (
+        path.parent().and_then(|p| p.canonicalize().ok()),
+        path.file_name(),
+    ) {
         (Some(parent), Some(name)) => parent.join(name),
         _ => path.to_owned(),
     }

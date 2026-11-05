@@ -209,6 +209,7 @@ impl VirtualBackend {
                 graft: spec.id,
                 dir: self.graft_dir(spec.id),
                 git_init: Some(git_init(&objects, spec, &layers)),
+                git_in_background: cfg!(target_os = "macos"),
             };
             let view = GraftView::writable(
                 objects,
