@@ -2,9 +2,10 @@
 //!
 //! [`FsBackend`] is how grafts are materialised. [`ReflinkBackend`] gives
 //! each graft a real working tree whose unchanged files are reflinks of
-//! Root's (ADR 0003). On Linux, `FuseBackend` serves grafts lazily from
-//! Root's object store (ADR 0006) through [`view::GraftView`], the
-//! platform-independent tree model. The NFS backend arrives later.
+//! Root's (ADR 0003). `VirtualBackend` serves grafts lazily from
+//! Root's object store, with writes going to a private delta, through
+//! [`view::GraftView`], the platform-independent tree model: over FUSE on
+//! Linux (ADRs 0006, 0008) and NFS loopback on macOS (ADR 0009).
 //! [`unshared_bytes`] measures what a graft really costs on disk.
 //!
 //! It also provides the host probing that `graft doctor` reports:
@@ -31,12 +32,14 @@ mod fstype;
 #[cfg(target_os = "linux")]
 mod fuse;
 mod lower;
+#[cfg(target_os = "macos")]
+mod nfs;
 mod reflink;
 #[allow(unsafe_code)] // FFI to statfs, clonefile and ioctl; see each SAFETY comment.
 mod sys;
 mod usage;
 pub mod view;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod virtual_backend;
 mod write;
 
@@ -49,6 +52,12 @@ pub use clone::{CloneReport, ReflinkCloner, clone_tree};
 pub use fstype::{FsType, available_bytes, filesystem_type, same_filesystem};
 pub use reflink::{REFLINK_MECHANISM, probe_reflink};
 pub use usage::{human_bytes, unshared_bytes};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use virtual_backend::{Unmounted, VirtualBackend};
+/// The virtual backend on Linux: grafts served over FUSE (ADR 0006).
 #[cfg(target_os = "linux")]
-pub use virtual_backend::{FuseBackend, Unmounted};
+pub type FuseBackend = VirtualBackend;
+/// The virtual backend on macOS: grafts served over NFS loopback (ADR 0009).
+#[cfg(target_os = "macos")]
+pub type NfsBackend = VirtualBackend;
 pub use write::{OpenMode, SetAttr};

@@ -75,6 +75,10 @@ C, with `nfsserve`.
   both are left for hardening (not verified feasible yet).
 - **Lost attributes.** `nfsserve` drops the attributes of MKDIR, so new
   directories get `0755`. File modes from CREATE and SETATTR are kept.
+- **No extended attributes**, as with FUSE grafts. NFSv3 has no xattrs, so
+  the macOS client would store them in AppleDouble `._name` files; the
+  server refuses to create those, so they never appear as changes.
+  `._name` files already in the base tree are still served.
 - **No hard links** (`nfsserve` does not implement LINK), as with FUSE
   grafts.
 - The NFS client caches attributes (`actimeo`). All changes go through the
