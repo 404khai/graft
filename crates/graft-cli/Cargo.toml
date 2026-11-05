@@ -37,6 +37,8 @@ tempfile.workspace = true
 [features]
 # End-to-end tests that mount FUSE grafts (Linux). Also need GRAFT_TEST_FUSE=1.
 fuse-tests = []
+# End-to-end tests that mount NFS grafts (macOS). Also need GRAFT_TEST_NFS=1.
+nfs-tests = []
 
 [lints]
 workspace = true
