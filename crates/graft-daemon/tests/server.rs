@@ -343,3 +343,30 @@ fn refuses_a_run_directory_others_can_read() {
         "{err}"
     );
 }
+
+/// A `$GRAFT_HOME` too deep for a Unix socket path still works.
+#[test]
+fn serves_a_deep_home() {
+    let tmp = tempfile::tempdir().unwrap();
+    let deep = tmp.path().join("x".repeat(120));
+    std::fs::create_dir(&deep).unwrap();
+    let home = GraftHome::from_path(deep).unwrap();
+    let server = start(&home, Arc::new(Fake::default()));
+    let socket = paths::socket(&home);
+    assert!(
+        socket.starts_with(paths::socket_dir(&home)),
+        "{}",
+        socket.display()
+    );
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(paths::socket_dir(&home))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+    Client::connect(&home).unwrap().shutdown().unwrap();
+    server.join().unwrap().unwrap();
+    assert!(!socket.exists());
+}

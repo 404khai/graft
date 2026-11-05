@@ -157,6 +157,31 @@ pub fn ensure_run_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Creates the short-socket directory (mode `0700`), refusing one that is a
+/// symlink, owned by someone other than `$GRAFT_HOME`'s owner, or
+/// accessible by others.
+///
+/// # Errors
+///
+/// If it cannot be created or fails a check.
+pub fn ensure_socket_dir(dir: &Path, home: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    let meta = std::fs::symlink_metadata(dir)?;
+    let owner = std::fs::metadata(home)?.uid();
+    if !meta.is_dir() || meta.uid() != owner || meta.permissions().mode() & 0o077 != 0 {
+        return Err(io::Error::other(format!(
+            "{} must be a directory owned by uid {owner} with mode 0700",
+            dir.display()
+        )));
+    }
+    Ok(())
+}
+
 struct State {
     home: GraftHome,
     mounter: Arc<dyn Mounter>,
@@ -476,6 +501,9 @@ pub async fn serve(home: GraftHome, mounter: Arc<dyn Mounter>) -> Result<(), Ser
     }
     // Holding the lock, any existing socket is stale.
     let socket = paths::socket(&home);
+    if let Some(dir) = socket.parent().filter(|d| *d != run) {
+        ensure_socket_dir(dir, home.path()).map_err(io_err("preparing", dir))?;
+    }
     match std::fs::remove_file(&socket) {
         Ok(()) => {}
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
