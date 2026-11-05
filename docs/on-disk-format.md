@@ -1,6 +1,6 @@
 # On-disk format
 
-**Format version: 5** (metadata schema v4)
+**Format version: 6** (metadata schema v5)
 
 This file describes everything Graft persists. Any change to a structure
 below bumps the format version, adds a migration, and updates this file in
@@ -22,7 +22,7 @@ path never creates anything; only commands that write state do.
 $GRAFT_HOME/
 ├── config.toml                 optional user config
 ├── run/                        mode 0700, graftd's runtime files (ADR 0007)
-│   ├── graftd.sock             JSON-RPC socket, mode 0600
+│   ├── graftd.sock             JSON-RPC socket, mode 0600 (see `run/` below)
 │   ├── graftd.lock             OS file lock held by the running graftd
 │   └── graftd.log              graftd's stderr when started by the CLI
 └── roots/
@@ -57,6 +57,7 @@ Entries in `roots/` whose name is not a valid Root ID, or that contain no
 | 3 | Adds `layers/` and schema v2 (`layers`, `layer_refs`, `trusted_commands`) | Schema v1 → v2 runs automatically on open; tables only added |
 | 4 | Adds `run/` (graftd) and schema v3 (`grafts.backend`) | Schema v2 → v3 runs automatically on open; existing grafts become `reflink` |
 | 5 | Adds `blobs/`, `grafts/` and schema v4 (`delta`, `staged`, `op_log.mode/mtime/target`) | Schema v3 → v4 runs automatically on open; tables and nullable columns only added |
+| 6 | Schema v5: `grafts.backend` accepts `nfs`; the socket moves to `/tmp/graft-<uid>/` when `run/graftd.sock` would be too long | Schema v4 → v5 rebuilds `grafts` (foreign keys off, checked before commit); every row and child row is kept |
 
 ## `config.toml`
 
@@ -65,7 +66,7 @@ TOML. Optional; a missing file means defaults. Unknown keys are an error.
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `log.filter` | string | `"warn"` | `tracing` filter directive. `$GRAFT_LOG` overrides it. |
-| `fs.backend` | string | `"reflink"` | Backend for new grafts: `reflink` or `fuse`. `$GRAFT_FS` and `graft new --backend` override it. |
+| `fs.backend` | string | `"reflink"` | Backend for new grafts: `reflink`, `fuse` (Linux) or `nfs` (macOS). `$GRAFT_FS` and `graft new --backend` override it. |
 
 ## Identifiers
 
@@ -157,7 +158,7 @@ The Root this database belongs to. Exactly one row.
 | `state` | TEXT | `created`, `live`, `integrated` or `pruned` |
 | `created_at` | INTEGER | Timestamp |
 | `updated_at` | INTEGER | Timestamp of the last change to the row |
-| `backend` | TEXT | (v3) `reflink` or `fuse`; default `reflink` (ADR 0006) |
+| `backend` | TEXT | (v3) `reflink` or `fuse`, (v5) or `nfs`; default `reflink` (ADRs 0006, 0009) |
 
 Index `grafts_name_unique`: unique `name` where `state <> 'pruned'`.
 
@@ -285,17 +286,18 @@ A graft is built in `mounts/.tmp-<graft-id>/` and renamed into place when
 complete, so `mounts/<name>/` is never half-built. A leftover `.tmp-*`
 directory is a failed or interrupted `graft new`, and prune removes it.
 
-### FUSE grafts (v4, writable from v5)
+### Virtual grafts: FUSE (v4, writable from v5) and NFS (v6)
 
-A graft with `backend = 'fuse'` stores no working tree. `mounts/<name>/`
+A graft with `backend = 'fuse'` (Linux) or `'nfs'` (macOS, served over
+NFSv3 loopback, ADR 0009) stores no working tree. `mounts/<name>/`
 is an empty directory (mode `0700`) used as the mount point; `graftd`
 mounts the graft's delta over its lower tree there (ADRs 0006 and 0008).
 Changed file contents are blobs in `blobs/`; `.git` inside the mount is
 served from `grafts/<graft-id>/git/`, which has the same layout as a
 reflink graft's `.git` plus `core.checkStat = minimal` and
 `core.trustctime = false`, and is created on first use. A graft that
-should be mounted is one with `backend = 'fuse'` in state `live`;
-`graftd` remounts every such graft when it starts.
+should be mounted is one with a virtual backend in state `live`; `graftd`
+remounts every such graft of its platform's kind when it starts.
 
 Blobs are shared by content across a Root's grafts. A blob no `delta` row
 references is deleted by `graft gc` or `graft prune`, under graftd's write
@@ -308,6 +310,13 @@ owned by another user or accessible by group or others. `graftd.sock` is
 created with mode `0600`. `graftd.lock` is held with an exclusive OS file
 lock for the daemon's lifetime; a socket whose lock is free is stale and is
 replaced. The protocol is in ADR 0007.
+
+Unix socket paths are limited to about 100 bytes. When
+`run/graftd.sock` would be longer (a deep `$GRAFT_HOME`), the socket is
+`/tmp/graft-<uid>/<first 16 hex chars of blake3($GRAFT_HOME)>.sock`
+instead (format v6). `graftd` creates `/tmp/graft-<uid>` with mode `0700`
+and refuses it if it is a symlink, is owned by anyone other than
+`$GRAFT_HOME`'s owner, or is accessible by group or others.
 
 ## Refs in Root
 

@@ -94,7 +94,7 @@ Status: done (PR #9)
 - [x] `git status` inside a graft matches `graft status`.
   - `git_status_matches_graft_status` (CI `fuse` job): adds, edits, renames, a chmod, a symlink, nested directories and ignored files.
 - [x] Building and running the test suite of the medium fixture inside a graft succeeds.
-  - `scripts/fuse-medium-fixture.sh` (CI `fuse` job): `npm test` passes in 221 ms inside the graft; after an edit inside it, `graft status` and `git status` agree. `graft new` took 4.5 s on that run because the `node_modules` layer was built cold (see Phase 8).
+  - `scripts/virtual-medium-fixture.sh` (CI `fuse` job): `npm test` passes in 221 ms inside the graft; after an edit inside it, `graft status` and `git status` agree. `graft new` took 4.5 s on that run because the `node_modules` layer was built cold (see Phase 8).
 - [x] A crash (kill -9 of graftd) mid-write loses at most the in-flight operation; the delta is consistent on restart.
   - `a_crash_mid_write_loses_at_most_the_operation_in_flight` (CI `fuse` job: a completed write, a mkdir and a file still open when graftd is killed all survive); `a_crash_loses_nothing_written_before_it` through the view API.
 
@@ -102,12 +102,18 @@ Not measured: write throughput and in-graft build time against Root (the benchma
 
 ## Phase 7 — macOS virtual backend
 
-Status: not started
+Status: in review (`feat/macos-nfs-backend`)
 
-- [ ] No kernel extension or system extension approval required.
-- [ ] Conformance suite passes on macOS.
-- [ ] Medium fixture builds and tests inside a graft on macOS.
+- [x] No kernel extension or system extension approval required.
+  - NFSv3 loopback served by `graftd` (nfsserve) and mounted with the built-in `mount_nfs`, as an ordinary user: no `sudo`, no extension, no approval (ADR 0009). Verified on macOS 27; the CI `nfs` job runs as the runner's user.
+- [x] Conformance suite passes on macOS.
+  - `passes_the_conformance_suite` in `crates/graft-fs/tests/nfs_backend.rs`, plus `git status` parity, `git commit`, layers, busy unmount and AppleDouble tests; the virtual graft e2e suite (including `kill -9` of graftd) also runs on NFS. Passed locally on macOS 27; CI `nfs` job.
+- [x] Medium fixture builds and tests inside a graft on macOS.
+  - `scripts/virtual-medium-fixture.sh` locally on macOS 27: `npm test` passes in the graft (3.1 s), again after an edit, and `graft status` and `git status` agree. Cold `graft new` took 28 s, nearly all of it building the `node_modules` layer (Phase 8).
 - [ ] Benchmarks recorded against the reflink backend on the same machine.
+  - Pending: bench workflow with `--backends reflink,nfs` on the macOS runner.
+
+Known limits (ADR 0009): `fsync` on an NFS graft is not durable against power loss until the file is journaled; other local users could reach a graft's NFS port; no xattrs (AppleDouble files are refused); new directories are `0755`.
 
 ## Phase 8 — Performance: faster than worktrees
 

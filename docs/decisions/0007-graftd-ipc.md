@@ -89,3 +89,7 @@ A + E + G + I.
 - After a crash, mounts become stale (`ENOTCONN`) until the next CLI command
   restarts the daemon, which unmounts and remounts them.
 - The MCP server will reuse the same client.
+- Amended with ADR 0009's phase: Unix socket paths are limited to about
+  100 bytes, so when `run/graftd.sock` would be longer the socket lives at
+  `/tmp/graft-<uid>/<hash of $GRAFT_HOME>.sock`, in a `0700` directory that
+  `graftd` checks before use (docs/on-disk-format.md).
