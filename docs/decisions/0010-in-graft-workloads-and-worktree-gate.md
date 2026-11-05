@@ -74,8 +74,19 @@ The gate compares each graft method (`graft`, `graft-fuse`, `graft-nfs`)
 with `worktree` on every create-matrix metric (create, ready for the first
 and later agents, disk added, prune; per fixture and agent count) and every
 workload. Verdicts: **beats**, **ties** (within the noise), **loses**. It
-passes only if the method named by `--default` beats on every value and no
-graft method loses on any. `bench/run.sh` runs it last and exits with its
+passes only if no graft method loses on any value and the method named by
+`--default` beats on every create-matrix value (create, ready, disk, prune).
+Inside a workspace the default may tie.
+
+The in-workspace rule is a relaxation of Phase 8's first wording ("beats
+every workload"), approved by the project owner after the first CI run. A
+reflink graft is a real directory on the same filesystem as a worktree, so
+`find`, `rg` and `git` execute the same code on the same files; it can match
+but not reliably beat a worktree there, and a 13 ms `find` differs by noise.
+Only a virtual backend could beat it, and none is close (FUSE is 6–38×
+behind on Linux today). The criterion keeps its teeth: losing fails the
+gate, so `git status`, where reflink grafts are 18–25% slower, still must be
+fixed. `bench/run.sh` runs it last and exits with its
 status; the bench workflow runs it after uploading results. It never
 becomes a required check (AGENTS.md §6).
 
@@ -84,7 +95,7 @@ becomes a required check (AGENTS.md §6).
 - Fixtures move to generator v3 (adds `build.js` and `dist/` in
   `.gitignore`); cached fixtures are regenerated once, and tracked-file
   counts grow by one.
-- A tie fails the gate for the default backend. On a noisy machine
+- A tie on a create-matrix value fails the gate for the default backend. On a noisy machine
   (GitHub's macOS VMs, ADR 0005) genuine wins can show as ties; the
   criterion is then measured on a machine that can reproduce it, and the
   PR says which.

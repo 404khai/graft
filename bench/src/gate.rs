@@ -7,8 +7,12 @@
 //! It **loses** when it is higher by more than either spread (or higher at
 //! all, below the floor). Anything else is a **tie**.
 //!
-//! The gate fails when the default backend's method does not beat the
-//! baseline everywhere, or when any graft method loses anywhere.
+//! The gate fails when any graft method loses anywhere, or when the default
+//! backend's method does not beat the baseline on a create-matrix value
+//! (create, ready, disk, prune). Inside a workspace the default may tie: a
+//! backend whose workspace is a real directory on the same filesystem (the
+//! reflink backend) runs the same code on the same files as a worktree, so
+//! it can match one but not reliably beat it.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -74,6 +78,8 @@ pub struct Check {
     pub base: Stat,
     /// Seconds or bytes.
     pub bytes: bool,
+    /// Measured inside a workspace (a workload) rather than creating one.
+    pub inside: bool,
     /// The outcome.
     pub verdict: Verdict,
 }
@@ -135,6 +141,7 @@ pub fn matrix_checks(rows: &[Row]) -> Vec<Check> {
                 graft: g,
                 base: b,
                 bytes: *bytes,
+                inside: false,
             });
         }
     }
@@ -171,18 +178,20 @@ pub fn workload_checks(rows: &[WorkloadRow]) -> Vec<Check> {
             graft: g,
             base: b,
             bytes: false,
+            inside: true,
         });
     }
     out
 }
 
-/// Whether the gate passes: `default` beats everywhere, and no graft
-/// method loses anywhere.
+/// Whether the gate passes: `default` beats on every create-matrix value and
+/// does not lose inside a workspace, and no graft method loses anywhere.
 #[must_use]
 pub fn passes(checks: &[Check], default: &str) -> bool {
     !checks.is_empty()
         && checks.iter().all(|c| {
-            c.verdict != Verdict::Loses && (c.method != default || c.verdict == Verdict::Beats)
+            c.verdict != Verdict::Loses
+                && (c.method != default || c.inside || c.verdict == Verdict::Beats)
         })
 }
 
@@ -204,8 +213,9 @@ pub fn render(checks: &[Check], default: &str) -> String {
     let mut out = format!(
         "# Grafts vs worktrees\n\n\
          Default backend's method: `{default}`. It must **beat** `{BASELINE}` on every \
-         value (lower, by more than either side's spread; below the floor of {:.0} ms or \
-         1 MiB, not higher). No graft method may **lose** anywhere.\n",
+         create-matrix value (lower, by more than either side's spread; below the floor of \
+         {:.0} ms or 1 MiB, not higher) and must not lose on any workload inside a workspace. \
+         No graft method may **lose** anywhere.\n",
         TIME_FLOOR_S * 1000.0
     );
     let verdict = if passes(checks, default) {
@@ -302,6 +312,7 @@ mod tests {
             graft: s(1.0, 0.0),
             base: s(1.0, 0.0),
             bytes: false,
+            inside: false,
             verdict,
         }
     }
@@ -319,6 +330,13 @@ mod tests {
             "graft"
         ));
         assert!(!passes(&[], "graft"), "no data never passes");
+        // Inside a workspace the default may tie, but not lose.
+        let inside = |v| Check {
+            inside: true,
+            ..check("graft", v)
+        };
+        assert!(passes(&[inside(Ties)], "graft"));
+        assert!(!passes(&[inside(Loses)], "graft"));
     }
 
     #[test]

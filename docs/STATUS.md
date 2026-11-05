@@ -120,7 +120,7 @@ Known limits (ADR 0009): `fsync` on an NFS graft is not durable against power lo
 Status: in progress, as stacked PRs. First: `perf/in-graft-workloads` (measure first: in-graft workloads and the worktree gate, ADR 0010).
 
 - [ ] On the default backend, a graft beats the worktree baseline on create time, time to first passing test (cold layer cache included), disk added and prune time, for every fixture and agent count, on Linux (ext4, and XFS or btrfs) and macOS (APFS).
-- [ ] On the default backend, every in-graft workload (build, rebuild, test, git, search, walk, writes) beats the worktree baseline on Linux and macOS.
+- [ ] On the default backend, every in-graft workload (build, rebuild, test, git, search, walk, writes) is at least as fast as the worktree baseline, and beats it wherever the backend can, on Linux and macOS. (Relaxed from "beats" with the owner's approval: a real-directory backend can match a worktree inside, not reliably beat it; ADR 0010.)
 - [ ] No backend is slower than the worktree baseline on any metric; on ext4 the reflink backend at least matches it.
 - [ ] Conformance suite, op log replay property test, crash-consistency test and e2e suite pass on every backend with every optimisation enabled; existing tests are only added to.
 - [ ] Every caching mechanism is tested for immediate visibility within a graft and isolation from Root and other grafts.
