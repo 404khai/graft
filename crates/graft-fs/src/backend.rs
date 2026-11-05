@@ -2,6 +2,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use graft_core::{CommitId, GraftId, GraftName};
 use graft_root::Repo;
@@ -58,12 +59,40 @@ pub enum FsError {
     #[error(transparent)]
     Changes(#[from] crate::ChangesError),
 
+    /// A directory tree could not be removed because it kept reporting
+    /// entries after every retry (something is still writing into it, or
+    /// the filesystem's listing missed entries each time).
+    #[error(
+        "removing {}: directory not empty after {attempts} attempts; still there: {}{}",
+        path.display(),
+        display_paths(remaining),
+        if *more { ", ..." } else { "" }
+    )]
+    NotEmpty {
+        /// The directory being removed.
+        path: PathBuf,
+        /// How many times removal was attempted.
+        attempts: usize,
+        /// Some of the entries left behind, relative to `path`.
+        remaining: Vec<PathBuf>,
+        /// Whether more entries were left than `remaining` lists.
+        more: bool,
+    },
+
     /// The graft is not mounted, so its live state is unavailable.
     #[error("graft {name} is not mounted")]
     NotMounted {
         /// The graft.
         name: GraftName,
     },
+}
+
+fn display_paths(paths: &[PathBuf]) -> String {
+    if paths.is_empty() {
+        return "(nothing listed)".to_owned();
+    }
+    let shown: Vec<_> = paths.iter().map(|p| p.display().to_string()).collect();
+    shown.join(", ")
 }
 
 /// Result alias using [`FsError`].
@@ -226,17 +255,111 @@ impl ReflinkBackend {
     }
 }
 
+/// Pauses before each retry of a removal that found a directory not empty.
+/// On APFS, listing a very large directory while its entries are being
+/// unlinked can miss some, so one pass of `remove_dir_all` leaves a few
+/// behind and `rmdir` fails with `ENOTEMPTY`; a fresh pass lists and removes
+/// them. Bounded, so a process that keeps writing into the tree cannot make
+/// removal spin forever.
+const NOT_EMPTY_RETRY_DELAYS: [Duration; 5] = [
+    Duration::from_millis(10),
+    Duration::from_millis(50),
+    Duration::from_millis(100),
+    Duration::from_millis(250),
+    Duration::from_millis(500),
+];
+
+/// How many leftover entries a final [`FsError::NotEmpty`] names.
+const LEFTOVERS_SHOWN: usize = 10;
+
 /// `remove_dir_all`, but also removes read-only directories (Go's module
-/// cache, for instance, marks them 0555). Never follows symlinks.
+/// cache, for instance, marks them 0555), and retries when a pass leaves a
+/// directory not empty. Never follows symlinks.
 fn remove_tree(path: &Path) -> Result<()> {
-    match std::fs::remove_dir_all(path) {
-        Ok(()) => return Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {}
-        Err(e) => return Err(io_err("removing", path)(e)),
+    remove_tree_with(path, &NOT_EMPTY_RETRY_DELAYS, |p| {
+        std::fs::remove_dir_all(p)
+    })
+}
+
+/// [`remove_tree`] with the retry delays and the removal itself supplied,
+/// so tests can simulate a filesystem that reports `ENOTEMPTY`. Only ever
+/// calls `remove` on `path`.
+fn remove_tree_with(
+    path: &Path,
+    retry_delays: &[Duration],
+    mut remove: impl FnMut(&Path) -> io::Result<()>,
+) -> Result<()> {
+    let mut made_writable = false;
+    let mut delays = retry_delays.iter();
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let err = match remove(path) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => e,
+        };
+        match err.kind() {
+            io::ErrorKind::PermissionDenied if !made_writable => {
+                make_writable(path).map_err(io_err("making writable", path))?;
+                made_writable = true;
+            }
+            io::ErrorKind::DirectoryNotEmpty => {
+                let Some(delay) = delays.next() else {
+                    let (remaining, more) = leftovers(path, LEFTOVERS_SHOWN);
+                    return Err(FsError::NotEmpty {
+                        path: path.to_owned(),
+                        attempts,
+                        remaining,
+                        more,
+                    });
+                };
+                tracing::debug!(path = %path.display(), attempts, "directory not empty after removal; retrying");
+                std::thread::sleep(*delay);
+            }
+            _ => return Err(io_err("removing", path)(err)),
+        }
     }
-    make_writable(path).map_err(io_err("making writable", path))?;
-    std::fs::remove_dir_all(path).map_err(io_err("removing", path))
+}
+
+/// Up to `limit` entries still under `dir` (files, symlinks and empty
+/// directories, relative to `dir`), and whether there are more. Best
+/// effort: unreadable directories are skipped. Never follows symlinks.
+fn leftovers(dir: &Path, limit: usize) -> (Vec<PathBuf>, bool) {
+    let mut found = Vec::new();
+    let mut stack = vec![dir.to_owned()];
+    while let Some(current) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
+        let mut empty = true;
+        for entry in entries.flatten() {
+            empty = false;
+            let path = entry.path();
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                stack.push(path);
+            } else if found.len() < limit {
+                found.push(path);
+            } else {
+                return (relative_to(dir, found), true);
+            }
+        }
+        if empty && current != dir {
+            if found.len() < limit {
+                found.push(current);
+            } else {
+                return (relative_to(dir, found), true);
+            }
+        }
+    }
+    (relative_to(dir, found), false)
+}
+
+fn relative_to(dir: &Path, paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    paths
+        .into_iter()
+        .map(|p| p.strip_prefix(dir).map(Path::to_owned).unwrap_or(p))
+        .collect()
 }
 
 fn make_writable(dir: &Path) -> io::Result<()> {
@@ -322,5 +445,149 @@ impl FsBackend for ReflinkBackend {
     fn disk_usage(&self, name: &GraftName) -> Result<u64> {
         let path = self.path(name);
         crate::unshared_bytes(&path).map_err(io_err("measuring", &path))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::cell::Cell;
+
+    const NO_DELAYS: [Duration; 3] = [Duration::ZERO; 3];
+
+    fn not_empty() -> io::Error {
+        io::Error::from(io::ErrorKind::DirectoryNotEmpty)
+    }
+
+    /// A tree of `dirs` directories with `files` files each.
+    fn tree(parent: &Path, dirs: usize, files: usize) -> PathBuf {
+        let root = parent.join("graft");
+        for d in 0..dirs {
+            let dir = root.join(format!("d{d}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            for f in 0..files {
+                std::fs::write(dir.join(format!("f{f}")), b"x").unwrap();
+            }
+        }
+        root
+    }
+
+    /// A pass that misses half the files, as an APFS listing raced by
+    /// unlinks can, then fails the way `rmdir` does.
+    fn remove_half(path: &Path) -> io::Result<()> {
+        for dir in std::fs::read_dir(path)? {
+            let dir = dir?.path();
+            for (i, file) in std::fs::read_dir(&dir)?.enumerate() {
+                if i % 2 == 0 {
+                    std::fs::remove_file(file?.path())?;
+                }
+            }
+        }
+        Err(not_empty())
+    }
+
+    #[test]
+    fn retries_a_pass_that_leaves_the_directory_not_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tree(tmp.path(), 4, 20);
+        let calls = Cell::new(0);
+        remove_tree_with(&root, &NO_DELAYS, |p| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 1 {
+                remove_half(p)
+            } else {
+                std::fs::remove_dir_all(p)
+            }
+        })
+        .unwrap();
+        assert_eq!(calls.get(), 2);
+        assert!(!root.exists());
+        assert!(tmp.path().exists(), "removal went above the graft");
+    }
+
+    #[test]
+    fn gives_up_after_the_retries_and_names_what_is_left() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tree(tmp.path(), 3, 5);
+        std::fs::create_dir(root.join("empty")).unwrap();
+        let calls = Cell::new(0);
+        let err = remove_tree_with(&root, &NO_DELAYS, |_| {
+            calls.set(calls.get() + 1);
+            Err(not_empty())
+        })
+        .unwrap_err();
+        assert_eq!(calls.get(), NO_DELAYS.len() + 1);
+        let FsError::NotEmpty {
+            path,
+            attempts,
+            remaining,
+            more,
+        } = &err
+        else {
+            panic!("expected NotEmpty, got {err:?}");
+        };
+        assert_eq!(path, &root);
+        assert_eq!(*attempts, NO_DELAYS.len() + 1);
+        assert_eq!(remaining.len(), LEFTOVERS_SHOWN);
+        assert!(
+            *more,
+            "16 entries are left but only {LEFTOVERS_SHOWN} shown"
+        );
+        for p in remaining {
+            assert!(p.is_relative(), "{}", p.display());
+            assert!(root.join(p).exists(), "{} is not left", p.display());
+        }
+        let message = err.to_string();
+        assert!(
+            message.contains("directory not empty after 4 attempts"),
+            "{message}"
+        );
+        assert!(message.ends_with(", ..."), "{message}");
+    }
+
+    #[test]
+    fn lists_every_leftover_when_there_are_few() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tree(tmp.path(), 1, 2);
+        std::fs::create_dir(root.join("empty")).unwrap();
+        let (mut left, more) = leftovers(&root, LEFTOVERS_SHOWN);
+        left.sort();
+        assert!(!more);
+        assert_eq!(
+            left,
+            [Path::new("d0/f0"), Path::new("d0/f1"), Path::new("empty")]
+        );
+    }
+
+    #[test]
+    fn does_not_retry_other_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let calls = Cell::new(0);
+        let err = remove_tree_with(tmp.path(), &NO_DELAYS, |_| {
+            calls.set(calls.get() + 1);
+            Err(io::Error::other("disk on fire"))
+        })
+        .unwrap_err();
+        assert_eq!(calls.get(), 1);
+        assert!(matches!(err, FsError::Io { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn a_missing_tree_is_already_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        remove_tree(&tmp.path().join("gone")).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removes_read_only_directories() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tree(tmp.path(), 2, 3);
+        let locked = root.join("d1");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        remove_tree(&root).unwrap();
+        assert!(!root.exists());
     }
 }

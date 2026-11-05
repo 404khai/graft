@@ -137,3 +137,48 @@ fn refuses_to_prune_outside_the_mounts_directory() {
         );
     }
 }
+
+/// Pruning a graft with tens of thousands of files (the large fixture's
+/// prune failed with `Directory not empty` on the macOS runner) removes all
+/// of it, including read-only directories, and nothing outside it: a
+/// symlink to Root inside the graft is removed, not followed.
+#[test]
+fn prunes_a_graft_with_many_files_and_nothing_else() {
+    const DIRS: usize = 200;
+    const FILES_PER_DIR: usize = 100;
+    let tmp = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new_in(tmp.path());
+    let backend = backend_in(tmp.path());
+    let g = create(&backend, &fixture, "many");
+    for d in 0..DIRS {
+        let dir = g.path.join(format!("gen/{:02}/{d}", d % 16));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in 0..FILES_PER_DIR {
+            std::fs::write(dir.join(format!("file-{f}.txt")), f.to_string()).unwrap();
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::os::unix::fs::symlink(fixture.dir.path(), g.path.join("root-link")).unwrap();
+        let locked = g.path.join("gen/00/0");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    let root_lib = fixture.dir.path().join("src/lib.rs");
+    let neighbour = create(&backend, &fixture, "neighbour");
+
+    backend.prune(&g.name, g.id).unwrap();
+
+    assert!(!g.path.exists(), "prune left {}", g.path.display());
+    assert!(root_lib.exists(), "prune followed a symlink into Root");
+    assert!(
+        neighbour.path.join("src/lib.rs").exists(),
+        "prune removed another graft"
+    );
+    let left: Vec<_> = std::fs::read_dir(backend.mounts())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(left, [std::ffi::OsString::from("neighbour")]);
+    backend.prune(&neighbour.name, neighbour.id).unwrap();
+}
