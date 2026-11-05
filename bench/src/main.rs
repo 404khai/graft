@@ -93,8 +93,9 @@ struct RunArgs {
     /// Methods to compare.
     #[arg(long, value_delimiter = ',', default_value = "graft,worktree,clone")]
     methods: Vec<String>,
-    /// Filesystem backends for the `graft` method. `fuse` (Linux) adds a
-    /// `graft-fuse` method alongside `graft` (reflink).
+    /// Filesystem backends for the `graft` method. `fuse` (Linux) and `nfs`
+    /// (macOS) add `graft-fuse` and `graft-nfs` methods alongside `graft`
+    /// (reflink).
     #[arg(long, value_delimiter = ',', default_value = "reflink")]
     backends: Vec<String>,
     /// Times to repeat the whole matrix.
@@ -185,7 +186,7 @@ fn estimate(
         "graft" if reflinks => n * (index + (1 << 20)) + node_modules,
         // Virtual grafts store nothing but metadata; layers are served from
         // the cache.
-        "graft-fuse" => n * (1 << 20) + node_modules,
+        "graft-fuse" | "graft-nfs" => n * (1 << 20) + node_modules,
         _ => n * (checkout + node_modules + index) + node_modules,
     }
 }
@@ -385,6 +386,7 @@ fn make_method(
     Ok(match name {
         "graft" => Box::new(GraftMethod::new(graft, fixture, cell, "reflink")?),
         "graft-fuse" => Box::new(GraftMethod::new(graft, fixture, cell, "fuse")?),
+        "graft-nfs" => Box::new(GraftMethod::new(graft, fixture, cell, "nfs")?),
         "worktree" => Box::new(WorktreeMethod::new(fixture, cell)),
         _ => Box::new(CloneMethod::new(fixture, cell)),
     })
@@ -402,7 +404,8 @@ fn expand_methods(methods: &[String], backends: &[String]) -> anyhow::Result<Vec
             match b.as_str() {
                 "reflink" => out.push("graft".to_owned()),
                 "fuse" => out.push("graft-fuse".to_owned()),
-                other => anyhow::bail!("unknown backend {other:?}; expected reflink or fuse"),
+                "nfs" => out.push("graft-nfs".to_owned()),
+                other => anyhow::bail!("unknown backend {other:?}; expected reflink, fuse or nfs"),
             }
         }
     }
@@ -417,7 +420,7 @@ fn run(args: &RunArgs) -> anyhow::Result<()> {
     };
     for m in &args.methods {
         anyhow::ensure!(
-            ["graft", "graft-fuse", "worktree", "clone"].contains(&m.as_str()),
+            ["graft", "graft-fuse", "graft-nfs", "worktree", "clone"].contains(&m.as_str()),
             "unknown method {m:?}"
         );
     }

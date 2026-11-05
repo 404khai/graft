@@ -13,17 +13,17 @@ use crate::server::Mounter;
 /// refuses with an explanation.
 #[must_use]
 pub fn platform() -> std::sync::Arc<dyn Mounter> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        std::sync::Arc::new(fuse::FuseMounter::default())
+        std::sync::Arc::new(virtual_mounter::VirtualMounter::default())
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         std::sync::Arc::new(Unsupported)
     }
 }
 
-/// Refuses every mount: virtual grafts need Linux until the macOS backend.
+/// Refuses every mount: virtual grafts need Linux (FUSE) or macOS (NFS).
 #[derive(Debug, Default)]
 pub struct Unsupported;
 
@@ -37,7 +37,7 @@ impl Mounter for Unsupported {
         _layers: Vec<LayerMount>,
     ) -> Result<PathBuf, String> {
         Err(format!(
-            "fuse grafts need Linux with FUSE; this is {} (use --backend reflink)",
+            "virtual grafts need Linux (fuse) or macOS (nfs); this is {} (use --backend reflink)",
             std::env::consts::OS
         ))
     }
@@ -64,8 +64,12 @@ impl Mounter for Unsupported {
         Err(format!("graft {graft} is not mounted"))
     }
 
+    fn sync(&self, _root: RootId, _graft: &GraftName) -> Result<(), String> {
+        Ok(())
+    }
+
     fn sweep(&self, _root: RootId, _mounts: &Path) -> Result<(u64, u64), String> {
-        // Only fuse grafts store blobs, and they need Linux.
+        // Only virtual grafts store blobs, and this platform has none.
         Ok((0, 0))
     }
 
@@ -76,27 +80,28 @@ impl Mounter for Unsupported {
     fn unmount_all(&self) {}
 }
 
-#[cfg(target_os = "linux")]
-mod fuse {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod virtual_mounter {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::{Mutex, PoisonError};
 
+    use graft_core::BackendKind;
     use graft_core::{GraftName, RootId};
     use graft_fs::view::LayerMount;
-    use graft_fs::{FsBackend, FuseBackend, GraftSpec, Unmounted};
+    use graft_fs::{FsBackend, GraftSpec, Unmounted, VirtualBackend};
     use graft_root::Repo;
     use graft_store::GraftRecord;
 
     use crate::server::Mounter;
 
-    /// One [`FuseBackend`] per Root.
+    /// One [`VirtualBackend`] per Root.
     #[derive(Debug, Default)]
-    pub(super) struct FuseMounter {
-        roots: Mutex<HashMap<RootId, FuseBackend>>,
+    pub(super) struct VirtualMounter {
+        roots: Mutex<HashMap<RootId, VirtualBackend>>,
     }
 
-    impl Mounter for FuseMounter {
+    impl Mounter for VirtualMounter {
         fn mount(
             &self,
             root: RootId,
@@ -105,10 +110,17 @@ mod fuse {
             graft: &GraftRecord,
             layers: Vec<LayerMount>,
         ) -> Result<PathBuf, String> {
+            let ours = BackendKind::platform_virtual();
+            if Some(graft.backend) != ours {
+                return Err(format!(
+                    "graft {} uses the {} backend, which this platform cannot mount (fuse needs Linux, nfs needs macOS)",
+                    graft.name, graft.backend
+                ));
+            }
             let mut roots = self.roots.lock().unwrap_or_else(PoisonError::into_inner);
             let backend = roots
                 .entry(root)
-                .or_insert_with(|| FuseBackend::new(mounts.to_owned()));
+                .or_insert_with(|| VirtualBackend::new(mounts.to_owned()));
             backend
                 .mount(
                     repo,
@@ -131,7 +143,7 @@ mod fuse {
             let mut roots = self.roots.lock().unwrap_or_else(PoisonError::into_inner);
             let backend = roots
                 .entry(root)
-                .or_insert_with(|| FuseBackend::new(mounts.to_owned()));
+                .or_insert_with(|| VirtualBackend::new(mounts.to_owned()));
             match backend.unmount(graft) {
                 Ok(how) => Ok(how.map(|h| h == Unmounted::Lazy)),
                 Err(e) => Err(e.to_string()),
@@ -142,7 +154,7 @@ mod fuse {
             let mut roots = self.roots.lock().unwrap_or_else(PoisonError::into_inner);
             let backend = roots
                 .entry(root)
-                .or_insert_with(|| FuseBackend::new(mounts.to_owned()));
+                .or_insert_with(|| VirtualBackend::new(mounts.to_owned()));
             let lazy = backend
                 .unmount(&graft.name)
                 .map_err(|e| e.to_string())?
@@ -171,9 +183,19 @@ mod fuse {
             let mut roots = self.roots.lock().unwrap_or_else(PoisonError::into_inner);
             roots
                 .entry(root)
-                .or_insert_with(|| FuseBackend::new(mounts.to_owned()))
+                .or_insert_with(|| VirtualBackend::new(mounts.to_owned()))
                 .sweep_blobs()
                 .map_err(|e| e.to_string())
+        }
+
+        fn sync(&self, root: RootId, graft: &GraftName) -> Result<(), String> {
+            let roots = self.roots.lock().unwrap_or_else(PoisonError::into_inner);
+            match roots.get(&root) {
+                Some(backend) if backend.mounted().contains(graft) => {
+                    backend.sync(graft).map_err(|e| e.to_string())
+                }
+                _ => Ok(()),
+            }
         }
 
         fn mounts(&self) -> Vec<(RootId, GraftName, PathBuf)> {

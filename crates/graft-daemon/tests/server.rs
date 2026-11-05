@@ -71,6 +71,14 @@ impl Mounter for Fake {
         Ok(())
     }
 
+    fn sync(&self, _root: RootId, graft: &GraftName) -> Result<(), String> {
+        self.actors
+            .lock()
+            .unwrap()
+            .push((format!("sync {graft}"), None));
+        Ok(())
+    }
+
     fn sweep(&self, _root: RootId, _mounts: &Path) -> Result<(u64, u64), String> {
         Ok((2, 10))
     }
@@ -227,6 +235,8 @@ fn serves_the_protocol_and_shuts_down() {
         *fake.actors.lock().unwrap(),
         [("virt".to_owned(), Some("run-1".to_owned()))]
     );
+    c.sync(&env.root, &virt).unwrap();
+    assert_eq!(fake.actors.lock().unwrap().last().unwrap().0, "sync virt");
     let swept = c.gc(&env.root).unwrap();
     assert_eq!((swept.blobs, swept.bytes), (2, 10));
     let u = c.unmount(&env.root, &virt).unwrap();
@@ -332,4 +342,31 @@ fn refuses_a_run_directory_others_can_read() {
         err.to_string().contains("accessible by other users"),
         "{err}"
     );
+}
+
+/// A `$GRAFT_HOME` too deep for a Unix socket path still works.
+#[test]
+fn serves_a_deep_home() {
+    let tmp = tempfile::tempdir().unwrap();
+    let deep = tmp.path().join("x".repeat(120));
+    std::fs::create_dir(&deep).unwrap();
+    let home = GraftHome::from_path(deep).unwrap();
+    let server = start(&home, Arc::new(Fake::default()));
+    let socket = paths::socket(&home);
+    assert!(
+        socket.starts_with(paths::socket_dir(&home)),
+        "{}",
+        socket.display()
+    );
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(paths::socket_dir(&home))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+    Client::connect(&home).unwrap().shutdown().unwrap();
+    server.join().unwrap().unwrap();
+    assert!(!socket.exists());
 }

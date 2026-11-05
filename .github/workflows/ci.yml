@@ -124,5 +124,23 @@ jobs:
       - run: cargo build --workspace --locked
       - run: cargo test --locked -p graft-fs --features fuse-tests --test fuse_backend
       - run: cargo test --locked -p graft-cli --features fuse-tests --test e2e virtual_grafts
-      - name: Medium fixture builds and tests inside a fuse graft
-        run: scripts/fuse-medium-fixture.sh "$RUNNER_TEMP/medium"
+      - name: Medium fixture builds and tests inside a virtual graft
+        run: scripts/virtual-medium-fixture.sh "$RUNNER_TEMP/medium"
+
+  nfs:
+    name: nfs tests (macos)
+    runs-on: macos-latest
+    env:
+      GRAFT_TEST_NFS: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Check mount_nfs is usable without sudo
+        run: ls -l /sbin/mount_nfs && id -u
+      - run: cargo build --workspace --locked
+      # Each test mounts and starts graftd; run them one at a time.
+      - run: cargo test --locked -p graft-fs --features nfs-tests --test nfs_backend -- --test-threads=1
+      - run: cargo test --locked -p graft-cli --features nfs-tests --test e2e virtual_grafts -- --test-threads=1
+      - name: Medium fixture builds and tests inside a virtual graft
+        run: scripts/virtual-medium-fixture.sh "$RUNNER_TEMP/medium"

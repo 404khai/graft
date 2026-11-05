@@ -1,7 +1,9 @@
-//! Virtual (FUSE) grafts and graftd, driven through the `graft` binary.
+//! Virtual grafts (FUSE on Linux, NFS on macOS) and graftd, driven through
+//! the `graft` binary.
 //!
-//! Tests that mount need Linux, `--features fuse-tests` and
-//! `GRAFT_TEST_FUSE=1`. The rest run everywhere.
+//! Tests that mount need Linux with `--features fuse-tests` and
+//! `GRAFT_TEST_FUSE=1`, or macOS with `--features nfs-tests` and
+//! `GRAFT_TEST_NFS=1`. The rest run everywhere.
 
 use std::path::{Path, PathBuf};
 
@@ -51,7 +53,7 @@ fn rejects_an_unknown_backend() {
     graft(home.path())
         .current_dir(repo.path())
         .args(["new", "x"])
-        .env("GRAFT_FS", "nfs")
+        .env("GRAFT_FS", "zfs")
         .assert()
         .failure()
         .stderr(predicate::str::contains("GRAFT_FS"))
@@ -89,7 +91,7 @@ fn fuse_grafts_are_refused_off_linux_and_leave_nothing() {
         .args(["new", "v", "--backend", "fuse"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("need Linux"));
+        .stderr(predicate::str::contains("fuse needs Linux"));
     graft_d(home.path())
         .current_dir(repo.path())
         .arg("ls")
@@ -110,7 +112,10 @@ fn fuse_grafts_are_refused_off_linux_and_leave_nothing() {
     assert!(refs.stdout.is_empty(), "a failed graft new left a pin ref");
 }
 
-#[cfg(all(feature = "fuse-tests", target_os = "linux"))]
+#[cfg(any(
+    all(feature = "fuse-tests", target_os = "linux"),
+    all(feature = "nfs-tests", target_os = "macos")
+))]
 #[allow(clippy::print_stderr)] // Timings and skipped comparisons belong in CI logs.
 mod fuse {
     use std::path::Path;
@@ -122,11 +127,23 @@ mod fuse {
     use super::{Daemon, graft_d};
     use crate::git;
 
+    /// This platform's virtual backend.
+    const BACKEND: &str = if cfg!(target_os = "linux") {
+        "fuse"
+    } else {
+        "nfs"
+    };
+
     fn require_fuse() {
+        let var = if cfg!(target_os = "linux") {
+            "GRAFT_TEST_FUSE"
+        } else {
+            "GRAFT_TEST_NFS"
+        };
         assert_eq!(
-            std::env::var("GRAFT_TEST_FUSE").as_deref(),
+            std::env::var(var).as_deref(),
             Ok("1"),
-            "fuse-tests needs GRAFT_TEST_FUSE=1 and a usable /dev/fuse"
+            "virtual graft tests need {var}=1 and a mountable {BACKEND}"
         );
     }
 
@@ -141,7 +158,7 @@ mod fuse {
     fn new_fuse(home: &Path, repo: &Path, name: &str) -> std::path::PathBuf {
         graft_d(home)
             .current_dir(repo)
-            .args(["new", name, "--backend", "fuse"])
+            .args(["new", name, "--backend", BACKEND])
             .assert()
             .success()
             .stdout(predicate::str::contains("virtual"));
@@ -300,6 +317,12 @@ mod fuse {
         // A file still open for writing when the daemon dies.
         let mut open = std::fs::File::create(path.join("open.txt")).unwrap();
         open.write_all(b"written before the crash\n").unwrap();
+        // The macOS NFS client may keep writes in its own cache until close
+        // or fsync; fsync sends them to graftd, which has not journaled them
+        // yet when it is killed. (On FUSE writes reach graftd at once, and an
+        // fsync would journal the file, skipping the recovery path.)
+        #[cfg(target_os = "macos")]
+        open.sync_data().unwrap();
         kill9(&daemon_pid(home.path()));
         drop(open);
         graft_d(home.path())
@@ -373,7 +396,7 @@ mod fuse {
             .args(["prune", "busy"])
             .assert()
             .success()
-            .stderr(predicate::str::contains("unmounted lazily"));
+            .stderr(predicate::str::contains("was in use, so it was unmounted"));
         assert!(!path.exists());
         drop(open);
     }

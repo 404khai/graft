@@ -65,6 +65,8 @@ impl Errno {
     pub const ENOTEMPTY: Self = Self(libc::ENOTEMPTY);
     /// Not supported.
     pub const ENOTSUP: Self = Self(libc::ENOTSUP);
+    /// Not ready yet; try again.
+    pub const EAGAIN: Self = Self(libc::EAGAIN);
 }
 
 impl From<&io::Error> for Errno {
@@ -158,6 +160,10 @@ pub struct Journal {
     /// Creates `.git` (in `dir/git`) on first use. `None` means the graft
     /// has no `.git`.
     pub git_init: Option<GitInit>,
+    /// Build `.git` on a background thread, answering `EAGAIN` meanwhile,
+    /// instead of making the first caller wait (for NFS, whose client
+    /// times out on slow calls).
+    pub git_in_background: bool,
 }
 
 impl std::fmt::Debug for Journal {
@@ -328,24 +334,79 @@ impl std::fmt::Debug for WriteLock<'_> {
 /// The `.git` of a writable view: a real directory, created on first use.
 pub(crate) struct GitDir {
     pub(crate) dir: PathBuf,
+    inner: Arc<GitBuild>,
+    /// Build in the background and answer `EAGAIN` until done (NFS, whose
+    /// client would time out waiting); otherwise build while the caller
+    /// waits (FUSE).
+    background: bool,
+}
+
+struct GitBuild {
+    dir: PathBuf,
     init: GitInit,
     ready: OnceLock<Result<(), String>>,
+    started: AtomicBool,
+}
+
+impl GitBuild {
+    fn build(&self) -> Result<(), String> {
+        // The index is written last, so a directory without one is a build
+        // a crash interrupted: rebuild it. A finished one, with any commits
+        // made in it, is never touched.
+        if self.dir.join("index").is_file() {
+            return Ok(());
+        }
+        if self.dir.exists() {
+            std::fs::remove_dir_all(&self.dir).map_err(|e| e.to_string())?;
+        }
+        (self.init)(&self.dir)
+    }
 }
 
 impl GitDir {
-    /// Creates the directory if it was not yet.
+    fn new(dir: PathBuf, init: GitInit, background: bool) -> Self {
+        Self {
+            inner: Arc::new(GitBuild {
+                dir: dir.clone(),
+                init,
+                ready: OnceLock::new(),
+                started: AtomicBool::new(false),
+            }),
+            dir,
+            background,
+        }
+    }
+
+    /// Creates the directory if it was not yet. In background mode, returns
+    /// `EAGAIN` while it is being built.
     pub(crate) fn ensure(&self) -> Result<&Path, Errno> {
-        self.ready
-            .get_or_init(|| {
-                if self.dir.join("HEAD").is_file() {
-                    return Ok(());
+        let ready = if self.background {
+            if let Some(r) = self.inner.ready.get() {
+                r
+            } else {
+                if !self.inner.started.swap(true, Ordering::AcqRel) {
+                    let inner = Arc::clone(&self.inner);
+                    let spawned = std::thread::Builder::new()
+                        .name("graft-git-init".to_owned())
+                        .spawn(move || {
+                            let _ = inner.ready.set(inner.build());
+                        });
+                    if let Err(e) = spawned {
+                        let _ = self.inner.ready.set(Err(e.to_string()));
+                    }
                 }
-                // A half-built directory from a crash is rebuilt.
-                if self.dir.exists() {
-                    std::fs::remove_dir_all(&self.dir).map_err(|e| e.to_string())?;
-                }
-                (self.init)(&self.dir)
-            })
+                return match self.inner.ready.get() {
+                    Some(r) => r
+                        .as_ref()
+                        .map(|()| self.dir.as_path())
+                        .map_err(|e| eio("creating the graft's .git", e)),
+                    None => Err(Errno::EAGAIN),
+                };
+            }
+        } else {
+            self.inner.ready.get_or_init(|| self.inner.build())
+        };
+        ready
             .as_ref()
             .map_err(|e| eio("creating the graft's .git", e))?;
         Ok(&self.dir)
@@ -484,11 +545,9 @@ impl GraftView {
         })?;
         *view.delta.get_mut().unwrap_or_else(PoisonError::into_inner) =
             journal.store.delta(journal.graft)?;
-        view.git = journal.git_init.map(|init| GitDir {
-            dir: journal.dir.join("git"),
-            init,
-            ready: OnceLock::new(),
-        });
+        view.git = journal
+            .git_init
+            .map(|init| GitDir::new(journal.dir.join("git"), init, journal.git_in_background));
         view.blobs = Some(journal.blobs);
         view.writer = Some(Mutex::new(Writer {
             store: journal.store,

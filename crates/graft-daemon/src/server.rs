@@ -5,7 +5,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use graft_core::{BackendKind, GraftHome, GraftName, GraftState, RootId};
+use graft_core::{GraftHome, GraftName, GraftState, RootId};
 use graft_fs::view::LayerMount;
 use graft_root::Repo;
 use graft_store::{GraftRecord, Store};
@@ -20,7 +20,7 @@ use crate::protocol::{
 };
 
 /// What `graftd` needs from a filesystem backend. Implemented over
-/// `FuseBackend` on Linux; tests substitute a fake.
+/// `VirtualBackend` (FUSE on Linux, NFS on macOS); tests substitute a fake.
 pub trait Mounter: Send + Sync {
     /// Mounts graft `graft` of Root `root` under `mounts`, reading from
     /// `repo`, with `layers` overlaid. Returns the mount point.
@@ -79,6 +79,14 @@ pub trait Mounter: Send + Sync {
     ///
     /// A message for the client.
     fn sweep(&self, root: RootId, mounts: &Path) -> Result<(u64, u64), String>;
+
+    /// Journals every write a mounted graft has received so far. A no-op if
+    /// it is not mounted.
+    ///
+    /// # Errors
+    ///
+    /// A message for the client.
+    fn sync(&self, root: RootId, graft: &GraftName) -> Result<(), String>;
 
     /// Every mounted graft.
     fn mounts(&self) -> Vec<(RootId, GraftName, PathBuf)>;
@@ -149,6 +157,31 @@ pub fn ensure_run_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Creates the short-socket directory (mode `0700`), refusing one that is a
+/// symlink, owned by someone other than `$GRAFT_HOME`'s owner, or
+/// accessible by others.
+///
+/// # Errors
+///
+/// If it cannot be created or fails a check.
+pub fn ensure_socket_dir(dir: &Path, home: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    let meta = std::fs::symlink_metadata(dir)?;
+    let owner = std::fs::metadata(home)?.uid();
+    if !meta.is_dir() || meta.uid() != owner || meta.permissions().mode() & 0o077 != 0 {
+        return Err(io::Error::other(format!(
+            "{} must be a directory owned by uid {owner} with mode 0700",
+            dir.display()
+        )));
+    }
+    Ok(())
+}
+
 struct State {
     home: GraftHome,
     mounter: Arc<dyn Mounter>,
@@ -176,9 +209,9 @@ fn mount_graft(state: &State, root: RootId, name: &GraftName) -> Result<PathBuf,
         .graft(name)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("no graft named {name}"))?;
-    if graft.backend != BackendKind::Fuse {
+    if !graft.backend.is_virtual() {
         return Err(format!(
-            "graft {name} uses the {} backend; graftd only mounts fuse grafts",
+            "graft {name} uses the {} backend; graftd only mounts virtual (fuse or nfs) grafts",
             graft.backend
         ));
     }
@@ -215,7 +248,7 @@ fn prune_graft(state: &State, root: RootId, name: &GraftName) -> Result<bool, St
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("no graft named {name}"))?,
     };
-    if graft.backend != BackendKind::Fuse {
+    if !graft.backend.is_virtual() {
         return Err(format!("graft {name} uses the {} backend", graft.backend));
     }
     state.mounter.prune(root, &root_dir.join("mounts"), &graft)
@@ -240,7 +273,7 @@ fn remount_all(state: &State) -> usize {
             }
         };
         for g in grafts {
-            if g.backend == BackendKind::Fuse && g.state == GraftState::Live {
+            if g.backend.is_virtual() && g.state == GraftState::Live {
                 match mount_graft(state, record.id, &g.name) {
                     Ok(path) => {
                         tracing::info!(graft = %g.name, path = %path.display(), "remounted");
@@ -329,6 +362,14 @@ async fn handle(
             pid: std::process::id(),
         }),
         "mount" | "unmount" | "prune" => mount_like(state, method, p).await,
+        "sync" => {
+            let (root, name) = graft_params(p)?;
+            let s = Arc::clone(state);
+            blocking(move || s.mounter.sync(root, &name))
+                .await
+                .map_err(failed)?;
+            value(&())
+        }
         "set_actor" => {
             let a: ActorParams = serde_json::from_value(p).map_err(invalid)?;
             let (root, name) = parse_ref(&GraftRef {
@@ -460,6 +501,9 @@ pub async fn serve(home: GraftHome, mounter: Arc<dyn Mounter>) -> Result<(), Ser
     }
     // Holding the lock, any existing socket is stale.
     let socket = paths::socket(&home);
+    if let Some(dir) = socket.parent().filter(|d| *d != run) {
+        ensure_socket_dir(dir, home.path()).map_err(io_err("preparing", dir))?;
+    }
     match std::fs::remove_file(&socket) {
         Ok(()) => {}
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}

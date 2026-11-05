@@ -16,7 +16,27 @@ use crate::backend::{CreateReport, FsBackend, FsError, GraftSpec, ReflinkBackend
 use crate::clone::CloneReport;
 use crate::view::{GitInit, GraftView, Journal, LayerMount};
 
-pub use crate::fuse::Unmounted;
+#[cfg(target_os = "linux")]
+use crate::fuse as mechanism;
+#[cfg(target_os = "macos")]
+use crate::nfs as mechanism;
+
+/// How an unmount went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unmounted {
+    /// The mount is gone.
+    Clean,
+    /// The mount was busy and was detached anyway: lazily on Linux, so
+    /// processes with open files keep them until they close them; forcibly
+    /// on macOS, so they get errors.
+    Lazy,
+}
+
+/// The virtual backend kind this platform mounts.
+#[cfg(target_os = "linux")]
+const KIND: BackendKind = BackendKind::Fuse;
+#[cfg(target_os = "macos")]
+const KIND: BackendKind = BackendKind::Nfs;
 
 fn io_err<'a>(action: &'static str, path: &'a Path) -> impl FnOnce(io::Error) -> FsError + 'a {
     move |source| FsError::Io {
@@ -29,14 +49,14 @@ fn io_err<'a>(action: &'static str, path: &'a Path) -> impl FnOnce(io::Error) ->
 /// Grafts served lazily from Root's object store over FUSE. The backend
 /// owns its mounts: they live as long as it does (in `graftd`).
 #[derive(Debug)]
-pub struct FuseBackend {
+pub struct VirtualBackend {
     dirs: ReflinkBackend,
     /// `$GRAFT_HOME/roots/<root-id>`: the store, blobs and per-graft state.
     root_dir: PathBuf,
-    mounted: Mutex<HashMap<GraftName, crate::fuse::Mounted>>,
+    mounted: Mutex<HashMap<GraftName, mechanism::Mounted>>,
 }
 
-impl FuseBackend {
+impl VirtualBackend {
     /// A backend mounting grafts under `mounts`
     /// (`$GRAFT_HOME/roots/<root-id>/mounts`).
     #[must_use]
@@ -69,6 +89,24 @@ impl FuseBackend {
             .map(|m| Arc::clone(m.view()))
     }
 
+    /// Journals every write the graft has received so far (NFS defers
+    /// journaling until a file goes idle; FUSE journals on close).
+    ///
+    /// # Errors
+    ///
+    /// [`FsError::NotMounted`], or the errno of a failed journal write.
+    pub fn sync(&self, name: &GraftName) -> Result<()> {
+        let map = self.mounted.lock().unwrap_or_else(PoisonError::into_inner);
+        let m = map
+            .get(name)
+            .ok_or_else(|| FsError::NotMounted { name: name.clone() })?;
+        m.sync().map_err(|e| FsError::Io {
+            action: "journaling writes in",
+            path: m.path().to_owned(),
+            source: io::Error::from_raw_os_error(e.0),
+        })
+    }
+
     /// Sets the actor recorded on the graft's following ops.
     ///
     /// # Errors
@@ -89,6 +127,7 @@ impl FuseBackend {
     ///
     /// [`FsError::NotMounted`], plus read and git errors.
     pub fn diffs(&self, name: &GraftName) -> Result<Vec<FileDiff>> {
+        self.sync(name)?;
         let view = self
             .view(name)
             .ok_or_else(|| FsError::NotMounted { name: name.clone() })?;
@@ -170,6 +209,7 @@ impl FuseBackend {
                 graft: spec.id,
                 dir: self.graft_dir(spec.id),
                 git_init: Some(git_init(&objects, spec, &layers)),
+                git_in_background: cfg!(target_os = "macos"),
             };
             let view = GraftView::writable(
                 objects,
@@ -179,7 +219,7 @@ impl FuseBackend {
                 owner.gid(),
                 journal,
             )?;
-            crate::fuse::mount(Arc::new(view), &target).map_err(io_err("mounting", &target))
+            mechanism::mount(Arc::new(view), &target).map_err(io_err("mounting", &target))
         })();
         match mounted {
             Ok(m) => {
@@ -210,7 +250,7 @@ impl FuseBackend {
             .remove(name);
         let Some(m) = taken else {
             let path = self.path(name);
-            return crate::fuse::detach_stale(&path).map_err(io_err("detaching", &path));
+            return mechanism::detach_stale(&path).map_err(io_err("detaching", &path));
         };
         let path = m.path().to_owned();
         m.unmount().map(Some).map_err(io_err("unmounting", &path))
@@ -253,7 +293,7 @@ fn git_init(objects: &ObjectStore, spec: &GraftSpec<'_>, layers: &[LayerMount]) 
     })
 }
 
-impl FuseBackend {
+impl VirtualBackend {
     /// Records the Root and graft in the store if they are not there yet,
     /// for grafts mounted without the CLI (tests and [`FsBackend::create`]).
     /// A no-op in graftd, which only mounts recorded grafts.
@@ -271,15 +311,15 @@ impl FuseBackend {
             Store::create(&self.root_dir, &record)?.0
         };
         if store.graft_by_id(spec.id)?.is_none() {
-            store.create_graft_with_id(spec.id, spec.name, spec.base, BackendKind::Fuse)?;
+            store.create_graft_with_id(spec.id, spec.name, spec.base, KIND)?;
         }
         Ok(())
     }
 }
 
-impl FsBackend for FuseBackend {
+impl FsBackend for VirtualBackend {
     fn kind(&self) -> &'static str {
-        "fuse"
+        KIND.as_str()
     }
 
     fn create(&self, root: &Repo, spec: &GraftSpec<'_>) -> Result<CreateReport> {
@@ -334,7 +374,7 @@ impl FsBackend for FuseBackend {
     }
 }
 
-impl Drop for FuseBackend {
+impl Drop for VirtualBackend {
     fn drop(&mut self) {
         self.unmount_all();
     }

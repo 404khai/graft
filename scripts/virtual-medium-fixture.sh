@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Builds and tests the medium benchmark fixture inside a FUSE graft
-# (AGENTS.md Phase 6): npm installs its layer, `npm test` runs in the graft,
-# then an edit inside the graft is tested again and shows in `graft status`.
+# Builds and tests the medium benchmark fixture inside a virtual graft
+# (AGENTS.md Phases 6 and 7): npm installs its layer, `npm test` runs in the
+# graft, then an edit inside the graft is tested again and shows in
+# `graft status`. Uses FUSE on Linux and NFS on macOS.
 #
-#   scripts/fuse-medium-fixture.sh <work-dir>
+#   scripts/virtual-medium-fixture.sh <work-dir>
 #
-# Needs Linux with FUSE, Node and a built workspace (target/debug).
+# Needs Node and a built workspace (target/debug).
 set -euo pipefail
 
 work=${1:?usage: $0 <work-dir>}
@@ -20,14 +21,20 @@ cd "$fixture"
 "$bin/graft" trust
 trap '"$bin/graft" daemon stop >/dev/null 2>&1 || true' EXIT
 
-ms() { echo $(( ($(date +%s%N) - $1) / 1000000 )); }
-start=$(date +%s%N)
-"$bin/graft" new medium --backend fuse
+case "$(uname -s)" in
+    Linux) backend=fuse ;;
+    Darwin) backend=nfs ;;
+    *) echo "no virtual backend on $(uname -s)" >&2; exit 1 ;;
+esac
+now() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
+ms() { echo $(( $(now) - $1 )); }
+start=$(now)
+"$bin/graft" new medium --backend "$backend"
 graft_dir=$("$bin/graft" path medium)
 echo "graft new: $(ms "$start") ms"
 
 cd "$graft_dir"
-start=$(date +%s%N)
+start=$(now)
 npm test
 echo "npm test in the graft: $(ms "$start") ms"
 
@@ -47,4 +54,4 @@ cd "$fixture"
 "$bin/graft" prune medium --force
 left=$(find "$GRAFT_HOME"/roots/*/blobs "$GRAFT_HOME"/roots/*/grafts -type f 2>/dev/null || true)
 test -z "$left" || { echo "prune left: $left" >&2; exit 1; }
-echo "medium fixture builds and tests inside a fuse graft"
+echo "medium fixture builds and tests inside a $backend graft"

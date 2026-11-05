@@ -14,6 +14,9 @@ privileged-tests = []
 # Tests that mount FUSE filesystems (Linux, /dev/fuse and fusermount3).
 # Also require $GRAFT_TEST_FUSE=1; see tests/fuse_backend.rs.
 fuse-tests = []
+# Tests that mount NFS loopback grafts (macOS). Also require
+# $GRAFT_TEST_NFS=1; see tests/nfs_backend.rs.
+nfs-tests = []
 
 [dependencies]
 graft-core.workspace = true
@@ -26,6 +29,11 @@ tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 fuser.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+async-trait.workspace = true
+nfsserve.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true

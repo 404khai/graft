@@ -20,6 +20,7 @@ use fuser::{
 };
 
 use crate::view::{Attr, Errno, GraftView, NodeKind};
+use crate::virtual_backend::Unmounted;
 use crate::write::{OpenMode, SetAttr};
 
 /// How long the kernel may cache entries and attributes. Every change to a
@@ -440,16 +441,6 @@ impl std::fmt::Debug for Mounted {
     }
 }
 
-/// How an unmount went.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Unmounted {
-    /// The mount is gone.
-    Clean,
-    /// The mount was busy and was detached lazily: processes with open
-    /// files keep them until they close them.
-    Lazy,
-}
-
 fn fusermount() -> std::ffi::OsString {
     if let Some(path) = std::env::var_os("FUSERMOUNT_PATH") {
         return path;
@@ -549,6 +540,13 @@ impl Mounted {
     /// The view it serves.
     pub(crate) fn view(&self) -> &Arc<GraftView> {
         &self.view
+    }
+
+    /// Journals pending writes. The kernel flushes FUSE files on close, so
+    /// there is nothing to do.
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)] // Same API as the NFS mount.
+    pub(crate) fn sync(&self) -> Result<(), Errno> {
+        Ok(())
     }
 
     /// The mount point.

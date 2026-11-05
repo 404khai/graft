@@ -306,6 +306,16 @@ impl Client {
         )
     }
 
+    /// Journals every write a mounted graft has received so far (NFS grafts
+    /// journal a file only once it goes idle).
+    ///
+    /// # Errors
+    ///
+    /// As for [`Client::call`].
+    pub fn sync(&mut self, root: &RootId, graft: &GraftName) -> Result<(), ClientError> {
+        self.call("sync", &graft_ref(root, graft))
+    }
+
     /// Every mounted graft.
     ///
     /// # Errors

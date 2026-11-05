@@ -3,7 +3,7 @@
 # (results.csv, summary.md). AGENTS.md Phase 4.
 #
 #   bench/run.sh [--agents 1,4,8,16] [--fixtures small,medium,large]
-#                [--methods graft,worktree,clone] [--backends reflink,fuse] [--runs 3]
+#                [--methods graft,worktree,clone] [--backends reflink,fuse|nfs] [--runs 3]
 #                [--work DIR] [--image-size GIB] [--label NAME]
 #                [--machine "description"] [--margin-gib N]
 #

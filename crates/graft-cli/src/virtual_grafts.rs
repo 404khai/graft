@@ -14,13 +14,34 @@ use graft_store::registry::Located;
 /// added paths its ignore rules exclude, as git status does. The ignore
 /// rules are read through the mount at `mount`; if it cannot be read, the
 /// unfiltered changes are returned with a warning.
+/// Asks graftd to journal the graft's pending writes (NFS grafts journal a
+/// file only once it goes idle), so the delta read next is current.
+pub(crate) fn sync(
+    home: &graft_core::GraftHome,
+    located: &Located,
+    record: &GraftRecord,
+    warnings: &mut Vec<String>,
+) {
+    let Ok(mut client) = graft_daemon::Client::connect(home) else {
+        return;
+    };
+    if let Err(e) = client.sync(&located.record.id, &record.name) {
+        warnings.push(format!(
+            "graft {}: recent writes may be missing ({e})",
+            record.name
+        ));
+    }
+}
+
 pub(crate) fn diffs(
+    home: &graft_core::GraftHome,
     located: &Located,
     root_dir: &Path,
     mount: &Path,
     record: &GraftRecord,
     warnings: &mut Vec<String>,
 ) -> anyhow::Result<Vec<FileDiff>> {
+    sync(home, located, record, warnings);
     let objects = ObjectStore::open(&located.repo);
     let layers = graft_fs::layer_mounts(&located.store, root_dir, record.id)?;
     let delta = located.store.delta(record.id)?;
@@ -62,6 +83,7 @@ pub(crate) fn disk(
 /// Why pruning would lose work, if it would: changes against the base, or
 /// commits in the graft's `.git` that Root does not have.
 pub(crate) fn work_at_risk(
+    home: &graft_core::GraftHome,
     located: &Located,
     root_dir: &Path,
     mount: &Path,
@@ -69,7 +91,7 @@ pub(crate) fn work_at_risk(
 ) -> anyhow::Result<Option<String>> {
     let mut why = String::new();
     let mut warnings = Vec::new();
-    let changes = diffs(located, root_dir, mount, record, &mut warnings)?;
+    let changes = diffs(home, located, root_dir, mount, record, &mut warnings)?;
     if !changes.is_empty() {
         let shown: Vec<_> = changes
             .iter()

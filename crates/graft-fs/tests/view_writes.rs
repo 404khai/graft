@@ -67,6 +67,10 @@ impl Env {
     }
 
     fn view_with_git(&self, with_git: bool) -> GraftView {
+        self.view_with(with_git, false)
+    }
+
+    fn view_with(&self, with_git: bool, git_in_background: bool) -> GraftView {
         let objects = ObjectStore::open(&self.fixture.root());
         let base = self.fixture.base.clone();
         let git_init: Option<graft_fs::view::GitInit> = with_git.then(|| {
@@ -88,6 +92,7 @@ impl Env {
                 graft: self.graft,
                 dir: self.root_dir.join("grafts").join(self.graft.to_string()),
                 git_init,
+                git_in_background,
             },
         )
         .unwrap()
@@ -618,4 +623,47 @@ fn changes_come_from_the_delta_and_match_git_semantics() {
         ("src/lib.rs", Deleted),
     ];
     assert_eq!(got, want.map(|(p, k)| (p.to_owned(), k)));
+}
+
+/// NFS grafts build .git in the background: callers get EAGAIN (which the
+/// NFS client retries) until it is ready, never a long blocking call.
+#[test]
+fn git_can_be_built_in_the_background() {
+    let env = Env::new();
+    let v = env.view_with(true, true);
+    let first = v.lookup(ROOT_INO, OsStr::new(".git"));
+    assert!(first == Err(Errno::EAGAIN) || first.is_ok(), "{first:?}");
+    let started = std::time::Instant::now();
+    let attr = loop {
+        match v.lookup(ROOT_INO, OsStr::new(".git")) {
+            Ok(a) => break a,
+            Err(Errno::EAGAIN) => {
+                assert!(started.elapsed().as_secs() < 30, "never became ready");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(e) => panic!("{e:?}"),
+        }
+    };
+    assert_eq!(attr.kind, NodeKind::Directory);
+    assert_eq!(cat(&v, ".git/HEAD"), b"ref: refs/heads/graft/w\n");
+}
+
+/// A .git a crash left half-built (no index) is rebuilt; a finished one,
+/// with whatever was committed in it, is kept.
+#[test]
+fn a_half_built_git_is_rebuilt_and_a_finished_one_kept() {
+    let env = Env::new();
+    let git_dir = env
+        .root_dir
+        .join("grafts")
+        .join(env.graft.to_string())
+        .join("git");
+    std::fs::create_dir_all(&git_dir).unwrap();
+    std::fs::write(git_dir.join("HEAD"), "garbage").unwrap();
+    let v = env.view_with_git(true);
+    assert_eq!(cat(&v, ".git/HEAD"), b"ref: refs/heads/graft/w\n");
+    drop(v);
+    std::fs::write(git_dir.join("graft-kept"), "mine").unwrap();
+    let v = env.view_with_git(true);
+    assert_eq!(cat(&v, ".git/graft-kept"), b"mine");
 }

@@ -28,8 +28,8 @@ pub(crate) struct NewArgs {
     /// HEAD.
     #[arg(long, value_name = "REF")]
     from: Option<String>,
-    /// Filesystem backend: `reflink` (a real working tree) or `fuse` (a
-    /// virtual, read-only tree served by graftd; Linux). Defaults to
+    /// Filesystem backend: `reflink` (a real working tree), or a virtual
+    /// tree served by graftd: `fuse` on Linux, `nfs` on macOS. Defaults to
     /// `$GRAFT_FS`, then `fs.backend` in `config.toml`, then `reflink`.
     #[arg(long, value_name = "BACKEND")]
     backend: Option<BackendKind>,
@@ -137,7 +137,7 @@ fn daemon(home: &GraftHome, out: &mut Output) -> anyhow::Result<Client> {
 pub(crate) fn new(args: &NewArgs, env: &Environment) -> anyhow::Result<Output> {
     let name = parse_name(&args.name)?;
     if choose_backend(args, env)?.is_virtual() {
-        new_virtual(args, env, &name)
+        new_virtual(args, env, &name, choose_backend(args, env)?)
     } else {
         new_reflink(args, env, &name)
     }
@@ -250,7 +250,12 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
 
 /// Creates a FUSE graft: a record, a pin and layer references, then graftd
 /// mounts it. No files are written, whatever the size of the repo.
-fn new_virtual(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::Result<Output> {
+fn new_virtual(
+    args: &NewArgs,
+    env: &Environment,
+    name: &GraftName,
+    kind: BackendKind,
+) -> anyhow::Result<Output> {
     let Ctx {
         home,
         mut located,
@@ -270,7 +275,7 @@ fn new_virtual(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
     // Reach graftd before recording anything, so an unsupported platform
     // leaves nothing behind.
     let mut client = daemon(&home, &mut out)?;
-    let record = located.store.create_graft(name, &base, BackendKind::Fuse)?;
+    let record = located.store.create_graft(name, &base, kind)?;
     // Layers that are not cached yet are built in a throwaway reflink
     // checkout of the same base (ADR 0006).
     let builder = ReflinkBackend::new(backend.mounts().join(".layer-build"));
@@ -322,7 +327,7 @@ fn new_virtual(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
     located.store.set_state(record.id, GraftState::Live)?;
     let _ = writeln!(
         out.stdout,
-        "Created graft {name} at {} (base {}, virtual: served by graftd, read-only)",
+        "Created graft {name} at {} (base {}, virtual: served by graftd)",
         path.display(),
         base.short(7)
     );
@@ -384,9 +389,15 @@ pub(crate) fn ls(env: &Environment) -> anyhow::Result<Output> {
             let up = mounted.as_ref().is_some_and(|m| m.contains(&g.name));
             if up {
                 let root_dir = ctx.root_dir();
-                let changed =
-                    crate::virtual_grafts::diffs(located, &root_dir, &path, g, &mut out.warnings)
-                        .map_or_else(|e| format!("error: {e:#}"), |d| d.len().to_string());
+                let changed = crate::virtual_grafts::diffs(
+                    home,
+                    located,
+                    &root_dir,
+                    &path,
+                    g,
+                    &mut out.warnings,
+                )
+                .map_or_else(|e| format!("error: {e:#}"), |d| d.len().to_string());
                 let disk = crate::virtual_grafts::disk(located, &root_dir, g)
                     .map_or_else(|e| format!("error: {e:#}"), human_bytes);
                 (changed, disk)
@@ -462,8 +473,14 @@ fn status_one(
         short(record)
     );
     if record.backend.is_virtual() {
-        let diffs =
-            crate::virtual_grafts::diffs(&ctx.located, &ctx.root_dir(), &path, record, warnings)?;
+        let diffs = crate::virtual_grafts::diffs(
+            &ctx.home,
+            &ctx.located,
+            &ctx.root_dir(),
+            &path,
+            record,
+            warnings,
+        )?;
         if diffs.is_empty() {
             out.push_str("  nothing changed since base\n");
         }
@@ -532,6 +549,7 @@ pub(crate) fn diff(args: &NameArgs, env: &Environment) -> anyhow::Result<Output>
         daemon(&home, &mut out)?;
         let root_dir = home.root_dir(&located.record.id);
         let diffs = crate::virtual_grafts::diffs(
+            &home,
             &located,
             &root_dir,
             &backend.path(&name),
@@ -631,9 +649,13 @@ fn prune_virtual(ctx: &mut Ctx, record: &GraftRecord, force: bool) -> anyhow::Re
     let mut client = daemon(&ctx.home, &mut out)?;
     if record.state != GraftState::Pruned && !force {
         let mount = ctx.backend.path(name);
-        if let Some(why) =
-            crate::virtual_grafts::work_at_risk(&ctx.located, &ctx.root_dir(), &mount, record)?
-        {
+        if let Some(why) = crate::virtual_grafts::work_at_risk(
+            &ctx.home,
+            &ctx.located,
+            &ctx.root_dir(),
+            &mount,
+            record,
+        )? {
             bail!(
                 "graft {name} has work that pruning would lose:\n{why}\
                  Commit it and integrate it into Root, or rerun with --force to discard it."
@@ -648,7 +670,12 @@ fn prune_virtual(ctx: &mut Ctx, record: &GraftRecord, force: bool) -> anyhow::Re
     let pruned = client.prune(&ctx.located.record.id, name)?;
     if pruned.lazy {
         out.warnings.push(format!(
-            "graft {name} was in use, so it was unmounted lazily: processes with open files keep them until they close them"
+            "graft {name} was in use, so it was {}",
+            if cfg!(target_os = "macos") {
+                "unmounted forcibly: processes with open files in it get errors"
+            } else {
+                "unmounted lazily: processes with open files keep them until they close them"
+            }
         ));
     }
     ReflinkBackend::new(ctx.backend.mounts().join(".layer-build")).prune(name, record.id)?;
@@ -671,12 +698,16 @@ pub(crate) fn log(args: &LogArgs, env: &Environment) -> anyhow::Result<Output> {
     let name = parse_name(&args.name)?;
     let ctx = open(env)?;
     let record = find(&ctx.located.store, &name)?;
+    let mut warnings = Vec::new();
+    if record.backend.is_virtual() {
+        crate::virtual_grafts::sync(&ctx.home, &ctx.located, &record, &mut warnings);
+    }
     let records = ctx.located.store.op_log(record.id)?;
     if records.is_empty() {
         let note = if record.backend.is_virtual() {
             "nothing written yet"
         } else {
-            "only virtual (fuse) grafts keep an op log"
+            "only virtual (fuse or nfs) grafts keep an op log"
         };
         return Ok(Output::stdout(format!("graft {name}: {note}\n")));
     }
@@ -703,5 +734,8 @@ pub(crate) fn log(args: &LogArgs, env: &Environment) -> anyhow::Result<Output> {
         }
         out.push('\n');
     }
-    Ok(Output::stdout(out))
+    Ok(Output {
+        stdout: out,
+        warnings,
+    })
 }
