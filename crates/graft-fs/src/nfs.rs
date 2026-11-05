@@ -391,13 +391,23 @@ impl NFSFileSystem for NfsFs {
     }
 }
 
+/// `path` with its parent resolved to a real path, without touching `path`
+/// itself (which could hang on a dead server).
+fn real_path(path: &Path) -> PathBuf {
+    match (path.parent().and_then(|p| p.canonicalize().ok()), path.file_name()) {
+        (Some(parent), Some(name)) => parent.join(name),
+        _ => path.to_owned(),
+    }
+}
+
 /// Whether `path` is currently a mount point, from the mount table (never
 /// touching the path, which could hang on a dead server).
 fn is_mounted(path: &Path) -> bool {
     let Ok(out) = Command::new("/sbin/mount").output() else {
         return false;
     };
-    let needle = format!(" on {} (", path.display());
+    // The mount table shows real paths (/private/var, not /var).
+    let needle = format!(" on {} (", real_path(path).display());
     String::from_utf8_lossy(&out.stdout)
         .lines()
         .any(|l| l.contains(&needle))
@@ -409,7 +419,7 @@ fn umount(path: &Path, force: bool) -> io::Result<bool> {
     if force {
         cmd.arg("-f");
     }
-    let out = cmd.arg(path).output()?;
+    let out = cmd.arg(real_path(path)).output()?;
     if out.status.success() {
         return Ok(true);
     }
