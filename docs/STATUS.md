@@ -42,6 +42,7 @@ Status: done (#3, #4)
   - `grafts::grafts_do_not_take_branch_locks`: Root and two grafts all have `main` checked out and commit on it; Root's branches and worktree list are untouched.
 - [x] Prune leaves no files, mounts or DB rows behind (verified by test).
   - `grafts::prune_leaves_nothing_behind`: no working tree, empty mounts dir, no rows, no `refs/graft/*`.
+  - Removal retries a bounded number of times when a pass leaves a directory not empty (seen on the macOS runner with the 200k-file large fixture), and otherwise names what is left: `backend::tests::*`, `reflink_backend::prunes_a_graft_with_many_files_and_nothing_else` (20,000 files, a read-only directory, a symlink to Root).
 - [x] Copy fallback works on ext4 and prints a single clear warning.
   - `grafts::warns_exactly_once_when_copying_instead_of_reflinking` passes on the Ubuntu runner (ext4); the `bench` run on an ext4 loop mount printed exactly one warning and copied the 1 GiB tree correctly (`graft ls`: 1.0 GiB). `warns_once_when_graft_home_is_on_another_filesystem` covers the cross-filesystem case.
 
