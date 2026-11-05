@@ -91,10 +91,12 @@ jobs:
         run: |
           bench/run.sh --work "$RUNNER_TEMP/graft-bench" --label macos-arm64-apfs \
             --fixtures small,medium --runs "${{ inputs.runs }}" --agents "${{ inputs.agents }}" \
+            --backends reflink,nfs \
             --machine "GitHub Actions macos-latest runner"
           mv bench/results/macos-arm64-apfs bench/results/macos-arm64-apfs-small-medium
           bench/run.sh --work "$RUNNER_TEMP/graft-bench" --label macos-arm64-apfs \
             --fixtures large --runs "${{ inputs.runs }}" --agents 1,4 \
+            --backends reflink,nfs \
             --machine "GitHub Actions macos-latest runner (large: 1 and 4 agents only)"
           mv bench/results/macos-arm64-apfs bench/results/macos-arm64-apfs-large
       - name: Summary
