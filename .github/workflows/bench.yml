@@ -67,6 +67,10 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      # Committed results would otherwise mix into this run's output (a stale
+      # NOTE.md, `mv` into an existing directory) and into the gate below.
+      - name: Start from an empty results directory
+        run: find bench/results -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
       # XFS: reflinks like btrfs, but free space is reported exactly (btrfs
       # allocates in chunks, which makes free-space deltas jump).
       - name: Mount a dedicated XFS volume on the large /mnt disk (Linux)
@@ -138,6 +142,10 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      # Committed results would otherwise mix into this run's output (a stale
+      # NOTE.md, `mv` into an existing directory) and into the gate below.
+      - name: Start from an empty results directory
+        run: find bench/results -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
       - name: Mount a dedicated volume (Linux)
         if: runner.os == 'Linux'
         run: |
