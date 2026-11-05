@@ -309,3 +309,40 @@ fn no_appledouble_files_appear() {
     assert_eq!(changes, ["plain.txt"]);
     backend.prune(&g.name, g.id).unwrap();
 }
+
+/// Regression: `rm -rf` reads a page of entries, removes them, then asks
+/// for the next page with a cookie naming an entry that no longer exists.
+/// Resuming by position answered `NFS3ERR_BAD_COOKIE`, and removing a directory of
+/// thousands of new files failed with ENOTEMPTY.
+#[test]
+fn removes_large_directories_page_by_page() {
+    require_nfs();
+    let tmp = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new_in(tmp.path());
+    let backend = backend_in(tmp.path());
+    let g = create(&backend, &fixture, "rmrf");
+    for tool in ["std", "rm"] {
+        let dir = g.path.join(format!("many-{tool}"));
+        for d in 0..4 {
+            let sub = dir.join(format!("d{d}"));
+            std::fs::create_dir_all(&sub).unwrap();
+            for f in 0..1_500 {
+                std::fs::write(sub.join(format!("f{f:04}")), b"x").unwrap();
+            }
+        }
+        assert_eq!(walk_files(&dir).len(), 6_000);
+        if tool == "std" {
+            std::fs::remove_dir_all(&dir).unwrap();
+        } else {
+            let out = Command::new("rm").arg("-rf").arg(&dir).output().unwrap();
+            assert!(
+                out.status.success(),
+                "rm -rf: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        assert!(!dir.exists(), "{tool}: directory left behind");
+    }
+    assert_eq!(backend.diff(&g.name, &fixture.base).unwrap(), Vec::new());
+    backend.prune(&g.name, g.id).unwrap();
+}

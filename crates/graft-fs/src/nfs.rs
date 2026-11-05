@@ -341,15 +341,14 @@ impl NFSFileSystem for NfsFs {
         max_entries: usize,
     ) -> Result<ReadDirResult, nfsstat3> {
         blocking(|| {
-            let all = self.view.readdir(dirid).map_err(status)?;
-            let start = if start_after == 0 {
-                0
-            } else {
-                all.iter()
-                    .position(|e| e.ino == start_after)
-                    .map(|i| i + 1)
-                    .ok_or(nfsstat3::NFS3ERR_BAD_COOKIE)?
-            };
+            // The cookie is the last file id returned. Entries are paged in
+            // file-id order, so the next page starts after the cookie even
+            // when that entry has since been removed: `rm -rf` deletes each
+            // page before asking for the next, and resuming by position
+            // would answer `NFS3ERR_BAD_COOKIE` and leave the directory half-emptied.
+            let mut all = self.view.readdir(dirid).map_err(status)?;
+            all.sort_unstable_by_key(|e| e.ino);
+            let start = all.partition_point(|e| e.ino <= start_after);
             let mut entries = Vec::new();
             for e in all.iter().skip(start).take(max_entries) {
                 // An entry removed meanwhile is skipped, not an error.
