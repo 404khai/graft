@@ -79,7 +79,7 @@ jobs:
       - name: Run (Linux, XFS)
         if: runner.os == 'Linux'
         run: >
-          bench/run.sh --work /mnt/graft-bench/mnt/xfs
+          bench/run.sh --suite matrix --no-gate --work /mnt/graft-bench/mnt/xfs
           --runs "${{ inputs.runs }}" --agents "${{ inputs.agents }}"
           --backends reflink,fuse
           --machine "GitHub Actions ubuntu-latest runner"
@@ -89,12 +89,12 @@ jobs:
       - name: Run (macOS, APFS)
         if: runner.os == 'macOS'
         run: |
-          bench/run.sh --work "$RUNNER_TEMP/graft-bench" --label macos-arm64-apfs \
+          bench/run.sh --suite matrix --no-gate --work "$RUNNER_TEMP/graft-bench" --label macos-arm64-apfs \
             --fixtures small,medium --runs "${{ inputs.runs }}" --agents "${{ inputs.agents }}" \
             --backends reflink,nfs \
             --machine "GitHub Actions macos-latest runner"
           mv bench/results/macos-arm64-apfs bench/results/macos-arm64-apfs-small-medium
-          bench/run.sh --work "$RUNNER_TEMP/graft-bench" --label macos-arm64-apfs \
+          bench/run.sh --suite matrix --no-gate --work "$RUNNER_TEMP/graft-bench" --label macos-arm64-apfs \
             --fixtures large --runs "${{ inputs.runs }}" --agents 1,4 \
             --backends reflink,nfs \
             --machine "GitHub Actions macos-latest runner (large: 1 and 4 agents only)"
@@ -107,3 +107,67 @@ jobs:
         with:
           name: bench-results-${{ matrix.os }}
           path: bench/results/
+      # The regression guard (AGENTS.md Phase 8): fails this job when any
+      # graft method loses to worktrees, or the default backend's method
+      # fails to beat them. Runs after the upload so results are kept.
+      - name: Gate against worktrees
+        run: |
+          status=0
+          for dir in bench/results/*/; do
+            [[ -f $dir/results.csv ]] || continue
+            target/release/graft-bench gate "$dir" --default graft || status=1
+            cat "$dir/gate.md" >> "$GITHUB_STEP_SUMMARY"
+          done
+          exit $status
+
+  workloads:
+    # Build, test, git, search, walk and write workloads inside one
+    # workspace per method (ADR 0010). On demand only.
+    name: in-graft workloads (${{ matrix.label }})
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, label: linux-x86_64-xfs, fs: xfs, backends: "reflink,fuse" }
+          - { os: ubuntu-latest, label: linux-x86_64-ext4, fs: ext4, backends: "reflink,fuse" }
+          - { os: macos-latest, label: macos-arm64-apfs, fs: apfs, backends: "reflink,nfs" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Mount a dedicated volume (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y btrfs-progs xfsprogs fuse3 ripgrep
+          sudo mkdir -p /mnt/graft-bench && sudo chown "$(id -u):$(id -g)" /mnt/graft-bench
+          sudo env SIZE=20G scripts/mount-test-filesystems.sh /mnt/graft-bench "$(id -u):$(id -g)"
+          echo "GRAFT_BENCH_WORK=/mnt/graft-bench/mnt/${{ matrix.fs }}" >> "$GITHUB_ENV"
+      - name: Prepare (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install ripgrep
+          echo "GRAFT_BENCH_WORK=$RUNNER_TEMP/graft-bench" >> "$GITHUB_ENV"
+      - name: Run
+        run: >
+          bench/run.sh --suite workloads --no-gate --work "$GRAFT_BENCH_WORK"
+          --label "${{ matrix.label }}-workloads"
+          --runs "${{ inputs.runs }}" --backends "${{ matrix.backends }}"
+          --machine "GitHub Actions ${{ matrix.os }} runner"
+      - name: Summary
+        if: always()
+        run: cat bench/results/*/workloads.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: bench-workloads-${{ matrix.label }}
+          path: bench/results/
+      - name: Gate against worktrees
+        run: |
+          dir="bench/results/${{ matrix.label }}-workloads"
+          status=0
+          target/release/graft-bench gate "$dir" --default graft || status=1
+          cat "$dir/gate.md" >> "$GITHUB_STEP_SUMMARY"
+          exit $status
