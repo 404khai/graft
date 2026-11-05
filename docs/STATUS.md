@@ -66,9 +66,9 @@ Status: in review (`test/worktree-benchmarks`)
 - [x] One command runs the whole matrix and produces the summary.
   - `bench/run.sh`.
 - [x] Results are reproducible within ±10% across three runs on the same machine.
-  - Linux (GitHub runner, XFS): 159 of 160 values within ±10%. The macOS runner (a VM) was not: 17 of 113; see `bench/results/macos-arm64-apfs/NOTE.md`.
+  - Linux (GitHub runner, XFS): 159 of 160 values within ±10%. The macOS runner (a VM) was not: 17 of 113; see `bench/results/macos-arm64-apfs/NOTE.md` at 62afd44 (those results are superseded by the Phase 8 baseline and kept in git history).
 - [ ] Summary committed for at least one Linux and one macOS machine.
-  - Linux: full matrix committed. macOS: small and medium only (large did not finish on the runner), with timings that are not reproducible.
+  - Linux: full matrix committed. macOS: small and medium only (large did not finish on the runner), with timings that are not reproducible. The Phase 8 baseline adds a macOS large run (1 and 4 agents), but its reflink cells errored in `graft prune`; see Phase 8.
 
 ## Phase 5 — Virtual filesystem: read path (Linux)
 
@@ -103,7 +103,7 @@ Not measured: write throughput and in-graft build time against Root (the benchma
 
 ## Phase 7 — macOS virtual backend
 
-Status: merged (#10), with the benchmark criterion still open
+Status: done (#10, #11; benchmarks recorded in `docs/record-bench-baselines`)
 
 - [x] No kernel extension or system extension approval required.
   - NFSv3 loopback served by `graftd` (nfsserve) and mounted with the built-in `mount_nfs`, as an ordinary user: no `sudo`, no extension, no approval (ADR 0009). Verified on macOS 27; the CI `nfs` job runs as the runner's user.
@@ -111,14 +111,20 @@ Status: merged (#10), with the benchmark criterion still open
   - `passes_the_conformance_suite` in `crates/graft-fs/tests/nfs_backend.rs`, plus `git status` parity, `git commit`, layers, busy unmount and AppleDouble tests; the virtual graft e2e suite (including `kill -9` of graftd) also runs on NFS. Passed locally on macOS 27; CI `nfs` job.
 - [x] Medium fixture builds and tests inside a graft on macOS.
   - `scripts/virtual-medium-fixture.sh` locally on macOS 27: `npm test` passes in the graft (3.1 s), again after an edit, and `graft status` and `git status` agree. Cold `graft new` took 28 s, nearly all of it building the `node_modules` layer (Phase 8).
-- [ ] Benchmarks recorded against the reflink backend on the same machine.
-  - Pending: bench workflow with `--backends reflink,nfs` on the macOS runner.
+- [x] Benchmarks recorded against the reflink backend on the same machine.
+  - `bench/results/nfs-backend/` (Actions run 41999454838, GitHub `macos-latest` runner, APFS; timings not reproducible on that VM, disk numbers are). `graft new` on NFS is metadata only after the first graft: ≈50–60 ms against 3.7–4.0 s for reflink on medium, and 63 ms on large (4 agents) where a worktree takes 32 s. Disk added for 16 medium grafts: 44.9 MiB (NFS), 209.4 MiB (reflink), 2.9 GiB (worktrees). Prune on medium: ≈30 ms (NFS) against 1.6–2.7 s (reflink). The first NFS graft is slower than the first reflink graft (6.4 s against 5.5 s on medium, 60 s against 30 s on large), nearly all of it building the `node_modules` layer. 4 of 6 large reflink runs failed in `graft prune` (`Directory not empty`), fixed in `fix/prune-dir-not-empty`.
 
 Known limits (ADR 0009): `fsync` on an NFS graft is not durable against power loss until the file is journaled; other local users could reach a graft's NFS port; no xattrs (AppleDouble files are refused); new directories are `0755`.
 
 ## Phase 8 — Performance: faster than worktrees
 
-Status: in progress, as stacked PRs. First: `perf/in-graft-workloads` (measure first: in-graft workloads and the worktree gate, ADR 0010).
+Status: in progress, as stacked PRs. Done: in-graft workloads and the worktree gate (#12, ADR 0010).
+
+Baseline before any optimisation (`bench/results/`, Actions run 42005356393; `gate.md` in each directory). Every gate fails today:
+
+- Linux, XFS, create matrix (188 of 189 values within ±10%): the default `graft` method beats worktrees on 40 values, ties 3 and loses 14. It wins on disk (≈10× less) and on ready time for later agents (213 ms against 535 ms on small). It loses on create for the first graft (398 ms against 71 ms on small, 3.74 s against 1.21 s on medium), on create for every medium graft (≈1.5 s against ≈1.2 s), on ready for the first agent on medium (≈3.9 s against ≈2.65 s, the cold layer), and on small-fixture prune (≈41 ms against ≈33 ms). `graft-fuse` loses 14, mostly the cold first agent (large: 16.5 s against 12.8 s to create).
+- In-graft workloads, medium (XFS 16 of 19, ext4 18 of 20 within ±10%): the reflink `graft` ties worktrees on builds, tests, `ls -R` and writes, and loses on `git status` (30 ms against 24 ms on XFS, 42 ms against 36 ms on ext4) and, by 1–8%, on `git diff`, `git commit`, `rg` and (XFS only) `find`. `graft-fuse` loses all 11 workloads: `rg` 20–24× slower, `write-10k-small` 27–39×, `ls -R` ≈8×, cold build 6.5–7×.
+- macOS, APFS (runner VM, not reproducible: 35 of 138 matrix and 1 of 24 workload values within ±10%): on small and medium the reflink `graft` beats worktrees on 19 values, ties 18 and loses 1; `graft-nfs` beats 28, ties 8 and loses 2. On large every reflink cell errored in `graft prune` (`Directory not empty`), so the default backend has no large numbers yet (fixed in `fix/prune-dir-not-empty`); `graft-nfs` creates in 57 ms against 38 s and prunes in 34 ms against 17 s, but its first graft takes 70 s against 39 s. Inside a graft, NFS is 2–5× slower on `git` and `find`, 44× on a 1 GiB write, and its `write-10k-small` cleanup errored (`Directory not empty`).
 
 - [ ] On the default backend, a graft beats the worktree baseline on create time, time to first passing test (cold layer cache included), disk added and prune time, for every fixture and agent count, on Linux (ext4, and XFS or btrfs) and macOS (APFS).
 - [ ] On the default backend, every in-graft workload (build, rebuild, test, git, search, walk, writes) is at least as fast as the worktree baseline, and beats it wherever the backend can, on Linux and macOS. (Relaxed from "beats" with the owner's approval: a real-directory backend can match a worktree inside, not reliably beat it; ADR 0010.)
