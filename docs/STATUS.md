@@ -118,7 +118,7 @@ Known limits (ADR 0009): `fsync` on an NFS graft is not durable against power lo
 
 ## Phase 8 — Performance: faster than worktrees
 
-Status: in progress, as stacked PRs. Done: in-graft workloads and the worktree gate (#12, ADR 0010).
+Status: in progress, as stacked PRs. Done: in-graft workloads and the worktree gate (#12, ADR 0010). Profiling: `GRAFT_LOG=graft::timing=debug graft new` logs each step, `scripts/profile-graft-new.sh` compares them with `git worktree add` and `npm ci`, and the `Profile` workflow runs it on the bench runners (`test/profile-graft-new`).
 
 Baseline before any optimisation (`bench/results/`, Actions run 42005356393; `gate.md` in each directory). Every gate fails today:
 
