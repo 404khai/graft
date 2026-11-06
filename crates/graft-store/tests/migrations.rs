@@ -14,6 +14,7 @@ const V2_SQL: &str = include_str!("../src/schema/v2.sql");
 const V3_SQL: &str = include_str!("../src/schema/v3.sql");
 const V4_SQL: &str = include_str!("../src/schema/v4.sql");
 const V5_SQL: &str = include_str!("../src/schema/v5.sql");
+const V6_SQL: &str = include_str!("../src/schema/v6.sql");
 
 fn record() -> RootRecord {
     RootRecord {
@@ -52,15 +53,17 @@ fn columns(path: &std::path::Path, table: &str) -> Vec<String> {
 fn released_migrations_are_never_edited() {
     // If this fails you changed a shipped migration. Revert it and add a new
     // migration instead (AGENTS.md §5, docs/on-disk-format.md).
-    assert_eq!(SCHEMA_VERSION, 5);
+    assert_eq!(SCHEMA_VERSION, 6);
     let hash = |sql: &str| blake3::hash(sql.as_bytes()).to_hex().to_string();
     assert_eq!(hash(V1_SQL), EXPECTED_V1_HASH, "schema/v1.sql changed");
     assert_eq!(hash(V2_SQL), EXPECTED_V2_HASH, "schema/v2.sql changed");
     assert_eq!(hash(V3_SQL), EXPECTED_V3_HASH, "schema/v3.sql changed");
     assert_eq!(hash(V4_SQL), EXPECTED_V4_HASH, "schema/v4.sql changed");
     assert_eq!(hash(V5_SQL), EXPECTED_V5_HASH, "schema/v5.sql changed");
+    assert_eq!(hash(V6_SQL), EXPECTED_V6_HASH, "schema/v6.sql changed");
 }
 
+const EXPECTED_V6_HASH: &str = "7f577964e7e32b3f824f2d8149004911568d67e9128c4b4d90b806604be457d5";
 const EXPECTED_V5_HASH: &str = "be284ac7e9d0da57b86820b710db7bc57617e4ae3c50b42635ea1094d15e5c85";
 const EXPECTED_V4_HASH: &str = "c7b248df89c9a936bd19af41959b2a81913132d837c0ee73388bf7dad59af641";
 const EXPECTED_V3_HASH: &str = "caf3afd98433154c56f3bd55fedcff7d3fb9066575c7b98ae4593960986033fa";
@@ -84,6 +87,9 @@ fn migrates_an_empty_directory_to_the_latest_schema() {
             ("index", "layer_refs_by_layer"),
             ("table", "layers"),
             ("table", "op_log"),
+            ("table", "ring_delta"),
+            ("index", "ring_delta_by_blob"),
+            ("table", "rings"),
             ("table", "roots"),
             ("table", "staged"),
             ("table", "trusted_commands"),
@@ -99,14 +105,15 @@ fn migrates_an_empty_directory_to_the_latest_schema() {
             "state",
             "created_at",
             "updated_at",
-            "backend"
+            "backend",
+            "budded_from"
         ]
     );
     assert_eq!(
         columns(&db, "op_log"),
         [
             "graft_id", "seq", "at", "kind", "path", "path_to", "blob", "actor", "mode", "mtime",
-            "target"
+            "target", "to_seq"
         ]
     );
     assert_eq!(
@@ -424,4 +431,58 @@ fn upgrades_a_v4_database_without_losing_child_rows() {
         )
         .unwrap();
     assert!(fk);
+}
+
+#[test]
+fn upgrades_a_v5_database_with_deltas_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Store::db_path(dir.path());
+    let conn = Connection::open(&db).unwrap();
+    for sql in [V1_SQL, V2_SQL, V3_SQL, V4_SQL, V5_SQL] {
+        conn.execute_batch(sql).unwrap();
+    }
+    conn.pragma_update(None, "user_version", 5).unwrap();
+    let gid = "1".repeat(32);
+    conn.execute(
+        "INSERT INTO roots VALUES (1, ?1, ?2, ?3, 42)",
+        (
+            record().id.to_string(),
+            b"/src/app".to_vec(),
+            "c".repeat(40),
+        ),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO grafts VALUES (?1, 'v', ?2, 'live', 1, 2, 'nfs')",
+        (&gid, "d".repeat(40)),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO op_log (graft_id, seq, at, kind, path, mode) VALUES (?1, 1, 5, 'mkdir', x'64', 493)",
+        [&gid],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO delta (graft_id, path, kind, mode, opaque) VALUES (?1, x'64', 'dir', 493, 1)",
+        [&gid],
+    )
+    .unwrap();
+    drop(conn);
+
+    let mut store = Store::open(dir.path()).unwrap();
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+    let g = store.graft(&"v".parse().unwrap()).unwrap().unwrap();
+    assert_eq!(g.budded_from, None);
+    assert_eq!(store.op_log(g.id).unwrap().len(), 1);
+    assert_eq!(store.rings(g.id).unwrap(), Vec::new());
+    // The old graft can ring and bud right away.
+    let ring = store.ring(g.id, None).unwrap();
+    assert_eq!(
+        (ring.label.as_str(), ring.seq, ring.paths),
+        ("ring-1", 1, 1)
+    );
+    let bud = store.bud(g.id, &"w".parse().unwrap()).unwrap();
+    assert_eq!(bud.budded_from, Some(g.id));
+    assert_eq!(store.delta(bud.id).unwrap(), store.delta(g.id).unwrap());
+    assert_eq!(store.integrity_check().unwrap(), Vec::<String>::new());
 }

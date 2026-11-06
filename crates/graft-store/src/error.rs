@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use graft_core::{GraftId, GraftName, GraftState, RootId};
+use graft_core::{GraftId, GraftName, GraftState, RingLabel, RootId};
 
 /// Errors from the metadata store.
 #[derive(Debug, thiserror::Error)]
@@ -83,6 +83,33 @@ pub enum StoreError {
         key: graft_core::LayerKey,
         /// How many grafts reference it.
         refs: u64,
+    },
+
+    /// The graft already has a ring with this label.
+    #[error("graft {graft} already has a ring named {label}")]
+    RingTaken {
+        /// The graft.
+        graft: GraftName,
+        /// The contested label.
+        label: RingLabel,
+    },
+
+    /// The graft has no ring with this label.
+    #[error("graft {graft} has no ring named {label}; see `graft ring {graft} --list`")]
+    NoSuchRing {
+        /// The graft.
+        graft: GraftName,
+        /// The missing label.
+        label: RingLabel,
+    },
+
+    /// The graft has files open for writing that are not journaled yet.
+    #[error("graft {graft} has {files} file(s) still open for writing; close them and retry")]
+    StillWriting {
+        /// The graft.
+        graft: GraftName,
+        /// How many staged files it has.
+        files: u64,
     },
 
     /// No graft has this ID.

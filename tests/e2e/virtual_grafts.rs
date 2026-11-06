@@ -112,6 +112,50 @@ fn fuse_grafts_are_refused_off_linux_and_leave_nothing() {
     assert!(refs.stdout.is_empty(), "a failed graft new left a pin ref");
 }
 
+/// Bud, ring and rewind refuse reflink grafts until the owner settles
+/// how they should work there (ADR 0013), and leave nothing behind.
+#[test]
+fn bud_ring_and_rewind_refuse_reflink_grafts() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = git_repo();
+    graft(home.path())
+        .current_dir(repo.path())
+        .arg("init")
+        .assert()
+        .success();
+    graft(home.path())
+        .current_dir(repo.path())
+        .args(["new", "r", "--backend", "reflink"])
+        .assert()
+        .success();
+    for args in [&["bud", "r", "s"][..], &["ring", "r"], &["ring", "r", "x"]] {
+        graft(home.path())
+            .current_dir(repo.path())
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("reflink backend"));
+    }
+    graft(home.path())
+        .current_dir(repo.path())
+        .args(["rewind", "r", "x"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("reflink backend"));
+    graft(home.path())
+        .current_dir(repo.path())
+        .args(["ring", "r", "--list"])
+        .assert()
+        .success()
+        .stdout("graft r: no rings\n");
+    graft(home.path())
+        .current_dir(repo.path())
+        .arg("ls")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(" s ").not());
+}
+
 #[cfg(any(
     all(feature = "fuse-tests", target_os = "linux"),
     all(feature = "nfs-tests", target_os = "macos")
@@ -263,6 +307,110 @@ mod fuse {
             .arg("ls")
             .assert()
             .stdout(predicate::str::contains("No grafts"));
+    }
+
+    fn run(home: &Path, repo: &Path, args: &[&str]) -> String {
+        let out = graft_d(home).current_dir(repo).args(args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "graft {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    /// AGENTS.md Phase 9: bud forks a graft's delta, ring checkpoints it,
+    /// rewind restores it and can be undone, and pruning a graft keeps the
+    /// blobs its bud uses.
+    #[test]
+    fn bud_ring_and_rewind_round_trip() {
+        require_fuse();
+        let home = tempfile::tempdir().unwrap();
+        let _daemon = Daemon(home.path());
+        let repo = crate::git_repo();
+        let (h, r) = (home.path(), repo.path());
+        init(h, r);
+        let v = new_fuse(h, r, "v");
+        std::fs::write(v.join("a.txt"), "a\n").unwrap();
+        assert!(run(h, r, &["ring", "v", "before"]).contains("as before (op "));
+        assert!(run(h, r, &["ring", "v", "--list"]).starts_with("before "));
+        std::fs::write(v.join("b.txt"), "b\n").unwrap();
+        std::fs::write(v.join("README.md"), "changed\n").unwrap();
+        let after = run(h, r, &["status", "v"]);
+
+        // The bud sees everything the source wrote, and diverges from it.
+        assert!(run(h, r, &["bud", "v", "w"]).contains("Budded graft w from v"));
+        let w = std::path::PathBuf::from(run(h, r, &["path", "w"]).trim());
+        for (f, c) in [
+            ("a.txt", "a\n"),
+            ("b.txt", "b\n"),
+            ("README.md", "changed\n"),
+        ] {
+            assert_eq!(std::fs::read_to_string(w.join(f)).unwrap(), c, "{f}");
+        }
+        std::fs::write(w.join("only-w.txt"), "w\n").unwrap();
+        assert!(!v.join("only-w.txt").exists());
+
+        // Rewind restores the ring; Root and the bud are untouched.
+        let out = run(h, r, &["rewind", "v", "before"]);
+        let undo = out.rsplit(' ').next().unwrap().trim().to_owned();
+        assert!(undo.starts_with("undo-"), "{out}");
+        assert_eq!(std::fs::read_to_string(v.join("a.txt")).unwrap(), "a\n");
+        assert!(!v.join("b.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(v.join("README.md")).unwrap(),
+            "hello\n"
+        );
+        assert!(w.join("b.txt").exists());
+        assert!(!r.join("a.txt").exists());
+        assert!(run(h, r, &["log", "v"]).contains("rewind"));
+
+        // Re-applying returns exactly to the state before the rewind.
+        run(h, r, &["rewind", "v", &undo]);
+        assert_eq!(run(h, r, &["status", "v"]), after);
+        assert_eq!(std::fs::read_to_string(v.join("b.txt")).unwrap(), "b\n");
+
+        // Pruning the source keeps the blobs the bud uses.
+        run(h, r, &["prune", "v", "--force"]);
+        assert_eq!(std::fs::read_to_string(w.join("a.txt")).unwrap(), "a\n");
+        assert_eq!(std::fs::read_to_string(w.join("b.txt")).unwrap(), "b\n");
+        run(h, r, &["prune", "w", "--force"]);
+        let blobs = walk_files(&w.parent().unwrap().parent().unwrap().join("blobs"));
+        assert_eq!(blobs, Vec::<std::path::PathBuf>::new(), "blobs left");
+    }
+
+    /// AGENTS.md Phase 9 target: bud of a graft with 1,000 changed files
+    /// in < 200 ms. Reported, not asserted (a target).
+    #[test]
+    fn bud_time_with_a_thousand_changed_files() {
+        require_fuse();
+        let home = tempfile::tempdir().unwrap();
+        let _daemon = Daemon(home.path());
+        let repo = crate::git_repo();
+        let (h, r) = (home.path(), repo.path());
+        init(h, r);
+        let v = new_fuse(h, r, "src");
+        std::fs::create_dir(v.join("many")).unwrap();
+        for i in 0..1000 {
+            std::fs::write(v.join(format!("many/f{i}.txt")), format!("{i}\n")).unwrap();
+        }
+        let mut times = Vec::new();
+        for i in 0..3 {
+            let name = format!("bud-{i}");
+            let start = Instant::now();
+            run(h, r, &["bud", "src", &name]);
+            times.push(start.elapsed());
+            let b = std::path::PathBuf::from(run(h, r, &["path", &name]).trim());
+            assert_eq!(
+                std::fs::read_to_string(b.join("many/f999.txt")).unwrap(),
+                "999\n"
+            );
+        }
+        times.sort();
+        eprintln!(
+            "graft bud, 1,000 changed files ({BACKEND}): {times:?}, median {:?}",
+            times[1]
+        );
     }
 
     fn walk_files(dir: &Path) -> Vec<std::path::PathBuf> {

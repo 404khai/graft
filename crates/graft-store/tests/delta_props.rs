@@ -2,7 +2,10 @@
 //!
 //! - the overlay (delta over lower) always equals a plain in-memory
 //!   filesystem that received the same operations;
-//! - replaying the stored op log from empty reproduces the stored delta.
+//! - replaying the stored op log from empty reproduces the stored delta;
+//! - with rings and rewinds mixed in (ADR 0013), replay still reproduces
+//!   the delta, a rewind restores the ring's state exactly, and rewinding
+//!   to its undo ring re-applies what it undid.
 
 // Test helpers outside #[test] fns: panicking on setup failure is the point.
 // The interpreter's raw choices are clearer as short names.
@@ -11,6 +14,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use graft_core::RingLabel;
 use graft_core::{BackendKind, BlobHash, RootId, Timestamp};
 use graft_store::delta::{
     Content, Delta, Lower, LowerKind, Node, Op, RelPath, WriteKind, file_name, is_within, join,
@@ -304,5 +308,62 @@ proptest! {
         let log = store.op_log(g.id).unwrap();
         prop_assert_eq!(Delta::replay(&log, &lower), stored);
         prop_assert!(log.iter().enumerate().all(|(i, r)| r.seq == u64::try_from(i).unwrap() + 1));
+    }
+
+    #[test]
+    fn rings_and_rewinds_keep_replay_exact(cs in choices()) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _) = Store::create(dir.path(), &RootRecord {
+            id: RootId::from_bytes([1; 16]),
+            path: PathBuf::from("/r"),
+            first_commit: "a".repeat(40).parse().unwrap(),
+            registered_at: Timestamp::from_millis(0),
+        }).unwrap();
+        let g = store
+            .create_graft(&"g".parse().unwrap(), &"a".repeat(40).parse().unwrap(), BackendKind::Fuse)
+            .unwrap();
+        let lower = base();
+        let mut model = model_of(&lower);
+        let mut live = Delta::default();
+        // Each ring's label with the model and delta it captured.
+        let mut rings: Vec<(RingLabel, BTreeMap<RelPath, M>, Delta)> = Vec::new();
+        for (i, c) in cs.into_iter().enumerate() {
+            let at = Timestamp::from_millis(i64::try_from(i).unwrap() * 7);
+            if c.0 >= 232 && c.0 < 244 {
+                let label: RingLabel = format!("r{i}").parse().unwrap();
+                let ring = store.ring(g.id, Some(label.clone())).unwrap();
+                prop_assert_eq!(ring.paths, u64::try_from(live.entries().count()).unwrap());
+                rings.push((label, model.clone(), live.clone()));
+                continue;
+            }
+            if c.0 >= 244 {
+                if rings.is_empty() { continue; }
+                let (label, ring_model, ring_delta) = rings[usize::from(c.1) % rings.len()].clone();
+                let before = (model.clone(), live.clone());
+                let rewound = store.rewind(g.id, &label, at).unwrap();
+                live = store.delta(g.id).unwrap();
+                prop_assert_eq!(&live, &ring_delta);
+                model = ring_model;
+                check(&live, &lower, &model);
+                if c.2 % 2 == 0 {
+                    // Re-apply: back to the state before the rewind.
+                    store.rewind(g.id, &rewound.undo, at).unwrap();
+                    live = store.delta(g.id).unwrap();
+                    prop_assert_eq!(&live, &before.1);
+                    model = before.0;
+                }
+                continue;
+            }
+            let Some(op) = interpret(&mut model, c) else { continue };
+            let changes = live.apply(&op, at, &lower);
+            store.record(g.id, &Journaled {
+                at, op: &op, actor: None, changes: &changes, staged: &[], sync: false,
+            }).unwrap();
+        }
+        check(&live, &lower, &model);
+        let stored = store.delta(g.id).unwrap();
+        prop_assert_eq!(&stored, &live);
+        let log = store.op_log(g.id).unwrap();
+        prop_assert_eq!(Delta::replay(&log, &lower), stored);
     }
 }

@@ -28,6 +28,7 @@ pub mod delta;
 mod error;
 mod journal;
 pub mod registry;
+mod rings;
 mod schema;
 
 use std::path::{Path, PathBuf};
@@ -40,6 +41,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
 pub use error::{Result, StoreError};
 pub use journal::{Journaled, Staged, StagedChange};
+pub use rings::{Rewound, Ring};
 pub use schema::SCHEMA_VERSION;
 
 /// File name of the metadata database inside a Root's directory.
@@ -87,6 +89,8 @@ pub struct GraftRecord {
     pub created_at: Timestamp,
     /// When its record last changed.
     pub updated_at: Timestamp,
+    /// The graft it was budded from, if any (ADR 0013).
+    pub budded_from: Option<GraftId>,
 }
 
 /// A layer recorded in the layer cache.
@@ -391,6 +395,7 @@ impl Store {
             backend,
             created_at: now,
             updated_at: now,
+            budded_from: None,
         };
         let result = self.conn.execute(
             "INSERT INTO grafts (graft_id, name, base_commit, state, created_at, updated_at, backend)
@@ -418,7 +423,7 @@ impl Store {
     }
 
     const GRAFT_COLUMNS: &'static str =
-        "graft_id, name, base_commit, state, created_at, updated_at, backend";
+        "graft_id, name, base_commit, state, created_at, updated_at, backend, budded_from";
 
     fn decode_graft(&self, row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<GraftRecord>> {
         let id: String = row.get(0)?;
@@ -428,6 +433,7 @@ impl Store {
         let created_at: i64 = row.get(4)?;
         let updated_at: i64 = row.get(5)?;
         let backend: String = row.get(6)?;
+        let budded_from: Option<String> = row.get(7)?;
         Ok((|| {
             Ok(GraftRecord {
                 id: id
@@ -447,6 +453,10 @@ impl Store {
                     .map_err(|e| self.corrupt(format!("grafts.backend: {e}")))?,
                 created_at: Timestamp::from_millis(created_at),
                 updated_at: Timestamp::from_millis(updated_at),
+                budded_from: budded_from
+                    .map(|b| b.parse())
+                    .transpose()
+                    .map_err(|e| self.corrupt(format!("grafts.budded_from: {e}")))?,
             })
         })())
     }

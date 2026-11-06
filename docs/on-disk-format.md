@@ -1,6 +1,6 @@
 # On-disk format
 
-**Format version: 6** (metadata schema v5)
+**Format version: 7** (metadata schema v6)
 
 This file describes everything Graft persists. Any change to a structure
 below bumps the format version, adds a migration, and updates this file in
@@ -58,6 +58,7 @@ Entries in `roots/` whose name is not a valid Root ID, or that contain no
 | 4 | Adds `run/` (graftd) and schema v3 (`grafts.backend`) | Schema v2 → v3 runs automatically on open; existing grafts become `reflink` |
 | 5 | Adds `blobs/`, `grafts/` and schema v4 (`delta`, `staged`, `op_log.mode/mtime/target`) | Schema v3 → v4 runs automatically on open; tables and nullable columns only added |
 | 6 | Schema v5: `grafts.backend` accepts `nfs`; the socket moves to `/tmp/graft-<uid>/` when `run/graftd.sock` would be too long | Schema v4 → v5 rebuilds `grafts` (foreign keys off, checked before commit); every row and child row is kept |
+| 7 | Schema v6: Bud and Ring (`grafts.budded_from`, `op_log.to_seq` and the `rewind` op, tables `rings` and `ring_delta`; ADR 0013) | Schema v5 → v6 runs automatically on open; tables and nullable columns only added |
 
 ## `config.toml`
 
@@ -159,6 +160,7 @@ The Root this database belongs to. Exactly one row.
 | `created_at` | INTEGER | Timestamp |
 | `updated_at` | INTEGER | Timestamp of the last change to the row |
 | `backend` | TEXT | (v3) `reflink` or `fuse`, (v5) or `nfs`; default `reflink` (ADRs 0006, 0009) |
+| `budded_from` | TEXT | (v6) `GraftId` of the graft this one was budded from, or `NULL`. Not a foreign key: the source may be pruned first |
 
 Index `grafts_name_unique`: unique `name` where `state <> 'pruned'`.
 
@@ -174,7 +176,7 @@ Created in v1 and written from the delta store phase on. `WITHOUT ROWID`.
 | `graft_id` | TEXT | References `grafts`, `ON DELETE CASCADE` |
 | `seq` | INTEGER | Per-graft sequence number, from 1 |
 | `at` | INTEGER | Timestamp |
-| `kind` | TEXT | `create`, `write`, `truncate`, `mkdir`, `symlink`, `unlink`, `rmdir`, `rename`, `chmod` or `touch` |
+| `kind` | TEXT | `create`, `write`, `truncate`, `mkdir`, `symlink`, `unlink`, `rmdir`, `rename`, `chmod`, `touch` or (v6) `rewind` |
 | `path` | BLOB | Repo-relative path |
 | `path_to` | BLOB | Destination for renames, else `NULL` |
 | `blob` | TEXT | Resulting `BlobHash`, if any |
@@ -182,11 +184,14 @@ Created in v1 and written from the delta store phase on. `WITHOUT ROWID`.
 | `mode` | INTEGER | (v4) Permission bits, for `create`/`write`/`truncate`/`mkdir`/`chmod` |
 | `mtime` | INTEGER | (v4) Explicit modification time in ms, for `touch` |
 | `target` | BLOB | (v4) Symlink target, for `symlink` |
+| `to_seq` | INTEGER | (v6) For `rewind`: the sequence number whose state the graft returned to (0: the empty delta). `path` is empty |
 
 `path` is the source of a `rename` and `path_to` its destination; `blob`
 is the file's new contents for `create`, `write` and `truncate`. A
-graft's op log replayed from empty through `Delta::apply` reproduces its
-`delta` rows exactly (ADR 0008).
+graft's op log replayed from empty through `Delta::replay` reproduces its
+`delta` rows exactly (ADR 0008); a `rewind` restores the state replay had
+right after op `to_seq` (ADR 0013). A bud starts with a copy of its
+source's op log, sequence numbers included.
 
 ### `delta` (v4)
 
@@ -223,6 +228,33 @@ on the next mount after a crash.
 | `mode` | INTEGER | Its permission bits |
 
 Primary key: `(graft_id, seq)`.
+
+### `rings` (v6)
+
+`WITHOUT ROWID`. Named checkpoints of a graft's delta (ADR 0013).
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `graft_id` | TEXT | References `grafts`, `ON DELETE CASCADE` |
+| `label` | TEXT | `RingLabel` (graft name rules); `undo-<seq>` is taken by `graft rewind` |
+| `seq` | INTEGER | Sequence number of the graft's last op when the ring was taken, 0 if none |
+| `created_at` | INTEGER | Timestamp |
+
+Primary key `(graft_id, label)`.
+
+### `ring_delta` (v6)
+
+`WITHOUT ROWID`. Each ring's copy of the graft's `delta` rows, with the
+same columns as `delta` plus `label`. References `rings (graft_id, label)`,
+`ON DELETE CASCADE`. Primary key `(graft_id, label, path)`; index
+`ring_delta_by_blob` on `blob`.
+
+### Blob references
+
+A blob in `blobs/` is kept while any `delta` or `ring_delta` row names it
+(mark and sweep, no counters). Bud and ring add rows, so they add
+references; rewind and prune remove rows. The sweep runs on prune and
+`graft gc`, under graftd's write locks or `graftd.lock`.
 
 ### `layers` (v2)
 
@@ -352,3 +384,16 @@ which, holding each layer's lock, removes layers with no references and
 leftover `.tmp-*` installs. Lock files are left in place.
 A prune interrupted part-way is resumed by running `graft prune <name>`
 again.
+
+`graft bud <src> <dst>` (virtual grafts only) asks graftd to journal the
+source's pending writes, then in one transaction inserts the bud's `grafts`
+row (state `created`, the source's base and backend) with copies of the
+source's `delta`, `op_log` and `layer_refs` rows; then it pins
+`refs/graft/<id>`, graftd mounts the bud, and its state becomes `live`. A
+failure undoes every step. The bud's `.git` is created fresh on first use.
+
+`graft ring` inserts a `rings` row and its `ring_delta` rows in one
+transaction. `graft rewind` unmounts the graft (it refuses if the unmount
+had to be lazy, or files are still staged), then in one transaction rings
+the current state as `undo-<seq>`, appends a `rewind` op and replaces the
+graft's `delta` rows with the ring's; graftd then remounts it.

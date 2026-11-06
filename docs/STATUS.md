@@ -118,7 +118,16 @@ Known limits (ADR 0009): `fsync` on an NFS graft is not durable against power lo
 
 ## Phase 8 — Performance: faster than worktrees
 
-Status: in progress, as stacked PRs. Done: in-graft workloads and the worktree gate (#12, ADR 0010). Profiling: `GRAFT_LOG=graft::timing=debug graft new` logs each step, `scripts/profile-graft-new.sh` compares them with `git worktree add` and `npm ci`, and the `Profile` workflow runs it on the bench runners (`test/profile-graft-new`).
+Status: deferred by the owner (2026-11-06). The owner chose to move on to Phase 9 and return to the remaining Phase 8 work at the end of all phases, before Graft is declared ready; this overrides AGENTS.md §3 rule 1 for this phase. No criterion below is met yet. Open items:
+
+- The cold first graft on XFS is about 10% slower to create than a worktree (cloning a just-built layer).
+- `rg`, `find` and small-file writes are 2–4% slower in reflink grafts than in worktrees.
+- FUSE and NFS grafts are up to ≈40× slower than worktrees on in-graft workloads.
+- Cache size limits in `config.toml`, tested fallbacks for every mechanism, and `graft doctor` reporting which mechanisms are active.
+- The peak `graftd` memory test (large fixture, 16 grafts).
+- Reproducible macOS results: the GitHub runner VM cannot reproduce timings within ±10%; this needs a dedicated Mac.
+
+Progress so far, as stacked PRs. Done: in-graft workloads and the worktree gate (#12, ADR 0010). Profiling: `GRAFT_LOG=graft::timing=debug graft new` logs each step, `scripts/profile-graft-new.sh` compares them with `git worktree add` and `npm ci`, and the `Profile` workflow runs it on the bench runners (`test/profile-graft-new`).
 
 Baseline before any optimisation (`bench/results/`; first recorded from Actions run 42005356393, now replaced by run 42113580319 on `main` with the prune fix; `gate.md` in each directory). Every gate fails today. The figures below are from 42005356393; with 42113580319 the Linux XFS gate is 31 beats, 12 ties, 14 losses, and the macOS large reflink cells have numbers (5 of 6 runs; one prune still failed after the retries). Profile of the first graft: `bench/results/profiles/` (cloning the freshly built layer is the cold loss on XFS). Done: parallel layer cloning (#16, ADR 0011): a warm graft now creates faster than a worktree on XFS and ext4; the cold graft on XFS still loses by about 10% (cloning a just-built layer). Tried and rejected: flushing the layer first, or cloning it into the cache instead (#17, see the profile notes). In progress: a cache tree in every graft's index, so `git status` skips unchanged directories (`perf/graft-git-status`, ADR 0012).
 
@@ -138,11 +147,14 @@ Baseline before any optimisation (`bench/results/`; first recorded from Actions 
 
 ## Phase 9 — Bud and Ring
 
-Status: not started
+Status: done for virtual grafts (FUSE, NFS), PR #21, ADR 0013. Scoped with the owner (2026-11-07): bud, ring and rewind are features of virtual grafts; reflink grafts (no delta, no op log) refuse them with an error naming the virtual backend. Revisited when the deferred Phase 8 work chooses each platform's default backend.
 
-- [ ] Bud of a graft with 1,000 changed files completes in < 200 ms (*target*).
-- [ ] Rewinding then re-applying produces an identical delta (test).
-- [ ] Pruning a graft does not remove blobs used by its buds or rings.
+- [x] Bud of a graft with 1,000 changed files completes in < 200 ms (*target*).
+  - Virtual: `bud_time_with_a_thousand_changed_files` (whole `graft bud` command, debug build, NFS on macOS 27, load average ≈15): 78, 79 and 185 ms, median 79 ms. CI `fuse` and `nfs` jobs print theirs. Reflink grafts are out of scope (see above).
+- [x] Rewinding then re-applying produces an identical delta (test).
+  - `rings_and_rewinds_keep_replay_exact` (property test, 300 cases: rewind restores the ring's delta exactly, rewinding to its `undo-<seq>` ring restores the delta from before, and replaying the op log still equals the delta), `rewind_restores_a_ring_and_its_undo_ring_reapplies`, and end to end `bud_ring_and_rewind_round_trip` (`graft status` identical after re-applying).
+- [x] Pruning a graft does not remove blobs used by its buds or rings.
+  - `pruning_a_source_keeps_the_blobs_its_bud_uses`, `rings_keep_their_blobs_until_their_graft_goes`, and end to end: after `graft prune v --force` its bud still reads every file, and pruning the bud too leaves `blobs/` empty.
 
 ## Phase 10 — Sandboxed run
 
