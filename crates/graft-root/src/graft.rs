@@ -361,6 +361,8 @@ pub fn create_worktree(
         entry.stat = Stat::from_fs(&meta).map_err(|e| git_err("reading file times")(boxed(e)))?;
     }
     lap("stats collected");
+    let mut index = with_cache_tree(&graft, &index, tree)?;
+    lap("cache tree built");
     index
         .write(gix::index::write::Options::default())
         .map_err(|e| git_err("writing the graft index")(boxed(e)))?;
@@ -1120,10 +1122,111 @@ pub fn init_virtual_git(
             ..Stat::default()
         };
     }
+    let mut index = with_cache_tree(&repo, &index, tree)?;
     index
         .write(gix::index::write::Options::default())
         .map_err(|e| git_err("writing the graft index")(boxed(e)))?;
     Ok(())
+}
+
+/// The cache tree (git's `TREE` index extension) for `tree`: for every
+/// directory, its tree id and how many index entries it holds. Without it,
+/// `git status` and `git diff --cached` compare the whole index with HEAD's
+/// tree on every run; with it, they skip every unchanged directory (ADR
+/// 0012). Valid only for an index built from `tree` with no entry added,
+/// removed or changed since, which is how both callers use it.
+fn cache_tree(repo: &gix::Repository, tree: gix::ObjectId) -> Result<gix::index::extension::Tree> {
+    fn build(
+        repo: &gix::Repository,
+        id: gix::ObjectId,
+        name: &[u8],
+    ) -> Result<gix::index::extension::Tree> {
+        let tree = repo
+            .find_tree(id)
+            .map_err(|e| git_err("reading a tree for the cache tree")(boxed(e)))?;
+        let mut entries = 0u32;
+        let mut children = Vec::new();
+        for entry in tree.iter() {
+            let entry = entry.map_err(|e| git_err("decoding a tree entry")(boxed(e)))?;
+            if entry.mode().is_tree() {
+                let child = build(repo, entry.object_id(), entry.filename())?;
+                entries = entries.saturating_add(child.num_entries.unwrap_or(0));
+                children.push(child);
+            } else {
+                entries = entries.saturating_add(1);
+            }
+        }
+        // Plain byte order, as the extension requires (not git's tree
+        // order, which sorts a directory `a` as `a/`).
+        children.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(gix::index::extension::Tree {
+            name: name.into(),
+            id,
+            num_entries: Some(entries),
+            children,
+        })
+    }
+    build(repo, tree, b"")
+}
+
+/// `index` with the cache tree of `tree` (see [`cache_tree`]), checked
+/// against the object store and the index's own entry count before use.
+/// gix-index cannot attach the extension to an index directly, so the
+/// index is serialised with it and decoded again.
+fn with_cache_tree(
+    repo: &gix::Repository,
+    index: &gix::index::File,
+    tree: gix::ObjectId,
+) -> Result<gix::index::File> {
+    let cache = cache_tree(repo, tree)?;
+    cache
+        .verify(true, &repo.objects)
+        .map_err(|e| git_err("verifying the cache tree")(boxed(e)))?;
+    if cache.num_entries != u32::try_from(index.entries().len()).ok() {
+        return Err(git_err("building the cache tree")(
+            format!(
+                "it counts {:?} entries but the index has {}",
+                cache.num_entries,
+                index.entries().len()
+            )
+            .into(),
+        ));
+    }
+    let kind = index.object_hash();
+    let mut bytes = Vec::new();
+    // `State::write_to`, not `File::write_to`: the checksum is added below,
+    // after the extension.
+    gix::index::State::write_to(
+        index,
+        &mut bytes,
+        gix::index::write::Options {
+            extensions: gix::index::write::Extensions::None,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| git_err("serialising the graft index")(boxed(e)))?;
+    cache
+        .write_to(&mut bytes)
+        .map_err(|e| git_err("serialising the cache tree")(boxed(e)))?;
+    let mut hasher = gix::hash::hasher(kind);
+    hasher.update(&bytes);
+    let checksum = hasher
+        .try_finalize()
+        .map_err(|e| git_err("hashing the graft index")(boxed(e)))?;
+    bytes.extend_from_slice(checksum.as_bytes());
+    let (state, _) = gix::index::State::from_bytes(
+        &bytes,
+        index.timestamp(),
+        kind,
+        gix::index::decode::Options::default(),
+    )
+    .map_err(|e| git_err("decoding the graft index")(boxed(e)))?;
+    if state.tree().is_none() || state.entries().len() != index.entries().len() {
+        return Err(git_err("building the cache tree")(
+            "the re-decoded index lost its cache tree or entries".into(),
+        ));
+    }
+    Ok(gix::index::File::from_state(state, index.path().to_owned()))
 }
 
 #[cfg(test)]

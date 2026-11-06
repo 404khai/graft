@@ -378,3 +378,86 @@ fn two_grafts_do_not_share_branch_locks() {
         1
     );
 }
+
+/// The graft's index carries git's cache tree (`TREE` extension, ADR
+/// 0012), and git agrees with it: `git write-tree` (which trusts it)
+/// returns the base tree, and a commit made in the graft has the same tree
+/// as the same change committed in a plain worktree. Names where git's tree
+/// order differs from byte order (`a` against `a.b`, `a-b`, `a0`), a
+/// submodule, a symlink and an executable are included.
+#[test]
+fn writes_a_cache_tree_that_git_agrees_with() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    git(p, &["init", "-q", "-b", "main"]);
+    for path in [
+        "a/x.rs",
+        "a/deep/y.rs",
+        "a.b",
+        "a-b/z.rs",
+        "a0/w.rs",
+        "b/c/d/e.rs",
+        "top.txt",
+    ] {
+        let file = p.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, format!("{path}\n")).unwrap();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(p.join("top.txt"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        std::os::unix::fs::symlink("a/x.rs", p.join("a/link")).unwrap();
+    }
+    git(p, &["add", "-A"]);
+    // A submodule entry (gitlink) pointing at any commit id.
+    git(
+        p,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000,1111111111111111111111111111111111111111,a/sub",
+        ],
+    );
+    git(p, &["commit", "-q", "-m", "base"]);
+    let base: CommitId = git(p, &["rev-parse", "HEAD"]).parse().unwrap();
+    let base_tree = git(p, &["rev-parse", "HEAD^{tree}"]);
+
+    let (_home, dest, _) = make_graft(p, &base, "cache-tree");
+    let index = std::fs::read(dest.join(".git/index")).unwrap();
+    assert!(
+        index.windows(4).any(|w| w == b"TREE"),
+        "the graft index has no cache tree"
+    );
+    assert_eq!(git(&dest, &["write-tree"]), base_tree);
+    assert_eq!(git(&dest, &["status", "--porcelain"]), "");
+    git(&dest, &["fsck", "--no-progress"]);
+
+    // The same change in the graft and in a worktree gives the same tree.
+    let change = |w: &Path| {
+        std::fs::write(w.join("a/deep/y.rs"), "changed\n").unwrap();
+        std::fs::create_dir_all(w.join("a/new")).unwrap();
+        std::fs::write(w.join("a/new/n.rs"), "new\n").unwrap();
+        std::fs::remove_file(w.join("a-b/z.rs")).unwrap();
+        git(w, &["add", "-A"]);
+        git(w, &["commit", "-q", "-m", "change"]);
+        git(w, &["rev-parse", "HEAD^{tree}"])
+    };
+    let graft_tree = change(&dest);
+    let worktree = tempfile::tempdir().unwrap();
+    let wt = worktree.path().join("wt");
+    git(
+        p,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            wt.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+    assert_eq!(graft_tree, change(&wt));
+}
