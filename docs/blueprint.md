@@ -4,8 +4,8 @@ A Blueprint is the declarative recipe for a graft's environment. It lives in
 `graft.toml` at the top of the repository and is read from the commit a
 graft is created from, never from a working tree.
 
-> Status: only `[[layer]]` exists so far. Ports, services, env files and
-> templates arrive with the Blueprint phase.
+> Status: `[[layer]]` and `[sandbox]` exist so far. Ports, services, env
+> files and templates arrive with the Blueprint phase.
 
 Unknown keys are errors. Every error names the file, line and column:
 `graft.toml:2:8: layer path must not contain . or .. components`.
@@ -65,3 +65,24 @@ graft gc --dry-run   # report only
 
 Layers referenced by any graft are never removed. Layers being built by a
 concurrent `graft new` are skipped.
+
+## `[sandbox]`
+
+`graft run <name> -- <command>` lets the command write only to its graft
+and a private temp dir (`TMPDIR`). Tool caches outside the graft can be
+made writable here ([ADR 0014](decisions/0014-sandboxed-run.md)):
+
+```toml
+[sandbox]
+write = ["~/.cargo", "~/.npm"]
+```
+
+| Key | Required | Meaning |
+| --- | --- | --- |
+| `write` | no | Paths the command may write below. Absolute, or starting with `~/` for the user's home directory. Not `/` or `~` itself, no `.` or `..` components. A path that does not exist when the command starts stays read-only, with a warning. |
+
+Like layer commands, each path must be approved once with `graft trust`;
+`graft run` refuses and lists unapproved paths. The table is read from
+the graft's base commit, so an agent cannot widen its own sandbox by
+editing `graft.toml` in its graft. For one run, the operator can add a
+path with `graft run <name> --write <path> -- <command>`.

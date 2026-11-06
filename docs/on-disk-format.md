@@ -1,6 +1,6 @@
 # On-disk format
 
-**Format version: 7** (metadata schema v6)
+**Format version: 8** (metadata schema v6)
 
 This file describes everything Graft persists. Any change to a structure
 below bumps the format version, adds a migration, and updates this file in
@@ -35,6 +35,9 @@ $GRAFT_HOME/
         │   └── <graft-id>/
         │       ├── work/<n>    staging files of files open for writing
         │       └── git/        the graft's .git, created on first use
+        ├── tmp/                mode 0700, created by `graft run` (ADR 0014)
+        │   └── <graft-id>/     a graft's private TMPDIR, mode 0700;
+        │                       removed when the graft is pruned
         ├── layers/             mode 0700, the layer cache (ADR 0004)
         │   ├── <layer-key>/    a complete layer (directory tree)
         │   ├── <layer-key>.lock  OS file lock held by builders and gc
@@ -59,6 +62,7 @@ Entries in `roots/` whose name is not a valid Root ID, or that contain no
 | 5 | Adds `blobs/`, `grafts/` and schema v4 (`delta`, `staged`, `op_log.mode/mtime/target`) | Schema v3 → v4 runs automatically on open; tables and nullable columns only added |
 | 6 | Schema v5: `grafts.backend` accepts `nfs`; the socket moves to `/tmp/graft-<uid>/` when `run/graftd.sock` would be too long | Schema v4 → v5 rebuilds `grafts` (foreign keys off, checked before commit); every row and child row is kept |
 | 7 | Schema v6: Bud and Ring (`grafts.budded_from`, `op_log.to_seq` and the `rewind` op, tables `rings` and `ring_delta`; ADR 0013) | Schema v5 → v6 runs automatically on open; tables and nullable columns only added |
+| 8 | Adds `tmp/<graft-id>/`, the private temp dir of `graft run` (ADR 0014); `trusted_commands` also holds approved `[sandbox] write` paths | None: additive; created on first `graft run`, removed by prune |
 
 ## `config.toml`
 
