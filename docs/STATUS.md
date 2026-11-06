@@ -118,7 +118,16 @@ Known limits (ADR 0009): `fsync` on an NFS graft is not durable against power lo
 
 ## Phase 8 — Performance: faster than worktrees
 
-Status: in progress, as stacked PRs. Done: in-graft workloads and the worktree gate (#12, ADR 0010). Profiling: `GRAFT_LOG=graft::timing=debug graft new` logs each step, `scripts/profile-graft-new.sh` compares them with `git worktree add` and `npm ci`, and the `Profile` workflow runs it on the bench runners (`test/profile-graft-new`).
+Status: deferred by the owner (2026-11-06). The owner chose to move on to Phase 9 and return to the remaining Phase 8 work at the end of all phases, before Graft is declared ready; this overrides AGENTS.md §3 rule 1 for this phase. No criterion below is met yet. Open items:
+
+- The cold first graft on XFS is about 10% slower to create than a worktree (cloning a just-built layer).
+- `rg`, `find` and small-file writes are 2–4% slower in reflink grafts than in worktrees.
+- FUSE and NFS grafts are up to ≈40× slower than worktrees on in-graft workloads.
+- Cache size limits in `config.toml`, tested fallbacks for every mechanism, and `graft doctor` reporting which mechanisms are active.
+- The peak `graftd` memory test (large fixture, 16 grafts).
+- Reproducible macOS results: the GitHub runner VM cannot reproduce timings within ±10%; this needs a dedicated Mac.
+
+Progress so far, as stacked PRs. Done: in-graft workloads and the worktree gate (#12, ADR 0010). Profiling: `GRAFT_LOG=graft::timing=debug graft new` logs each step, `scripts/profile-graft-new.sh` compares them with `git worktree add` and `npm ci`, and the `Profile` workflow runs it on the bench runners (`test/profile-graft-new`).
 
 Baseline before any optimisation (`bench/results/`; first recorded from Actions run 42005356393, now replaced by run 42113580319 on `main` with the prune fix; `gate.md` in each directory). Every gate fails today. The figures below are from 42005356393; with 42113580319 the Linux XFS gate is 31 beats, 12 ties, 14 losses, and the macOS large reflink cells have numbers (5 of 6 runs; one prune still failed after the retries). Profile of the first graft: `bench/results/profiles/` (cloning the freshly built layer is the cold loss on XFS). Done: parallel layer cloning (#16, ADR 0011): a warm graft now creates faster than a worktree on XFS and ext4; the cold graft on XFS still loses by about 10% (cloning a just-built layer). Tried and rejected: flushing the layer first, or cloning it into the cache instead (#17, see the profile notes). In progress: a cache tree in every graft's index, so `git status` skips unchanged directories (`perf/graft-git-status`, ADR 0012).
 
