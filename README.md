@@ -30,6 +30,15 @@ graft diff auth           # as a unified diff
 graft prune auth          # refuses if work would be lost; --force to discard
 ```
 
+Virtual grafts (`graft new --backend fuse` on Linux, `--backend nfs` on
+macOS) can also be forked and checkpointed, as metadata operations:
+
+```sh
+graft bud auth auth-alt               # fork: same base, a copy of the delta
+graft ring auth before-refactor       # checkpoint; `graft ring auth --list`
+graft rewind auth before-refactor     # go back; prints how to undo it
+```
+
 Dependency trees are built once and shared: declare them as layers in
 `graft.toml` ([reference](docs/blueprint.md)), approve the build command once
 with `graft trust`, and every graft after the first gets `node_modules` (or
