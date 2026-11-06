@@ -35,3 +35,23 @@ not reproducible.
 
 Next: parallel reflink cloning (`perf/parallel-clone`), measured with the
 same profile before and after.
+
+## After parallel layer cloning (ADR 0011)
+
+Profile run 42185454638 (`perf/parallel-clone`), raw tables in
+`graft-new-<label>-parallel-clone.md`. The XFS runner was slower than in
+the first profile (`git worktree add` 1.49 s against 1.08 s), so the ratios
+against the worktree in the same run are what to compare.
+
+| medium, runs 2–3 | XFS before → after | ext4 before → after |
+| --- | ---: | ---: |
+| clone layer, cold | 1.13 → 0.83 s | 0.50 → 0.34 s |
+| clone layer, warm | 0.43 → 0.36 s | 0.48 → 0.34 s |
+| warm `graft new` ÷ `git worktree add` | 1.07× → 0.90× | 0.74× → 0.62× |
+| cold `graft new` ÷ (worktree add + `npm ci`) | 1.33× → 1.10× | 0.91× → 0.83× |
+
+A warm graft now creates faster than a worktree on both filesystems. The
+cold graft on XFS still loses by about 10%: cloning the freshly built layer
+(0.83 s) still costs more than twice the warm clone (0.36 s), which is the
+writeback FICLONE does first. macOS stays too noisy to read (cold clone
+0.66–0.82 s, warm 0.65–1.50 s).
