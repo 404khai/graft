@@ -1,25 +1,25 @@
 run,fixture,tracked_files,method,agents,create_median_s,create_total_s,ready_first_s,ready_median_s,disk_added_bytes,prune_median_s,status
-1,large,200008,graft,1,,,,,,,error: graft prune failed (exit status: 1): graft: removing /Users/runner/work/_temp/graft-bench/bench/cell-large-graft-1/graft-home/roots/0ac1046d04628eb0f384d7cbc6e67da1/mounts/agent0: Directory not empty (os error 66): Directory not empty (os error 66)
-1,large,200008,graft,4,,,,,,,error: graft prune failed (exit status: 1): graft: removing /Users/runner/work/_temp/graft-bench/bench/cell-large-graft-4/graft-home/roots/0ac1046d04628eb0f384d7cbc6e67da1/mounts/agent0: Directory not empty (os error 66): Directory not empty (os error 66)
-1,large,200008,graft-nfs,1,70.4369,70.4369,70.9677,70.9677,9105408,0.0556,ok
-1,large,200008,graft-nfs,4,0.0558,63.4147,63.6100,0.3402,8683520,0.0320,ok
-1,large,200008,worktree,1,38.6785,38.6785,40.3665,40.3665,1488121856,18.0245,ok
-1,large,200008,worktree,4,38.1008,151.1371,40.0691,39.7207,5958377472,17.3643,ok
-1,large,200008,clone,1,34.7893,34.7893,36.4054,36.4054,1488596992,14.9845,ok
-1,large,200008,clone,4,37.7401,155.1528,47.2071,38.4860,5962606592,16.5254,ok
-2,large,200008,graft,1,,,,,,,error: graft prune failed (exit status: 1): graft: removing /Users/runner/work/_temp/graft-bench/bench/cell-large-graft-1/graft-home/roots/0ac1046d04628eb0f384d7cbc6e67da1/mounts/agent0: Directory not empty (os error 66): Directory not empty (os error 66)
-2,large,200008,graft,4,,,,,,,error: graft prune failed (exit status: 1): graft: removing /Users/runner/work/_temp/graft-bench/bench/cell-large-graft-4/graft-home/roots/0ac1046d04628eb0f384d7cbc6e67da1/mounts/agent1: Directory not empty (os error 66): Directory not empty (os error 66)
-2,large,200008,graft-nfs,1,72.9269,72.9269,73.4321,73.4321,9674752,0.0610,ok
-2,large,200008,graft-nfs,4,0.0607,61.0428,61.2299,0.3357,8718336,0.0377,ok
-2,large,200008,worktree,1,32.1635,32.1635,33.8602,33.8602,1488424960,16.3432,ok
-2,large,200008,worktree,4,29.8415,120.6199,31.9098,31.4513,5952256000,15.6943,ok
-2,large,200008,clone,1,36.2283,36.2283,37.9133,37.9133,1489055744,17.1036,ok
-2,large,200008,clone,4,31.8351,133.4591,37.2971,33.4721,5957597184,15.3675,ok
-3,large,200008,graft,1,,,,,,,error: graft prune failed (exit status: 1): graft: removing /Users/runner/work/_temp/graft-bench/bench/cell-large-graft-1/graft-home/roots/0ac1046d04628eb0f384d7cbc6e67da1/mounts/agent0: Directory not empty (os error 66): Directory not empty (os error 66)
-3,large,200008,graft,4,,,,,,,error: graft prune failed (exit status: 1): graft: removing /Users/runner/work/_temp/graft-bench/bench/cell-large-graft-4/graft-home/roots/0ac1046d04628eb0f384d7cbc6e67da1/mounts/agent1: Directory not empty (os error 66): Directory not empty (os error 66)
-3,large,200008,graft-nfs,1,65.3433,65.3433,65.8811,65.8811,11198464,0.0590,ok
-3,large,200008,graft-nfs,4,0.0570,67.6039,67.7663,0.3291,10672128,0.0335,ok
-3,large,200008,worktree,1,43.1281,43.1281,44.9860,44.9860,1486917632,20.5124,ok
-3,large,200008,worktree,4,44.1474,178.3960,46.2438,46.1534,5959424000,25.4836,ok
-3,large,200008,clone,1,47.2564,47.2564,49.2171,49.2171,1490673664,22.9785,ok
-3,large,200008,clone,4,48.1229,194.0266,53.6888,49.8346,5959784448,26.2868,ok
+1,large,200008,graft,1,44.7314,44.7314,45.0309,45.0309,79286272,15.5967,ok
+1,large,200008,graft,4,36.5923,144.5576,38.9948,36.7683,313225216,18.5121,ok
+1,large,200008,graft-nfs,1,46.0337,46.0337,46.3148,46.3148,8024064,0.0556,ok
+1,large,200008,graft-nfs,4,0.0487,38.4000,38.5618,0.2429,8116224,0.0204,ok
+1,large,200008,worktree,1,24.5597,24.5597,25.4735,25.4735,1488445440,10.9698,ok
+1,large,200008,worktree,4,24.3119,104.1412,26.8474,25.2883,5963931648,12.0396,ok
+1,large,200008,clone,1,24.8427,24.8427,26.4849,26.4849,1488666624,11.0796,ok
+1,large,200008,clone,4,34.2749,137.7864,33.2591,37.4543,5968328704,18.6208,ok
+2,large,200008,graft,1,50.6029,50.6029,51.0029,51.0029,78745600,20.4419,ok
+2,large,200008,graft,4,42.6771,164.9959,45.4186,41.1321,320915456,20.3814,ok
+2,large,200008,graft-nfs,1,60.4521,60.4521,60.8606,60.8606,8065024,0.0548,ok
+2,large,200008,graft-nfs,4,0.0627,56.9323,57.0791,0.3378,8210432,0.0279,ok
+2,large,200008,worktree,1,29.5047,29.5047,30.8138,30.8138,1489850368,14.1566,ok
+2,large,200008,worktree,4,34.7766,139.0687,35.8814,36.5135,5957505024,18.4864,ok
+2,large,200008,clone,1,28.1538,28.1538,29.9065,29.9065,1489379328,12.4688,ok
+2,large,200008,clone,4,32.0706,133.1917,35.8740,33.8501,5954646016,16.2460,ok
+3,large,200008,graft,1,31.3521,31.3521,31.6567,31.6567,80404480,16.1823,ok
+3,large,200008,graft,4,,,,,,,"error: graft prune failed (exit status: 1): graft: removing /Users/runner/work/_temp/graft-bench/bench/cell-large-graft-4/graft-home/roots/9a9119ca97ed14f38716b3ba386138e5/mounts/agent1: directory not empty after 6 attempts; still there: src/d0224/m022499.js, src/d0224/m022489.js, src/d0224/m022498.js, src/d0224/m022488.js, src/d0224/m022450.js, src/d0224/m022401.js, src/d0224/m022497.js, src/d0224/m022435.js, src/d0224/m022464.js, src/d0224/m022474.js, ..."
+3,large,200008,graft-nfs,1,38.0117,38.0117,38.2338,38.2338,10149888,0.0275,ok
+3,large,200008,graft-nfs,4,0.0403,37.9110,38.0129,0.2260,10219520,0.0212,ok
+3,large,200008,worktree,1,24.0196,24.0196,24.9972,24.9972,1489686528,11.9996,ok
+3,large,200008,worktree,4,24.0508,95.6820,25.1139,25.0040,5949194240,12.9753,ok
+3,large,200008,clone,1,24.2095,24.2095,25.1865,25.1865,1488076800,11.0090,ok
+3,large,200008,clone,4,23.7802,95.2810,24.7200,24.9900,5938092032,12.1163,ok

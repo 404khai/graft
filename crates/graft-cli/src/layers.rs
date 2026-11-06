@@ -18,6 +18,7 @@ use graft_root::Repo;
 use graft_root::layer::{CacheEntry, KeyInputs, LayerCache, command_hash, layer_key};
 use graft_store::Store;
 
+use crate::timing::{time, time_layer};
 use crate::{Environment, Output};
 
 /// Whether any planned layer still has to be built.
@@ -216,15 +217,21 @@ pub(crate) fn apply(
 ) -> anyhow::Result<Vec<Applied>> {
     let mut applied = Vec::with_capacity(planned.len());
     for p in planned {
-        let lock = cache.lock(&p.key)?;
+        let layer = p.spec.path.as_path();
+        let lock = time_layer("lock layer", layer, || cache.lock(&p.key))?;
         let mut built = false;
         if !cache.is_ready(&p.key) {
-            build(&p.spec, graft_dir, name, id)?;
-            cache.install(&p.key, &graft_dir.join(&p.spec.path), &lock)?;
+            time_layer("build layer", layer, || build(&p.spec, graft_dir, name, id))?;
+            time_layer("install layer", layer, || {
+                cache.install(&p.key, &graft_dir.join(&p.spec.path), &lock)
+            })?;
             built = true;
         }
-        store.record_layer(&p.key, &p.spec.path, &p.spec.build)?;
-        store.add_layer_ref(id, &p.key)?;
+        time_layer("record layer", layer, || -> anyhow::Result<()> {
+            store.record_layer(&p.key, &p.spec.path, &p.spec.build)?;
+            store.add_layer_ref(id, &p.key)?;
+            Ok(())
+        })?;
         if !materialize {
             drop(lock);
             applied.push(Applied {
@@ -246,9 +253,10 @@ pub(crate) fn apply(
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
-        clone_tree(&cache.path(&p.key), &target, &cloner).with_context(|| {
-            format!("layer {}: copying it into the graft", p.spec.path.display())
-        })?;
+        time_layer("clone layer", layer, || {
+            clone_tree(&cache.path(&p.key), &target, &cloner)
+        })
+        .with_context(|| format!("layer {}: copying it into the graft", p.spec.path.display()))?;
         drop(lock);
         applied.push(Applied {
             path: p.spec.path.clone(),
@@ -259,7 +267,9 @@ pub(crate) fn apply(
     }
     if materialize {
         let paths: Vec<&Path> = planned.iter().map(|p| p.spec.path.as_path()).collect();
-        graft_root::graft::exclude_paths(graft_dir, &paths)?;
+        time("exclude layers", || {
+            graft_root::graft::exclude_paths(graft_dir, &paths)
+        })?;
     }
     Ok(applied)
 }

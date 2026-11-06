@@ -10,6 +10,7 @@ mod doctor;
 mod grafts;
 mod layers;
 mod root;
+mod timing;
 mod virtual_grafts;
 
 use std::io::Write;

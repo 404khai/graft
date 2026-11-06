@@ -16,8 +16,8 @@ use graft_root::layer::LayerCache;
 use graft_store::registry::{Located, locate};
 use graft_store::{GraftRecord, Store};
 
-use crate::layers;
 use crate::{Environment, Output};
+use crate::{layers, timing};
 
 /// Arguments for `graft new`.
 #[derive(Debug, clap::Args)]
@@ -136,11 +136,14 @@ fn daemon(home: &GraftHome, out: &mut Output) -> anyhow::Result<Client> {
 /// Creates a graft.
 pub(crate) fn new(args: &NewArgs, env: &Environment) -> anyhow::Result<Output> {
     let name = parse_name(&args.name)?;
-    if choose_backend(args, env)?.is_virtual() {
-        new_virtual(args, env, &name, choose_backend(args, env)?)
-    } else {
-        new_reflink(args, env, &name)
-    }
+    let kind = choose_backend(args, env)?;
+    timing::time("graft new", || {
+        if kind.is_virtual() {
+            new_virtual(args, env, &name, kind)
+        } else {
+            new_reflink(args, env, &name)
+        }
+    })
 }
 
 /// Creates a reflink graft: a real working tree (ADR 0003).
@@ -154,13 +157,15 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
     let rev = args.from.as_deref().unwrap_or("HEAD");
     let base = located.repo.resolve_commit(rev)?;
     // Refuse unapproved layer commands before anything is created.
-    let planned = layers::plan(
-        &located.repo,
-        &located.store,
-        &cache,
-        &base,
-        args.from.as_deref(),
-    )?;
+    let planned = timing::time("plan layers", || {
+        layers::plan(
+            &located.repo,
+            &located.store,
+            &cache,
+            &base,
+            args.from.as_deref(),
+        )
+    })?;
 
     // The record reserves the name before any files exist.
     let record = located
@@ -171,11 +176,10 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
         name,
         base: &base,
     };
-    let created = backend
-        .create(&located.repo, &spec)
+    let created = timing::time("check out tree", || backend.create(&located.repo, &spec))
         .map_err(anyhow::Error::from)
         .and_then(|report| {
-            located.repo.pin(record.id, &base, name)?;
+            timing::time("pin base", || located.repo.pin(record.id, &base, name))?;
             let applied = layers::apply(
                 &planned,
                 &cache,
@@ -264,17 +268,19 @@ fn new_virtual(
     } = open(env)?;
     let rev = args.from.as_deref().unwrap_or("HEAD");
     let base = located.repo.resolve_commit(rev)?;
-    let planned = layers::plan(
-        &located.repo,
-        &located.store,
-        &cache,
-        &base,
-        args.from.as_deref(),
-    )?;
+    let planned = timing::time("plan layers", || {
+        layers::plan(
+            &located.repo,
+            &located.store,
+            &cache,
+            &base,
+            args.from.as_deref(),
+        )
+    })?;
     let mut out = Output::default();
     // Reach graftd before recording anything, so an unsupported platform
     // leaves nothing behind.
-    let mut client = daemon(&home, &mut out)?;
+    let mut client = timing::time("reach graftd", || daemon(&home, &mut out))?;
     let record = located.store.create_graft(name, &base, kind)?;
     // Layers that are not cached yet are built in a throwaway reflink
     // checkout of the same base (ADR 0006).
@@ -287,7 +293,9 @@ fn new_virtual(
                 name,
                 base: &base,
             };
-            let scratch = builder.create(&located.repo, &spec)?;
+            let scratch = timing::time("check out scratch tree", || {
+                builder.create(&located.repo, &spec)
+            })?;
             let applied = layers::apply(
                 &planned,
                 &cache,
@@ -297,7 +305,7 @@ fn new_virtual(
                 record.id,
                 false,
             );
-            builder.prune(name, record.id)?;
+            timing::time("remove scratch tree", || builder.prune(name, record.id))?;
             applied?
         } else {
             layers::apply(
@@ -310,7 +318,7 @@ fn new_virtual(
                 false,
             )?
         };
-        let path = client.mount(&located.record.id, name)?;
+        let path = timing::time("mount", || client.mount(&located.record.id, name))?;
         Ok((path, applied))
     })();
     let (path, applied) = match created {

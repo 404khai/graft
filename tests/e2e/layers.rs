@@ -501,3 +501,51 @@ fn node_fixture_reuses_node_modules_and_passes_npm_test_quickly() {
         );
     }
 }
+
+/// `GRAFT_LOG=graft::timing=debug` reports each step of `graft new`, for
+/// profiling (`scripts/profile-graft-new.sh`); stdout is unchanged.
+#[test]
+fn graft_new_reports_step_timings_when_asked() {
+    let f = Fixture::new();
+    f.run(&["trust"]).success();
+    let steps = |name: &str| -> Vec<String> {
+        let out = f
+            .cmd(&["new", name])
+            .env("GRAFT_LOG", "graft::timing=debug")
+            .env("NO_COLOR", "1")
+            .assert()
+            .success();
+        let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+        assert!(!stdout.contains("timing"), "{stdout}");
+        String::from_utf8(out.get_output().stderr.clone())
+            .unwrap()
+            .lines()
+            .filter(|l| l.contains(" timing "))
+            .filter_map(|l| {
+                l.split("step=\"")
+                    .nth(1)?
+                    .split('"')
+                    .next()
+                    .map(str::to_owned)
+            })
+            .collect()
+    };
+    let cold = steps("cold");
+    for step in [
+        "plan layers",
+        "check out tree",
+        "pin base",
+        "build layer",
+        "install layer",
+        "clone layer",
+        "graft new",
+    ] {
+        assert!(cold.iter().any(|s| s == step), "no {step:?} in {cold:?}");
+    }
+    let warm = steps("warm");
+    assert!(!warm.iter().any(|s| s == "build layer"), "{warm:?}");
+    assert!(warm.iter().any(|s| s == "clone layer"), "{warm:?}");
+    // Without the filter, nothing is logged.
+    let quiet = f.cmd(&["new", "quiet"]).assert().success();
+    assert!(!String::from_utf8_lossy(&quiet.get_output().stderr).contains("timing"));
+}

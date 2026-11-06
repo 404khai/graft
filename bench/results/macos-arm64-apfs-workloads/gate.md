@@ -6,31 +6,32 @@ Verdict: **fail**
 
 | method | beats | ties | loses |
 | --- | ---: | ---: | ---: |
-| graft (default) | 0 | 8 | 3 |
-| graft-nfs | 0 | 6 | 4 |
+| graft (default) | 2 | 7 | 2 |
+| graft-nfs | 0 | 6 | 5 |
 
 ## medium
 
 | metric | method | graft | worktree | ratio | verdict |
 | --- | --- | ---: | ---: | ---: | --- |
-| build-cold | graft | 1.41 s ±20% | 1.63 s ±43% | 0.87× | ties ⚠ |
-| build-cold | graft-nfs | 3.51 s ±404% | 1.63 s ±43% | 2.16× | ties ⚠ |
-| find | graft | 76 ms ±42% | 67 ms ±23% | 1.13× | loses ✗ |
-| find | graft-nfs | 172 ms ±77% | 67 ms ±23% | 2.54× | ties ⚠ |
-| git-commit | graft | 102 ms ±54% | 62 ms ±41% | 1.64× | ties ⚠ |
-| git-commit | graft-nfs | 304 ms ±53% | 62 ms ±41% | 4.89× | loses ✗ |
-| git-diff | graft | 41 ms ±31% | 38 ms ±16% | 1.09× | loses ✗ |
-| git-diff | graft-nfs | 96 ms ±32% | 38 ms ±16% | 2.54× | loses ✗ |
-| git-status | graft | 68 ms ±17% | 62 ms ±7% | 1.09× | loses ✗ |
-| git-status | graft-nfs | 147 ms ±20% | 62 ms ±7% | 2.38× | loses ✗ |
-| ls-R | graft | 323 ms ±34% | 317 ms ±14% | 1.02× | ties ⚠ |
-| ls-R | graft-nfs | 488 ms ±39% | 317 ms ±14% | 1.54× | ties ⚠ |
-| rebuild | graft | 375 ms ±32% | 390 ms ±39% | 0.96× | ties ⚠ |
-| rebuild | graft-nfs | 450 ms ±25% | 390 ms ±39% | 1.15× | ties ⚠ |
-| rg | graft | 234 ms ±53% | 198 ms ±21% | 1.18× | ties ⚠ |
-| rg | graft-nfs | 264 ms ±48% | 198 ms ±21% | 1.33× | ties ⚠ |
-| test | graft | 244 ms ±18% | 260 ms ±30% | 0.94× | ties ⚠ |
-| test | graft-nfs | 299 ms ±18% | 260 ms ±30% | 1.15× | ties ⚠ |
-| write-10k-small | graft | 1.22 s ±20% | 1.14 s ±1% | 1.07× | ties ⚠ |
-| write-1gib | graft | 452 ms ±47% | 485 ms ±42% | 0.93× | ties ⚠ |
-| write-1gib | graft-nfs | 21.66 s ±16% | 485 ms ±42% | 44.63× | loses ✗ |
+| build-cold | graft | 1.29 s ±16% | 1.59 s ±25% | 0.81× | ties ⚠ |
+| build-cold | graft-nfs | 3.08 s ±509% | 1.59 s ±25% | 1.94× | ties ⚠ |
+| find | graft | 54 ms ±59% | 72 ms ±16% | 0.75× | beats |
+| find | graft-nfs | 153 ms ±146% | 72 ms ±16% | 2.12× | ties ⚠ |
+| git-commit | graft | 76 ms ±33% | 58 ms ±15% | 1.30× | loses ✗ |
+| git-commit | graft-nfs | 250 ms ±140% | 58 ms ±15% | 4.28× | ties ⚠ |
+| git-diff | graft | 41 ms ±57% | 32 ms ±30% | 1.26× | loses ✗ |
+| git-diff | graft-nfs | 87 ms ±77% | 32 ms ±30% | 2.71× | loses ✗ |
+| git-status | graft | 62 ms ±32% | 63 ms ±28% | 0.99× | beats |
+| git-status | graft-nfs | 142 ms ±70% | 63 ms ±28% | 2.28× | ties ⚠ |
+| ls-R | graft | 332 ms ±11% | 287 ms ±19% | 1.16× | ties ⚠ |
+| ls-R | graft-nfs | 492 ms ±39% | 287 ms ±19% | 1.71× | loses ✗ |
+| rebuild | graft | 340 ms ±10% | 324 ms ±36% | 1.05× | ties ⚠ |
+| rebuild | graft-nfs | 375 ms ±14% | 324 ms ±36% | 1.16× | ties ⚠ |
+| rg | graft | 199 ms ±13% | 176 ms ±51% | 1.13× | ties ⚠ |
+| rg | graft-nfs | 274 ms ±15% | 176 ms ±51% | 1.55× | loses ✗ |
+| test | graft | 233 ms ±10% | 222 ms ±21% | 1.05× | ties ⚠ |
+| test | graft-nfs | 243 ms ±19% | 222 ms ±21% | 1.10× | ties ⚠ |
+| write-10k-small | graft | 1.04 s ±28% | 852 ms ±37% | 1.22× | ties ⚠ |
+| write-10k-small | graft-nfs | 47.82 s ±11% | 852 ms ±37% | 56.10× | loses ✗ |
+| write-1gib | graft | 424 ms ±15% | 395 ms ±62% | 1.07× | ties ⚠ |
+| write-1gib | graft-nfs | 18.26 s ±4% | 395 ms ±62% | 46.22× | loses ✗ |

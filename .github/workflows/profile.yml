@@ -1,0 +1,62 @@
+name: Profile
+
+# `graft new` step timings against a worktree, on the bench runners
+# (Phase 8: measure first). On demand, or on pull requests labelled
+# `profile`; never gates merges.
+on:
+  pull_request:
+    types: [labeled, synchronize]
+  workflow_dispatch:
+    inputs:
+      fixture:
+        description: small, medium or large
+        default: medium
+      runs:
+        description: Fresh GRAFT_HOMEs to profile
+        default: "3"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  graft-new:
+    name: graft new profile (${{ matrix.label }})
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'profile')
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, label: linux-x86_64-xfs, fs: xfs }
+          - { os: ubuntu-latest, label: linux-x86_64-ext4, fs: ext4 }
+          - { os: macos-latest, label: macos-arm64-apfs, fs: apfs }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --release -p graft-cli -p graft-bench
+      - name: Mount a dedicated volume (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y btrfs-progs xfsprogs
+          sudo mkdir -p /mnt/graft-bench && sudo chown "$(id -u):$(id -g)" /mnt/graft-bench
+          sudo env SIZE=20G scripts/mount-test-filesystems.sh /mnt/graft-bench "$(id -u):$(id -g)"
+          echo "PROFILE_WORK=/mnt/graft-bench/mnt/${{ matrix.fs }}/profile" >> "$GITHUB_ENV"
+      - name: Prepare (macOS)
+        if: runner.os == 'macOS'
+        run: echo "PROFILE_WORK=$RUNNER_TEMP/graft-profile" >> "$GITHUB_ENV"
+      - name: Profile
+        run: |
+          mkdir -p profile
+          scripts/profile-graft-new.sh "$PROFILE_WORK" "${{ inputs.fixture || 'medium' }}" "${{ inputs.runs || '3' }}" \
+            2>profile/stderr.log | tee "profile/${{ matrix.label }}.md"
+          cat "profile/${{ matrix.label }}.md" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: profile-${{ matrix.label }}
+          path: profile/

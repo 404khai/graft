@@ -118,9 +118,9 @@ Known limits (ADR 0009): `fsync` on an NFS graft is not durable against power lo
 
 ## Phase 8 — Performance: faster than worktrees
 
-Status: in progress, as stacked PRs. Done: in-graft workloads and the worktree gate (#12, ADR 0010).
+Status: in progress, as stacked PRs. Done: in-graft workloads and the worktree gate (#12, ADR 0010). Profiling: `GRAFT_LOG=graft::timing=debug graft new` logs each step, `scripts/profile-graft-new.sh` compares them with `git worktree add` and `npm ci`, and the `Profile` workflow runs it on the bench runners (`test/profile-graft-new`).
 
-Baseline before any optimisation (`bench/results/`, Actions run 42005356393; `gate.md` in each directory). Every gate fails today:
+Baseline before any optimisation (`bench/results/`; first recorded from Actions run 42005356393, now replaced by run 42113580319 on `main` with the prune fix; `gate.md` in each directory). Every gate fails today. The figures below are from 42005356393; with 42113580319 the Linux XFS gate is 31 beats, 12 ties, 14 losses, and the macOS large reflink cells have numbers (5 of 6 runs; one prune still failed after the retries). Profile of the first graft: `bench/results/profiles/` (cloning the freshly built layer is the cold loss on XFS).
 
 - Linux, XFS, create matrix (188 of 189 values within ±10%): the default `graft` method beats worktrees on 40 values, ties 3 and loses 14. It wins on disk (≈10× less) and on ready time for later agents (213 ms against 535 ms on small). It loses on create for the first graft (398 ms against 71 ms on small, 3.74 s against 1.21 s on medium), on create for every medium graft (≈1.5 s against ≈1.2 s), on ready for the first agent on medium (≈3.9 s against ≈2.65 s, the cold layer), and on small-fixture prune (≈41 ms against ≈33 ms). `graft-fuse` loses 14, mostly the cold first agent (large: 16.5 s against 12.8 s to create).
 - In-graft workloads, medium (XFS 16 of 19, ext4 18 of 20 within ±10%): the reflink `graft` ties worktrees on builds, tests, `ls -R` and writes, and loses on `git status` (30 ms against 24 ms on XFS, 42 ms against 36 ms on ext4) and, by 1–8%, on `git diff`, `git commit`, `rg` and (XFS only) `find`. `graft-fuse` loses all 11 workloads: `rg` 20–24× slower, `write-10k-small` 27–39×, `ls -R` ≈8×, cold build 6.5–7×.

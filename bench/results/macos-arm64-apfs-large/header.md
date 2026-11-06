@@ -10,7 +10,7 @@
 | git | git version 2.56.0 |
 | node / npm | v24.22.2 / 11.19.1 |
 | runs | 3 (after one discarded warm-up cell per fixture and method); cells with fewer than 5 agents repeat until they have 5 timed creations |
-| load average at start | 5.54 5.64 6.22 |
+| load average at start | 5.17 5.17 5.83 |
 | command | `/Users/runner/work/graft/graft/target/release/graft-bench run --graft /Users/runner/work/graft/graft/target/release/graft --work /Users/runner/work/_temp/graft-bench/bench --out /Users/runner/work/graft/graft/bench/results/macos-arm64-apfs --machine GitHub Actions macos-latest runner (large: 1 and 4 agents only) --fixtures large --runs 3 --agents 1,4 --backends reflink,nfs` |
 
 Each cell creates N workspaces one after another from the same fixture.
