@@ -55,3 +55,24 @@ cold graft on XFS still loses by about 10%: cloning the freshly built layer
 (0.83 s) still costs more than twice the warm clone (0.36 s), which is the
 writeback FICLONE does first. macOS stays too noisy to read (cold clone
 0.66–0.82 s, warm 0.65–1.50 s).
+
+## Experiment: how the first graft gets its layer
+
+Profile run 42189514203 (draft PR #17, not merged), raw tables in
+`graft-new-<label>-experiment.md`. Three variants in the same run, medium,
+runs 2–3:
+
+| | XFS | ext4 |
+| --- | ---: | ---: |
+| default: clone the built layer into the graft | 0.48 s | 0.34 s |
+| `sync`: `fdatasync` the layer on 8 threads first | 1.70 s, then 0.27 s clone | 1.28 s, then 0.34 s clone |
+| `keep`: graft keeps the build's output, cache gets the clone | 0.51 s | 0.34 s |
+| cold `graft new`, default ÷ (worktree add + `npm ci`) | 1.10× | 0.80× |
+
+Neither variant helps. Flushing costs far more than it saves, and the
+clone costs the same in either direction. On this runner, the cold clone
+(0.48 s) is twice the warm one (0.23 s); that difference is the cost of
+sharing blocks that have not been written back yet, and no ordering
+avoids it. The build (1.23 s) equals `npm ci` in a worktree (1.21 s), and
+the checkout beats `git worktree add`. What is left of the cold loss on
+XFS (≈0.25 s) is that one clone.
