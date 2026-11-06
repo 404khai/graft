@@ -220,11 +220,30 @@ pub(crate) fn apply(
         let layer = p.spec.path.as_path();
         let lock = time_layer("lock layer", layer, || cache.lock(&p.key))?;
         let mut built = false;
+        // EXPERIMENT (not for merge): how the first graft gets its layer.
+        let experiment = std::env::var("GRAFT_EXPERIMENT_LAYER").unwrap_or_default();
+        let mut kept = false;
         if !cache.is_ready(&p.key) {
             time_layer("build layer", layer, || build(&p.spec, graft_dir, name, id))?;
-            time_layer("install layer", layer, || {
-                cache.install(&p.key, &graft_dir.join(&p.spec.path), &lock)
-            })?;
+            if experiment == "keep" && materialize {
+                // The graft keeps what the build wrote; the cache gets a clone.
+                let tmp = graft_dir.join(format!(".graft-layer-{}", p.key));
+                let cloner = ReflinkCloner::new();
+                time_layer("clone layer into cache", layer, || {
+                    clone_tree(&graft_dir.join(&p.spec.path), &tmp, &cloner)
+                })?;
+                time_layer("install layer", layer, || {
+                    cache.install(&p.key, &tmp, &lock)
+                })?;
+                kept = true;
+            } else {
+                time_layer("install layer", layer, || {
+                    cache.install(&p.key, &graft_dir.join(&p.spec.path), &lock)
+                })?;
+                if experiment == "sync" {
+                    time_layer("sync layer", layer, || sync_tree(&cache.path(&p.key)))?;
+                }
+            }
             built = true;
         }
         time_layer("record layer", layer, || -> anyhow::Result<()> {
@@ -232,6 +251,16 @@ pub(crate) fn apply(
             store.add_layer_ref(id, &p.key)?;
             Ok(())
         })?;
+        if kept {
+            drop(lock);
+            applied.push(Applied {
+                path: p.spec.path.clone(),
+                key: p.key,
+                built,
+                copied_reason: None,
+            });
+            continue;
+        }
         if !materialize {
             drop(lock);
             applied.push(Applied {
@@ -272,6 +301,43 @@ pub(crate) fn apply(
         })?;
     }
     Ok(applied)
+}
+
+/// EXPERIMENT: `fdatasync` every file under `dir`, on 8 threads.
+fn sync_tree(dir: &Path) -> anyhow::Result<()> {
+    let mut files = Vec::new();
+    let mut stack = vec![dir.to_owned()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d)? {
+            let e = e?;
+            let t = e.file_type()?;
+            if t.is_dir() {
+                stack.push(e.path());
+            } else if t.is_file() {
+                files.push(e.path());
+            }
+        }
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                scope.spawn(|| -> std::io::Result<()> {
+                    while let Some(f) =
+                        files.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+                    {
+                        std::fs::File::open(f)?.sync_data()?;
+                    }
+                    Ok(())
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join()
+                .map_err(|_| anyhow::anyhow!("sync worker panicked"))??;
+        }
+        Ok(())
+    })
 }
 
 /// Arguments for `graft trust`.

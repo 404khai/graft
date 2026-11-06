@@ -45,16 +45,20 @@ echo
 echo "| run | graft | step | ms |"
 echo "| ---: | --- | --- | ---: |"
 for run in $(seq 1 "$runs"); do
-  export GRAFT_HOME=$work/home-$run
-  rm -rf "$GRAFT_HOME"
-  (cd "$repo" && "$graft" init >/dev/null && "$graft" trust >/dev/null)
-  for which in cold warm; do
-    (cd "$repo" && timed_new "$which") | while IFS=$'\t' read -r step us; do
-      echo "| $run | $which | $step | $(ms "$us") |"
+  for variant in ${GRAFT_PROFILE_VARIANTS:-default}; do
+    export GRAFT_HOME=$work/home-$run-$variant
+    rm -rf "$GRAFT_HOME"
+    (cd "$repo" && "$graft" init >/dev/null && "$graft" trust >/dev/null)
+    [[ $variant == default ]] && unset GRAFT_EXPERIMENT_LAYER || export GRAFT_EXPERIMENT_LAYER=$variant
+    for which in cold warm; do
+      (cd "$repo" && timed_new "$which") | while IFS=$'\t' read -r step us; do
+        echo "| $run | $which ($variant) | $step | $(ms "$us") |"
+      done
     done
+    (cd "$repo" && "$graft" prune cold --force >/dev/null && "$graft" prune warm --force >/dev/null)
+    rm -rf "$GRAFT_HOME"
   done
-  (cd "$repo" && "$graft" prune cold --force >/dev/null && "$graft" prune warm --force >/dev/null)
-  rm -rf "$GRAFT_HOME"
+  unset GRAFT_EXPERIMENT_LAYER
 
   wt=$work/worktree-$run
   t0=$(now_us)

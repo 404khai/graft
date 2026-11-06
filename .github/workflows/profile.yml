@@ -50,6 +50,8 @@ jobs:
         if: runner.os == 'macOS'
         run: echo "PROFILE_WORK=$RUNNER_TEMP/graft-profile" >> "$GITHUB_ENV"
       - name: Profile
+        env:
+          GRAFT_PROFILE_VARIANTS: default sync keep
         run: |
           mkdir -p profile
           scripts/profile-graft-new.sh "$PROFILE_WORK" "${{ inputs.fixture || 'medium' }}" "${{ inputs.runs || '3' }}" \
