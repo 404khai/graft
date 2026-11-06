@@ -37,6 +37,7 @@ struct OpColumns<'a> {
     mode: Option<i64>,
     mtime: Option<i64>,
     target: Option<&'a [u8]>,
+    to_seq: Option<i64>,
 }
 
 fn op_columns(op: &Op) -> OpColumns<'_> {
@@ -60,6 +61,10 @@ fn op_columns(op: &Op) -> OpColumns<'_> {
         },
         Op::Rename { to, .. } => OpColumns {
             path_to: Some(to),
+            ..OpColumns::default()
+        },
+        Op::Rewind { to } => OpColumns {
+            to_seq: Some(i64_of(*to)),
             ..OpColumns::default()
         },
         Op::Unlink { .. } | Op::Rmdir { .. } => OpColumns::default(),
@@ -260,8 +265,8 @@ impl Store {
             .map_err(sql)?;
         let c = op_columns(j.op);
         tx.execute(
-            "INSERT INTO op_log (graft_id, seq, at, kind, path, path_to, blob, actor, mode, mtime, target)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO op_log (graft_id, seq, at, kind, path, path_to, blob, actor, mode, mtime, target, to_seq)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 gid,
                 seq,
@@ -273,7 +278,8 @@ impl Store {
                 j.actor,
                 c.mode,
                 c.mtime,
-                c.target
+                c.target,
+                c.to_seq
             ],
         )
         .map_err(sql)?;
@@ -319,7 +325,7 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT seq, at, kind, path, path_to, blob, actor, mode, mtime, target
+                "SELECT seq, at, kind, path, path_to, blob, actor, mode, mtime, target, to_seq
                  FROM op_log WHERE graft_id = ?1 ORDER BY seq",
             )
             .map_err(|e| self.sql(e))?;
@@ -336,12 +342,13 @@ impl Store {
                     r.get::<_, Option<i64>>(7)?,
                     r.get::<_, Option<i64>>(8)?,
                     r.get::<_, Option<Vec<u8>>>(9)?,
+                    r.get::<_, Option<i64>>(10)?,
                 ))
             })
             .map_err(|e| self.sql(e))?;
         let mut out = Vec::new();
         for row in rows {
-            let (seq, at, kind, path, path_to, blob, actor, mode, mtime, target) =
+            let (seq, at, kind, path, path_to, blob, actor, mode, mtime, target, to_seq) =
                 row.map_err(|e| self.sql(e))?;
             let blob = || -> Result<BlobHash> {
                 blob.as_deref()
@@ -382,6 +389,11 @@ impl Store {
                 "touch" => Op::Touch {
                     path,
                     mtime: mtime.ok_or_else(|| self.corrupt("op_log touch without mtime"))?,
+                },
+                "rewind" => Op::Rewind {
+                    to: to_seq
+                        .and_then(|t| u64::try_from(t).ok())
+                        .ok_or_else(|| self.corrupt("op_log rewind without to_seq"))?,
                 },
                 other => return Err(self.corrupt(format!("op_log.kind {other:?}"))),
             };
@@ -490,7 +502,7 @@ impl Store {
         Ok(())
     }
 
-    /// Every delta blob any graft of this Root references.
+    /// Every delta blob any graft or ring of this Root references.
     ///
     /// # Errors
     ///
@@ -498,7 +510,10 @@ impl Store {
     pub fn referenced_blobs(&self) -> Result<HashSet<BlobHash>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT DISTINCT blob FROM delta WHERE blob IS NOT NULL")
+            .prepare(
+                "SELECT blob FROM delta WHERE blob IS NOT NULL
+                 UNION SELECT blob FROM ring_delta WHERE blob IS NOT NULL",
+            )
             .map_err(|e| self.sql(e))?;
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))

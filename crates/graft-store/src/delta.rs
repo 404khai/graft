@@ -128,6 +128,13 @@ pub enum Op {
         /// The new time, in milliseconds.
         mtime: i64,
     },
+    /// The graft returned to a ring: its delta became the state it had
+    /// right after op `to` (ADR 0013). Only [`Delta::replay`] and the store
+    /// act on it; [`Delta::apply`] ignores it.
+    Rewind {
+        /// The sequence number of the ring's last op (0: the empty delta).
+        to: u64,
+    },
 }
 
 impl Op {
@@ -154,6 +161,7 @@ impl Op {
             Self::Rename { .. } => "rename",
             Self::Chmod { .. } => "chmod",
             Self::Touch { .. } => "touch",
+            Self::Rewind { .. } => "rewind",
         }
     }
 
@@ -169,6 +177,7 @@ impl Op {
             | Self::Chmod { path, .. }
             | Self::Touch { path, .. } => path,
             Self::Rename { from, .. } => from,
+            Self::Rewind { .. } => &[],
         }
     }
 }
@@ -519,7 +528,8 @@ impl Delta {
 
     /// Applies `op`, done at time `at`, and returns the changed rows. The
     /// caller has checked that the op is valid for the effective tree
-    /// (parents exist, targets are of the right kind, and so on).
+    /// (parents exist, targets are of the right kind, and so on). An
+    /// [`Op::Rewind`] needs the op log, so it changes nothing here.
     pub fn apply(&mut self, op: &Op, at: Timestamp, lower: &dyn Lower) -> Vec<Change> {
         let mut changes = Vec::new();
         let now = Some(at.as_millis());
@@ -584,6 +594,7 @@ impl Delta {
                     self.set(&mut changes, &dest, Some(Self::entry_for(node)));
                 }
             }
+            Op::Rewind { .. } => {}
         }
         changes
     }
@@ -602,12 +613,32 @@ impl Delta {
         }
     }
 
-    /// Replays `records` from an empty delta.
+    /// Replays `records` (oldest first) from an empty delta. A rewind to
+    /// `n` restores the state replay had right after op `n`.
     #[must_use]
     pub fn replay<'a>(records: impl IntoIterator<Item = &'a Record>, lower: &dyn Lower) -> Self {
+        let records: Vec<&Record> = records.into_iter().collect();
+        let targets: BTreeSet<u64> = records
+            .iter()
+            .filter_map(|r| match r.op {
+                Op::Rewind { to } => Some(to),
+                _ => None,
+            })
+            .collect();
+        let mut states: BTreeMap<u64, Self> = BTreeMap::new();
         let mut d = Self::default();
+        if targets.contains(&0) {
+            states.insert(0, d.clone());
+        }
         for r in records {
-            d.apply(&r.op, r.at, lower);
+            if let Op::Rewind { to } = r.op {
+                d = states.get(&to).cloned().unwrap_or_default();
+            } else {
+                d.apply(&r.op, r.at, lower);
+            }
+            if targets.contains(&r.seq) {
+                states.insert(r.seq, d.clone());
+            }
         }
         d
     }

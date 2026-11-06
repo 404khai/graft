@@ -735,6 +735,7 @@ pub(crate) fn log(args: &LogArgs, env: &Environment) -> anyhow::Result<Output> {
             }
             Op::Touch { path, mtime } => format!("{} (mtime {mtime})", show(path)),
             Op::Unlink { path } | Op::Rmdir { path } => show(path),
+            Op::Rewind { to } => format!("to op {to}"),
         };
         let _ = write!(out, "{:>6}  {}  {:<8}  {detail}", r.seq, r.at, r.op.kind());
         if let Some(actor) = &r.actor {

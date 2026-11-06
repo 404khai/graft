@@ -26,6 +26,7 @@ mod graft;
 mod home;
 mod id;
 mod paths;
+mod ring;
 mod time;
 
 pub use backend::{BackendKind, UnknownBackend};
@@ -36,4 +37,5 @@ pub use graft::{GraftName, GraftState, InvalidGraftName, MAX_GRAFT_NAME_LEN, Unk
 pub use home::{GRAFT_HOME_ENV, GraftHome, HomeSource};
 pub use id::{BlobHash, CommandHash, GraftId, LayerKey, ParseIdError, RootId};
 pub use paths::{path_from_bytes, path_to_bytes};
+pub use ring::{InvalidRingLabel, RingLabel};
 pub use time::Timestamp;
