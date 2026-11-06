@@ -6,32 +6,32 @@ Verdict: **fail**
 
 | method | beats | ties | loses |
 | --- | ---: | ---: | ---: |
-| graft (default) | 0 | 6 | 5 |
-| graft-fuse | 0 | 0 | 11 |
+| graft (default) | 1 | 5 | 5 |
+| graft-fuse | 0 | 1 | 10 |
 
 ## medium
 
 | metric | method | graft | worktree | ratio | verdict |
 | --- | --- | ---: | ---: | ---: | --- |
-| build-cold | graft | 553 ms ±0% | 552 ms ±2% | 1.00× | ties ⚠ |
-| build-cold | graft-fuse | 4.01 s ±3% | 552 ms ±2% | 7.27× | loses ✗ |
-| find | graft | 13 ms ±5% | 13 ms ±5% | 1.02× | loses ✗ |
-| find | graft-fuse | 83 ms ±0% | 13 ms ±5% | 6.60× | loses ✗ |
-| git-commit | graft | 26 ms ±11% | 24 ms ±12% | 1.08× | loses ✗ |
-| git-commit | graft-fuse | 48 ms ±30% | 24 ms ±12% | 2.03× | loses ✗ |
-| git-diff | graft | 14 ms ±15% | 14 ms ±20% | 1.04× | loses ✗ |
-| git-diff | graft-fuse | 19 ms ±4% | 14 ms ±20% | 1.42× | loses ✗ |
-| git-status | graft | 30 ms ±10% | 24 ms ±3% | 1.25× | loses ✗ |
-| git-status | graft-fuse | 66 ms ±4% | 24 ms ±3% | 2.72× | loses ✗ |
-| ls-R | graft | 173 ms ±2% | 174 ms ±1% | 1.00× | ties ⚠ |
-| ls-R | graft-fuse | 1.30 s ±1% | 174 ms ±1% | 7.46× | loses ✗ |
-| rebuild | graft | 188 ms ±3% | 186 ms ±0% | 1.01× | ties ⚠ |
-| rebuild | graft-fuse | 234 ms ±1% | 186 ms ±0% | 1.26× | loses ✗ |
-| rg | graft | 53 ms ±3% | 52 ms ±3% | 1.02× | loses ✗ |
-| rg | graft-fuse | 1.05 s ±1% | 52 ms ±3% | 20.32× | loses ✗ |
-| test | graft | 122 ms ±5% | 118 ms ±3% | 1.03× | ties ⚠ |
-| test | graft-fuse | 129 ms ±1% | 118 ms ±3% | 1.10× | loses ✗ |
-| write-10k-small | graft | 226 ms ±19% | 223 ms ±3% | 1.01× | ties ⚠ |
-| write-10k-small | graft-fuse | 8.60 s ±11% | 223 ms ±3% | 38.56× | loses ✗ |
-| write-1gib | graft | 4.01 s ±33% | 4.09 s ±3% | 0.98× | ties ⚠ |
-| write-1gib | graft-fuse | 4.74 s ±7% | 4.09 s ±3% | 1.16× | loses ✗ |
+| build-cold | graft | 641 ms ±1% | 640 ms ±3% | 1.00× | ties ⚠ |
+| build-cold | graft-fuse | 4.62 s ±3% | 640 ms ±3% | 7.21× | loses ✗ |
+| find | graft | 15 ms ±1% | 15 ms ±1% | 1.00× | beats |
+| find | graft-fuse | 102 ms ±2% | 15 ms ±1% | 6.80× | loses ✗ |
+| git-commit | graft | 30 ms ±8% | 28 ms ±12% | 1.08× | loses ✗ |
+| git-commit | graft-fuse | 57 ms ±5% | 28 ms ±12% | 2.07× | loses ✗ |
+| git-diff | graft | 16 ms ±4% | 15 ms ±11% | 1.03× | loses ✗ |
+| git-diff | graft-fuse | 22 ms ±29% | 15 ms ±11% | 1.42× | loses ✗ |
+| git-status | graft | 35 ms ±5% | 28 ms ±2% | 1.25× | loses ✗ |
+| git-status | graft-fuse | 83 ms ±3% | 28 ms ±2% | 2.92× | loses ✗ |
+| ls-R | graft | 204 ms ±3% | 204 ms ±1% | 1.00× | ties ⚠ |
+| ls-R | graft-fuse | 1.61 s ±1% | 204 ms ±1% | 7.89× | loses ✗ |
+| rebuild | graft | 223 ms ±3% | 221 ms ±1% | 1.01× | ties ⚠ |
+| rebuild | graft-fuse | 284 ms ±2% | 221 ms ±1% | 1.28× | loses ✗ |
+| rg | graft | 60 ms ±1% | 58 ms ±2% | 1.04× | loses ✗ |
+| rg | graft-fuse | 1.34 s ±3% | 58 ms ±2% | 23.37× | loses ✗ |
+| test | graft | 146 ms ±2% | 144 ms ±5% | 1.01× | ties ⚠ |
+| test | graft-fuse | 164 ms ±21% | 144 ms ±5% | 1.14× | ties ⚠ |
+| write-10k-small | graft | 309 ms ±2% | 292 ms ±2% | 1.06× | loses ✗ |
+| write-10k-small | graft-fuse | 8.22 s ±2% | 292 ms ±2% | 28.16× | loses ✗ |
+| write-1gib | graft | 2.59 s ±6% | 2.60 s ±1% | 1.00× | ties ⚠ |
+| write-1gib | graft-fuse | 3.37 s ±1% | 2.60 s ±1% | 1.30× | loses ✗ |

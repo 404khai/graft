@@ -10,7 +10,7 @@
 | git | git version 2.56.0 |
 | node / npm | v24.22.2 / 11.19.1 |
 | runs | 3 (a fresh workspace per method each run); 5 timed samples per workload after one discarded warm-up |
-| load average at start | 31.25 38.00 19.97 |
+| load average at start | 30.52 34.51 17.79 |
 | command | `/Users/runner/work/graft/graft/target/release/graft-bench workloads --graft /Users/runner/work/graft/graft/target/release/graft --work /Users/runner/work/_temp/graft-bench/bench --out /Users/runner/work/graft/graft/bench/results/macos-arm64-apfs-workloads --machine GitHub Actions macos-latest runner --runs 3 --backends reflink,nfs` |
 
 Each run creates one ready workspace per method (setup not timed: grafts build or reuse the `node_modules` layer, worktrees run `npm ci`), then times each workload inside it. Values are medians over runs of each run's median sample, ± the spread ((max − min) / median). Workloads: ADR 0010.
@@ -19,18 +19,18 @@ Each run creates one ready workspace per method (setup not timed: grafts build o
 
 | workload | graft | graft-nfs | worktree |
 | --- | ---: | ---: | ---: |
-| build-cold | 1.41 s ±20% ⚠ | 3.51 s ±404% ⚠ | 1.63 s ±43% ⚠ |
-| rebuild | 375 ms ±32% ⚠ | 450 ms ±25% ⚠ | 390 ms ±39% ⚠ |
-| test | 244 ms ±18% ⚠ | 299 ms ±18% ⚠ | 259 ms ±30% ⚠ |
-| git-status | 68 ms (±17%) | 147 ms ±20% ⚠ | 62 ms (±7%) |
-| git-diff | 41 ms (±31%) | 96 ms (±32%) | 38 ms (±16%) |
-| git-commit | 102 ms ±54% ⚠ | 304 ms ±53% ⚠ | 62 ms (±41%) |
-| rg | 234 ms ±53% ⚠ | 264 ms ±48% ⚠ | 198 ms ±21% ⚠ |
-| find | 76 ms (±42%) | 171 ms ±77% ⚠ | 67 ms (±23%) |
-| ls-R | 323 ms ±34% ⚠ | 488 ms ±39% ⚠ | 317 ms ±14% ⚠ |
-| write-10k-small | 1.22 s ±20% ⚠ | error: removing written files: Directory not empty (os error 66) | 1.14 s ±1% |
-| write-1gib | 452 ms ±47% ⚠ | 21.66 s ±16% ⚠ | 485 ms ±42% ⚠ |
+| build-cold | 1.29 s ±16% ⚠ | 3.08 s ±509% ⚠ | 1.59 s ±25% ⚠ |
+| rebuild | 340 ms ±10% | 375 ms ±14% ⚠ | 324 ms ±36% ⚠ |
+| test | 233 ms ±10% ⚠ | 243 ms ±19% ⚠ | 222 ms ±21% ⚠ |
+| git-status | 62 ms (±32%) | 143 ms ±70% ⚠ | 63 ms (±28%) |
+| git-diff | 41 ms (±57%) | 87 ms (±77%) | 32 ms (±29%) |
+| git-commit | 76 ms (±33%) | 250 ms ±140% ⚠ | 58 ms (±15%) |
+| rg | 199 ms ±13% ⚠ | 274 ms ±15% ⚠ | 176 ms ±51% ⚠ |
+| find | 54 ms (±59%) | 153 ms ±146% ⚠ | 72 ms (±16%) |
+| ls-R | 332 ms ±11% ⚠ | 492 ms ±39% ⚠ | 287 ms ±19% ⚠ |
+| write-10k-small | 1.04 s ±28% ⚠ | 47.82 s ±11% ⚠ | 852 ms ±37% ⚠ |
+| write-1gib | 424 ms ±15% ⚠ | 18.26 s ±4% | 395 ms ±62% ⚠ |
 
 ## Reproducibility
 
-1 of 24 values are within ±10% across 3 runs (others marked ⚠). Values below 100 ms, or from a single run, show the spread in parentheses and are not counted.
+2 of 24 values are within ±10% across 3 runs (others marked ⚠). Values below 100 ms, or from a single run, show the spread in parentheses and are not counted.

@@ -10,7 +10,7 @@
 | git | git version 2.56.0 |
 | node / npm | v24.22.2 / 11.19.1 |
 | runs | 3 (after one discarded warm-up cell per fixture and method); cells with fewer than 5 agents repeat until they have 5 timed creations |
-| load average at start | 5.54 5.64 6.22 |
+| load average at start | 5.17 5.17 5.83 |
 | command | `/Users/runner/work/graft/graft/target/release/graft-bench run --graft /Users/runner/work/graft/graft/target/release/graft --work /Users/runner/work/_temp/graft-bench/bench --out /Users/runner/work/graft/graft/bench/results/macos-arm64-apfs --machine GitHub Actions macos-latest runner (large: 1 and 4 agents only) --fixtures large --runs 3 --agents 1,4 --backends reflink,nfs` |
 
 Each cell creates N workspaces one after another from the same fixture.
@@ -20,15 +20,16 @@ Each cell creates N workspaces one after another from the same fixture.
 
 | method | agents | create (median) | ready, first agent | ready, later agents (median) | disk added, all agents | disk per agent | prune (median) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| graft | 1 | not measured: run 1: error: graft prune failed (exit status: 1): graft: removing /Users/runner/work/_temp/graft-bench/bench/cell-large-graft-1/graft-home/roots/0ac1046d04628eb0f384d7cbc6e67da1/mounts/agent0: Directory not empty (os error 66): Directory not empty (os error 66); run 2: error: graft prune failed (exit status: 1): graft: removing /Users/runner/work/_temp/graft-bench/bench/cell-large-graft-1/graft-home/roots/0ac1046d04628eb0f384d7cbc6e67da1/mounts/agent0: Directory not empty (os error 66): Directory not empty (os error 66); run 3: error: graft prune failed (exit status: 1): graft: removing /Users/runner/work/_temp/graft-bench/bench/cell-large-graft-1/graft-home/roots/0ac1046d04628eb0f384d7cbc6e67da1/mounts/agent0: Directory not empty (os error 66): Directory not empty (os error 66) | | | | | |
-| graft | 4 | not measured: run 1: error: graft prune failed (exit status: 1): graft: removing /Users/runner/work/_temp/graft-bench/bench/cell-large-graft-4/graft-home/roots/0ac1046d04628eb0f384d7cbc6e67da1/mounts/agent0: Directory not empty (os error 66): Directory not empty (os error 66); run 2: error: graft prune failed (exit status: 1): graft: removing /Users/runner/work/_temp/graft-bench/bench/cell-large-graft-4/graft-home/roots/0ac1046d04628eb0f384d7cbc6e67da1/mounts/agent1: Directory not empty (os error 66): Directory not empty (os error 66); run 3: error: graft prune failed (exit status: 1): graft: removing /Users/runner/work/_temp/graft-bench/bench/cell-large-graft-4/graft-home/roots/0ac1046d04628eb0f384d7cbc6e67da1/mounts/agent1: Directory not empty (os error 66): Directory not empty (os error 66) | | | | | |
-| graft-nfs | 1 | 70.44 s ±11% ⚠ | 70.97 s ±11% ⚠ | 70.97 s ±11% ⚠ | 9.2 MiB ±22% ⚠ | 9.2 MiB | 59 ms (±9%, below floor) |
-| graft-nfs | 4 | 57 ms (±9%, below floor) | 63.61 s ±10% ⚠ | 336 ms ±3% | 8.3 MiB ±23% ⚠ | 2.1 MiB | 34 ms (±17%, below floor) |
-| worktree | 1 | 38.68 s ±28% ⚠ | 40.37 s ±28% ⚠ | 40.37 s ±28% ⚠ | 1.4 GiB ±0% | 1.4 GiB | 18.02 s ±23% ⚠ |
-| worktree | 4 | 38.10 s ±38% ⚠ | 40.07 s ±36% ⚠ | 39.72 s ±37% ⚠ | 5.5 GiB ±0% | 1.4 GiB | 17.36 s ±56% ⚠ |
-| clone | 1 | 36.23 s ±34% ⚠ | 37.91 s ±34% ⚠ | 37.91 s ±34% ⚠ | 1.4 GiB ±0% | 1.4 GiB | 17.10 s ±47% ⚠ |
-| clone | 4 | 37.74 s ±43% ⚠ | 47.21 s ±35% ⚠ | 38.49 s ±43% ⚠ | 5.6 GiB ±0% | 1.4 GiB | 16.53 s ±66% ⚠ |
+| graft | 1 | 44.73 s ±43% ⚠ | 45.03 s ±43% ⚠ | 45.03 s ±43% ⚠ | 75.6 MiB ±2% | 75.6 MiB | 16.18 s ±30% ⚠ |
+| graft | 4 | 39.63 s ±15% ⚠ | 42.21 s ±15% ⚠ | 38.95 s ±11% ⚠ | 302.4 MiB ±2% | 75.6 MiB | 19.45 s ±10% |
+| | | errors: run 3: error: graft prune failed (exit status: 1): graft: removing /Users/runner/work/_temp/graft-bench/bench/cell-large-graft-4/graft-home/roots/9a9119ca97ed14f38716b3ba386138e5/mounts/agent1: directory not empty after 6 attempts; still there: src/d0224/m022499.js, src/d0224/m022489.js, src/d0224/m022498.js, src/d0224/m022488.js, src/d0224/m022450.js, src/d0224/m022401.js, src/d0224/m022497.js, src/d0224/m022435.js, src/d0224/m022464.js, src/d0224/m022474.js, ... | | | | | |
+| graft-nfs | 1 | 46.03 s ±49% ⚠ | 46.31 s ±49% ⚠ | 46.31 s ±49% ⚠ | 7.7 MiB ±26% ⚠ | 7.7 MiB | 55 ms (±51%, below floor) |
+| graft-nfs | 4 | 49 ms (±46%, below floor) | 38.56 s ±49% ⚠ | 243 ms ±46% ⚠ | 7.8 MiB ±26% ⚠ | 2.0 MiB | 21 ms (±35%, below floor) |
+| worktree | 1 | 24.56 s ±22% ⚠ | 25.47 s ±23% ⚠ | 25.47 s ±23% ⚠ | 1.4 GiB ±0% | 1.4 GiB | 12.00 s ±27% ⚠ |
+| worktree | 4 | 24.31 s ±44% ⚠ | 26.85 s ±40% ⚠ | 25.29 s ±46% ⚠ | 5.5 GiB ±0% | 1.4 GiB | 12.98 s ±50% ⚠ |
+| clone | 1 | 24.84 s ±16% ⚠ | 26.48 s ±18% ⚠ | 26.48 s ±18% ⚠ | 1.4 GiB ±0% | 1.4 GiB | 11.08 s ±13% ⚠ |
+| clone | 4 | 32.07 s ±33% ⚠ | 33.26 s ±34% ⚠ | 33.85 s ±37% ⚠ | 5.5 GiB ±1% | 1.4 GiB | 16.25 s ±40% ⚠ |
 
 ## Reproducibility
 
-5 of 27 values are within ±10% across 3 runs (22 outside, marked ⚠). 3 values below the noise floor (100 ms, 1.0 MiB) are shown but not counted.
+7 of 37 values are within ±10% across 3 runs (30 outside, marked ⚠). 3 values below the noise floor (100 ms, 1.0 MiB) are shown but not counted.
