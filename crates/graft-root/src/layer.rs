@@ -15,6 +15,7 @@ use crate::{Result, RootError};
 
 const LAYER_KEY_CONTEXT: &str = "graft layer v1";
 const COMMAND_HASH_CONTEXT: &str = "graft trust v1";
+const SANDBOX_WRITE_CONTEXT: &str = "graft sandbox write v1";
 
 fn field(hasher: &mut blake3::Hasher, bytes: &[u8]) {
     hasher.update(&(bytes.len() as u64).to_le_bytes());
@@ -64,6 +65,16 @@ pub fn command_hash(path: &Path, build: &str, toolchain: Option<&str>) -> Comman
     field(&mut h, &graft_core::path_to_bytes(path));
     field(&mut h, build.as_bytes());
     field(&mut h, toolchain.unwrap_or_default().as_bytes());
+    CommandHash::from_bytes(*h.finalize().as_bytes())
+}
+
+/// Identifies one `[sandbox] write` path of `graft.toml` for the trust
+/// gate (ADR 0014): approving it lets `graft run` make exactly that path
+/// writable. It cannot collide with a [`command_hash`].
+#[must_use]
+pub fn sandbox_write_hash(path: &str) -> CommandHash {
+    let mut h = blake3::Hasher::new_derive_key(SANDBOX_WRITE_CONTEXT);
+    field(&mut h, path.as_bytes());
     CommandHash::from_bytes(*h.finalize().as_bytes())
 }
 
