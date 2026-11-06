@@ -61,14 +61,14 @@ pub(crate) struct PruneArgs {
     force: bool,
 }
 
-struct Ctx {
-    home: GraftHome,
-    located: Located,
-    backend: ReflinkBackend,
-    layers: LayerCache,
+pub(crate) struct Ctx {
+    pub(crate) home: GraftHome,
+    pub(crate) located: Located,
+    pub(crate) backend: ReflinkBackend,
+    pub(crate) layers: LayerCache,
 }
 
-fn open(env: &Environment) -> anyhow::Result<Ctx> {
+pub(crate) fn open(env: &Environment) -> anyhow::Result<Ctx> {
     let home = env.require_home()?;
     let located = locate(home, Path::new("."))?;
     let root_dir = home.root_dir(&located.record.id);
@@ -82,16 +82,16 @@ fn open(env: &Environment) -> anyhow::Result<Ctx> {
 
 impl Ctx {
     /// `$GRAFT_HOME/roots/<root-id>`.
-    fn root_dir(&self) -> std::path::PathBuf {
+    pub(crate) fn root_dir(&self) -> std::path::PathBuf {
         self.home.root_dir(&self.located.record.id)
     }
 }
 
-fn parse_name(name: &str) -> anyhow::Result<GraftName> {
+pub(crate) fn parse_name(name: &str) -> anyhow::Result<GraftName> {
     Ok(name.parse()?)
 }
 
-fn find(store: &Store, name: &GraftName) -> anyhow::Result<GraftRecord> {
+pub(crate) fn find(store: &Store, name: &GraftName) -> anyhow::Result<GraftRecord> {
     store
         .graft(name)?
         .with_context(|| format!("no graft named {name}; see `graft ls`"))
@@ -120,7 +120,7 @@ fn choose_backend(args: &NewArgs, env: &Environment) -> anyhow::Result<BackendKi
 
 /// Connects to graftd, starting it if needed, and warns once if its version
 /// differs from ours.
-fn daemon(home: &GraftHome, out: &mut Output) -> anyhow::Result<Client> {
+pub(crate) fn daemon(home: &GraftHome, out: &mut Output) -> anyhow::Result<Client> {
     let mut client = Client::connect_or_start(home)?;
     let ping = client.ping()?;
     if ping.version != env!("CARGO_PKG_VERSION") {

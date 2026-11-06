@@ -9,6 +9,7 @@ mod daemon;
 mod doctor;
 mod grafts;
 mod layers;
+mod rings;
 mod root;
 mod timing;
 mod virtual_grafts;
@@ -54,6 +55,12 @@ enum Command {
     Log(grafts::LogArgs),
     /// Remove a graft. Refuses if work would be lost, unless --force.
     Prune(grafts::PruneArgs),
+    /// Fork a graft in constant time: same base, a copy of its delta.
+    Bud(rings::BudArgs),
+    /// Checkpoint a graft's delta as a named ring, or list its rings.
+    Ring(rings::RingArgs),
+    /// Return a graft to one of its rings (reversible: it rings first).
+    Rewind(rings::RewindArgs),
     /// Approve the layer build commands declared in graft.toml.
     Trust(layers::TrustArgs),
     /// Remove layers no graft uses.
@@ -142,6 +149,9 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Diff(args) => ok(grafts::diff(&args, &env))?,
         Command::Log(args) => ok(grafts::log(&args, &env))?,
         Command::Prune(args) => ok(grafts::prune(&args, &env))?,
+        Command::Bud(args) => ok(rings::bud(&args, &env))?,
+        Command::Ring(args) => ok(rings::ring(&args, &env))?,
+        Command::Rewind(args) => ok(rings::rewind(&args, &env))?,
         Command::Trust(args) => ok(layers::trust(&args, &env))?,
         Command::Gc(args) => ok(layers::gc(&args, &env))?,
         Command::Daemon(args) => ok(daemon::run(&args, &env))?,
