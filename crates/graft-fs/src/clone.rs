@@ -1,9 +1,9 @@
 //! Cloning files with reflinks, falling back to copies.
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use graft_root::graft::FileCloner;
 
@@ -114,6 +114,11 @@ impl FileCloner for ReflinkCloner {
 /// read-only directories (as some package managers create) work. Other file
 /// types (sockets, FIFOs) are skipped.
 ///
+/// Directories are created in one walk; files are then cloned on several
+/// threads, because each reflink is a separate syscall that may also have to
+/// write back the source's dirty data first (Phase 8 profile:
+/// `bench/results/profiles/`).
+///
 /// # Errors
 ///
 /// The first I/O error; `dst` may then be partially populated.
@@ -125,15 +130,44 @@ pub fn clone_tree(src: &Path, dst: &Path, cloner: &dyn FileCloner) -> io::Result
             src.display()
         )));
     }
+    let mut plan = Plan::default();
+    plan.dirs.push((dst.to_owned(), meta.permissions()));
     std::fs::create_dir(dst)?;
+    walk(src, dst, &mut plan)?;
+    clone_files(&plan.files, cloner)?;
+    // Deepest first, so a read-only parent is locked only after its
+    // children are complete.
+    for (dir, permissions) in plan.dirs.into_iter().rev() {
+        std::fs::set_permissions(&dir, permissions)?;
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct Plan {
+    /// Every directory created, parents before children, with the
+    /// permissions to apply once it is populated.
+    dirs: Vec<(PathBuf, std::fs::Permissions)>,
+    /// Regular files to clone: (source, destination).
+    files: Vec<(PathBuf, PathBuf)>,
+}
+
+/// Creates `dst`'s subdirectories and symlinks from `src`, and lists its
+/// files. Never follows a symlink.
+fn walk(src: &Path, dst: &Path, plan: &mut Plan) -> io::Result<()> {
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let kind = entry.file_type()?;
         let to = dst.join(entry.file_name());
         if kind.is_dir() {
-            clone_tree(&entry.path(), &to, cloner)?;
+            std::fs::create_dir(&to)?;
+            plan.dirs.push((
+                to.clone(),
+                std::fs::symlink_metadata(entry.path())?.permissions(),
+            ));
+            walk(&entry.path(), &to, plan)?;
         } else if kind.is_file() {
-            cloner.clone_file(&entry.path(), &to)?;
+            plan.files.push((entry.path(), to));
         } else if kind.is_symlink() {
             #[cfg(unix)]
             std::os::unix::fs::symlink(std::fs::read_link(entry.path())?, &to)?;
@@ -141,7 +175,53 @@ pub fn clone_tree(src: &Path, dst: &Path, cloner: &dyn FileCloner) -> io::Result
             tracing::debug!(path = %entry.path().display(), "skipping special file in layer");
         }
     }
-    std::fs::set_permissions(dst, meta.permissions())
+    Ok(())
+}
+
+/// Files per worker below which another thread is not worth starting.
+const FILES_PER_WORKER: usize = 64;
+
+/// Clones every `(source, destination)` with `cloner` on up to 8 threads,
+/// stopping at the first error.
+fn clone_files(files: &[(PathBuf, PathBuf)], cloner: &dyn FileCloner) -> io::Result<()> {
+    let workers = std::thread::available_parallelism()
+        .map_or(4, std::num::NonZero::get)
+        .min(8)
+        .min(files.len().div_ceil(FILES_PER_WORKER).max(1));
+    if workers == 1 {
+        return files
+            .iter()
+            .try_for_each(|(from, to)| cloner.clone_file(from, to));
+    }
+    let next = AtomicUsize::new(0);
+    let failed = AtomicBool::new(false);
+    let first_error: Mutex<Option<io::Error>> = Mutex::new(None);
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                while !failed.load(Ordering::Relaxed) {
+                    let Some((from, to)) = files.get(next.fetch_add(1, Ordering::Relaxed)) else {
+                        return;
+                    };
+                    if let Err(e) = cloner.clone_file(from, to) {
+                        failed.store(true, Ordering::Relaxed);
+                        first_error
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .get_or_insert(e);
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    match first_error
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -246,5 +326,102 @@ mod tests {
             assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
             assert_eq!(std::fs::read(dir.path().join("dst")).unwrap(), b"keep");
         }
+    }
+
+    /// Every file in `dir`, relative, with its contents and mode.
+    fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>, u32)> {
+        use std::os::unix::fs::PermissionsExt;
+        let mut out = Vec::new();
+        let mut stack = vec![dir.to_owned()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap() {
+                let p = e.unwrap().path();
+                let meta = std::fs::symlink_metadata(&p).unwrap();
+                let rel = p.strip_prefix(dir).unwrap().to_owned();
+                let mode = meta.permissions().mode();
+                if meta.is_dir() {
+                    out.push((rel, Vec::new(), mode));
+                    stack.push(p);
+                } else if meta.is_symlink() {
+                    let target = std::fs::read_link(&p).unwrap();
+                    out.push((rel, target.into_os_string().into_encoded_bytes(), mode));
+                } else {
+                    out.push((rel, std::fs::read(&p).unwrap(), mode));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clones_many_files_in_parallel_exactly() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        for d in 0..40 {
+            let dir = src.join(format!("pkg{d}/lib"));
+            std::fs::create_dir_all(&dir).unwrap();
+            for f in 0..50 {
+                std::fs::write(dir.join(format!("{f}.js")), format!("{d}/{f}")).unwrap();
+            }
+            std::os::unix::fs::symlink("lib/0.js", src.join(format!("pkg{d}/main.js"))).unwrap();
+        }
+        let exe = src.join("pkg1/lib/1.js");
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // A read-only directory inside a read-only directory.
+        for dir in ["pkg2/lib", "pkg2"] {
+            std::fs::set_permissions(src.join(dir), std::fs::Permissions::from_mode(0o555))
+                .unwrap();
+        }
+        let dst = tmp.path().join("dst");
+        let cloner = ReflinkCloner::new();
+        clone_tree(&src, &dst, &cloner).unwrap();
+        assert_eq!(snapshot(&src), snapshot(&dst));
+        let r = cloner.report();
+        assert_eq!(r.reflinked + r.copied, 2000);
+        for dir in [&src, &dst] {
+            for d in ["pkg2", "pkg2/lib"] {
+                std::fs::set_permissions(dir.join(d), std::fs::Permissions::from_mode(0o755))
+                    .unwrap();
+            }
+        }
+    }
+
+    /// Fails on one file; every worker stops and the error is returned.
+    struct FailsOn(PathBuf, AtomicU64);
+
+    impl FileCloner for FailsOn {
+        fn clone_file(&self, src: &Path, dst: &Path) -> io::Result<()> {
+            self.1.fetch_add(1, Ordering::Relaxed);
+            if src == self.0 {
+                return Err(io::Error::other("injected"));
+            }
+            copy_new(src, dst)
+        }
+    }
+
+    #[test]
+    fn stops_at_the_first_error_while_cloning_in_parallel() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        std::fs::create_dir(&src).unwrap();
+        for f in 0..5000 {
+            std::fs::write(src.join(format!("{f}")), b"x").unwrap();
+        }
+        let first = std::fs::read_dir(&src)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let cloner = FailsOn(first, AtomicU64::new(0));
+        let err = clone_tree(&src, &tmp.path().join("dst"), &cloner).unwrap_err();
+        assert_eq!(err.to_string(), "injected");
+        assert!(
+            cloner.1.load(Ordering::Relaxed) < 5000,
+            "workers did not stop"
+        );
     }
 }
