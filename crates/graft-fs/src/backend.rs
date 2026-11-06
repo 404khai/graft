@@ -276,18 +276,22 @@ const LEFTOVERS_SHOWN: usize = 10;
 /// cache, for instance, marks them 0555), and retries when a pass leaves a
 /// directory not empty. Never follows symlinks.
 fn remove_tree(path: &Path) -> Result<()> {
-    remove_tree_with(path, &NOT_EMPTY_RETRY_DELAYS, |p| {
-        std::fs::remove_dir_all(p)
-    })
+    remove_tree_with(
+        path,
+        &NOT_EMPTY_RETRY_DELAYS,
+        |p| std::fs::remove_dir_all(p),
+        remove_listed,
+    )
 }
 
-/// [`remove_tree`] with the retry delays and the removal itself supplied,
-/// so tests can simulate a filesystem that reports `ENOTEMPTY`. Only ever
-/// calls `remove` on `path`.
+/// [`remove_tree`] with the retry delays, the removal and the sweep between
+/// attempts supplied, so tests can simulate a filesystem that reports
+/// `ENOTEMPTY`. Only ever calls `remove` and `sweep` on `path`.
 fn remove_tree_with(
     path: &Path,
     retry_delays: &[Duration],
     mut remove: impl FnMut(&Path) -> io::Result<()>,
+    mut sweep: impl FnMut(&Path),
 ) -> Result<()> {
     let mut made_writable = false;
     let mut delays = retry_delays.iter();
@@ -314,12 +318,50 @@ fn remove_tree_with(
                         more,
                     });
                 };
-                tracing::debug!(path = %path.display(), attempts, "directory not empty after removal; retrying");
+                tracing::debug!(path = %path.display(), attempts, "directory not empty after removal; sweeping and retrying");
+                sweep(path);
                 std::thread::sleep(*delay);
             }
             _ => return Err(io_err("removing", path)(err)),
         }
     }
+}
+
+/// Removes what is left under `dir` by listing all of it first and only
+/// then deleting: files and symlinks, then directories deepest first. On
+/// the macOS runner, `remove_dir_all` (which deletes while it lists) kept
+/// missing the same entries pass after pass, while a plain listing saw
+/// them. Best effort: failures are left for the next attempt to report.
+/// Never follows symlinks, and never touches anything outside `dir`.
+fn remove_listed(dir: &Path) {
+    let mut files = Vec::new();
+    let mut dirs = Vec::new();
+    let mut stack = vec![dir.to_owned()];
+    while let Some(current) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                stack.push(entry.path());
+                dirs.push(entry.path());
+            } else {
+                files.push(entry.path());
+            }
+        }
+    }
+    for file in &files {
+        if let Err(e) = std::fs::remove_file(file) {
+            tracing::debug!(path = %file.display(), error = %e, "sweep could not remove a file");
+        }
+    }
+    // A directory is listed after its parent, so reverse order is deepest first.
+    for d in dirs.iter().rev() {
+        if let Err(e) = std::fs::remove_dir(d) {
+            tracing::debug!(path = %d.display(), error = %e, "sweep could not remove a directory");
+        }
+    }
+    tracing::debug!(path = %dir.display(), files = files.len(), dirs = dirs.len(), "swept leftovers");
 }
 
 /// Up to `limit` entries still under `dir` (files, symlinks and empty
@@ -492,14 +534,19 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tree(tmp.path(), 4, 20);
         let calls = Cell::new(0);
-        remove_tree_with(&root, &NO_DELAYS, |p| {
-            calls.set(calls.get() + 1);
-            if calls.get() == 1 {
-                remove_half(p)
-            } else {
-                std::fs::remove_dir_all(p)
-            }
-        })
+        remove_tree_with(
+            &root,
+            &NO_DELAYS,
+            |p| {
+                calls.set(calls.get() + 1);
+                if calls.get() == 1 {
+                    remove_half(p)
+                } else {
+                    std::fs::remove_dir_all(p)
+                }
+            },
+            |_| {},
+        )
         .unwrap();
         assert_eq!(calls.get(), 2);
         assert!(!root.exists());
@@ -512,10 +559,15 @@ mod tests {
         let root = tree(tmp.path(), 3, 5);
         std::fs::create_dir(root.join("empty")).unwrap();
         let calls = Cell::new(0);
-        let err = remove_tree_with(&root, &NO_DELAYS, |_| {
-            calls.set(calls.get() + 1);
-            Err(not_empty())
-        })
+        let err = remove_tree_with(
+            &root,
+            &NO_DELAYS,
+            |_| {
+                calls.set(calls.get() + 1);
+                Err(not_empty())
+            },
+            |_| {},
+        )
         .unwrap_err();
         assert_eq!(calls.get(), NO_DELAYS.len() + 1);
         let FsError::NotEmpty {
@@ -546,6 +598,49 @@ mod tests {
         assert!(message.ends_with(", ..."), "{message}");
     }
 
+    /// The runner's failure: every removal pass misses the same entries.
+    /// The sweep between attempts lists everything first, then deletes it.
+    #[test]
+    fn sweeps_entries_that_every_removal_pass_misses() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tree(tmp.path(), 4, 30);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(tmp.path(), root.join("d2/outside")).unwrap();
+        let keep = tmp.path().join("keep.txt");
+        std::fs::write(&keep, b"outside the graft").unwrap();
+        // Removes everything except `d2`, then fails as rmdir does.
+        let blind = |p: &Path| -> io::Result<()> {
+            for dir in std::fs::read_dir(p)? {
+                let dir = dir?.path();
+                if !dir.ends_with("d2") {
+                    std::fs::remove_dir_all(&dir)?;
+                }
+            }
+            Err(not_empty())
+        };
+        let calls = Cell::new(0);
+        remove_tree_with(
+            &root,
+            &NO_DELAYS,
+            |p| {
+                calls.set(calls.get() + 1);
+                if p.join("d2").exists() {
+                    blind(p)
+                } else {
+                    std::fs::remove_dir_all(p)
+                }
+            },
+            remove_listed,
+        )
+        .unwrap();
+        assert!(!root.exists(), "the sweep left {:?}", leftovers(&root, 5));
+        assert_eq!(calls.get(), 2);
+        assert!(
+            keep.exists(),
+            "the sweep followed a symlink out of the graft"
+        );
+    }
+
     #[test]
     fn lists_every_leftover_when_there_are_few() {
         let tmp = tempfile::tempdir().unwrap();
@@ -564,10 +659,15 @@ mod tests {
     fn does_not_retry_other_errors() {
         let tmp = tempfile::tempdir().unwrap();
         let calls = Cell::new(0);
-        let err = remove_tree_with(tmp.path(), &NO_DELAYS, |_| {
-            calls.set(calls.get() + 1);
-            Err(io::Error::other("disk on fire"))
-        })
+        let err = remove_tree_with(
+            tmp.path(),
+            &NO_DELAYS,
+            |_| {
+                calls.set(calls.get() + 1);
+                Err(io::Error::other("disk on fire"))
+            },
+            |_| {},
+        )
         .unwrap_err();
         assert_eq!(calls.get(), 1);
         assert!(matches!(err, FsError::Io { .. }), "{err:?}");
