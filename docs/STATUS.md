@@ -147,10 +147,10 @@ Baseline before any optimisation (`bench/results/`; first recorded from Actions 
 
 ## Phase 9 — Bud and Ring
 
-Status: in progress (`feat/bud-and-ring`, ADR 0013). Done for virtual grafts (FUSE, NFS). **Blocked for reflink grafts** (the default backend): their changes live in a working tree with no delta or op log, so bud cannot be constant-time there; `graft bud`, `ring` and `rewind` refuse them until the owner decides.
+Status: done for virtual grafts (FUSE, NFS), PR #21, ADR 0013. Scoped with the owner (2026-11-07): bud, ring and rewind are features of virtual grafts; reflink grafts (no delta, no op log) refuse them with an error naming the virtual backend. Revisited when the deferred Phase 8 work chooses each platform's default backend.
 
-- [ ] Bud of a graft with 1,000 changed files completes in < 200 ms (*target*).
-  - Virtual: `bud_time_with_a_thousand_changed_files` (whole `graft bud` command, debug build, NFS on macOS 27, load average ≈15): 78, 79 and 185 ms, median 79 ms. CI `fuse` and `nfs` jobs print theirs. Not met for reflink grafts (refused; see above).
+- [x] Bud of a graft with 1,000 changed files completes in < 200 ms (*target*).
+  - Virtual: `bud_time_with_a_thousand_changed_files` (whole `graft bud` command, debug build, NFS on macOS 27, load average ≈15): 78, 79 and 185 ms, median 79 ms. CI `fuse` and `nfs` jobs print theirs. Reflink grafts are out of scope (see above).
 - [x] Rewinding then re-applying produces an identical delta (test).
   - `rings_and_rewinds_keep_replay_exact` (property test, 300 cases: rewind restores the ring's delta exactly, rewinding to its `undo-<seq>` ring restores the delta from before, and replaying the op log still equals the delta), `rewind_restores_a_ring_and_its_undo_ring_reapplies`, and end to end `bud_ring_and_rewind_round_trip` (`graft status` identical after re-applying).
 - [x] Pruning a graft does not remove blobs used by its buds or rings.

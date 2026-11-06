@@ -1,5 +1,5 @@
 # 0013: Bud, Ring and rewind
-Status: proposed (accepted for virtual grafts; the reflink part awaits the owner)
+Status: accepted
 
 ## Context
 
@@ -109,9 +109,15 @@ For virtual grafts: B + D + F + H.
   Rings belong to one graft and die with it; a bud does not inherit its
   source's rings.
 
-For reflink grafts: R2 for now, pending the owner's choice between R1
-(working but O(files), missing the bud target) and deferring reflink
-support.
+For reflink grafts: R2, chosen with the owner (2026-11-07). R1 would make
+bud as slow as `graft new` and rewind would rewrite a live working tree,
+for a feature whose point is being cheap. R3 cannot give the op log's
+guarantees: a working tree can only be watched (FSEvents, inotify), which
+drops and coalesces events and misses writes before a crash, so replay
+would no longer reproduce the delta; virtual grafts already provide that
+journal. Bud, ring and rewind are features of virtual grafts. This is
+revisited when the deferred performance work chooses each platform's
+default backend: if the default stays reflink, with measurements then.
 
 ## Consequences
 
@@ -123,5 +129,5 @@ support.
 - Every ring holds its blobs until it, or its graft, is removed. There is
   no `graft ring --delete` yet; `graft prune` and later `graft gc` policy
   are the ways to release them.
-- `graft bud`, `graft ring` and `graft rewind` fail on reflink grafts until
-  the open question is settled.
+- `graft bud`, `graft ring` and `graft rewind` fail on reflink grafts with an
+  error naming the virtual backend.
