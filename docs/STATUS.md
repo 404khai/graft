@@ -193,7 +193,7 @@ Status: done (PR #24, ADR 0016). Radar runs in the CLI over every live graft's c
 
 ## Phase 13 — Integrate
 
-Status: in review (`feat/integrate-queue`, ADR 0017). Integration happens in a scratch reflink checkout of the target's head; Root's working tree is never written except with `--update-checkout`. Not done: pushing a branch and opening a PR (network), and `graft rebase` for virtual grafts (their op log replays over the old base).
+Status: in review (`feat/integrate-queue`, ADR 0017). Integration happens in a scratch reflink checkout of the target's head; Root's working tree is never written except with `--update-checkout`. Pushing a branch and opening a PR is opt-in (`mode = "push"`, `pr = true`), tested offline against a local bare remote and a stand-in `gh`. `graft rebase` works for both backends; for virtual grafts a `rebase` op starts a new op log epoch (`a_virtual_graft_rebases_onto_a_new_head`). Symlinks land as symlinks (`symlinks_land_as_symlinks`).
 
 - [x] Non-overlapping grafts integrate with zero manual steps.
   - `non_overlapping_grafts_integrate_unattended`: two reflink grafts land in one `graft integrate a b` through a test gate, as two commits with `Graft:` trailers; `a_virtual_graft_integrates` covers a virtual graft (NFS locally, FUSE in CI).

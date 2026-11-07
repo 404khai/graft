@@ -188,7 +188,7 @@ Created in v1 and written from the delta store phase on. `WITHOUT ROWID`.
 | `graft_id` | TEXT | References `grafts`, `ON DELETE CASCADE` |
 | `seq` | INTEGER | Per-graft sequence number, from 1 |
 | `at` | INTEGER | Timestamp |
-| `kind` | TEXT | `create`, `write`, `truncate`, `mkdir`, `symlink`, `unlink`, `rmdir`, `rename`, `chmod`, `touch` or (v6) `rewind` |
+| `kind` | TEXT | `create`, `write`, `truncate`, `mkdir`, `symlink`, `unlink`, `rmdir`, `rename`, `chmod`, `touch`, (v6) `rewind` or (format 11) `rebase` |
 | `path` | BLOB | Repo-relative path |
 | `path_to` | BLOB | Destination for renames, else `NULL` |
 | `blob` | TEXT | Resulting `BlobHash`, if any |
@@ -202,7 +202,9 @@ Created in v1 and written from the delta store phase on. `WITHOUT ROWID`.
 is the file's new contents for `create`, `write` and `truncate`. A
 graft's op log replayed from empty through `Delta::replay` reproduces its
 `delta` rows exactly (ADR 0008); a `rewind` restores the state replay had
-right after op `to_seq` (ADR 0013). A bud starts with a copy of its
+right after op `to_seq` (ADR 0013); a `rebase` (its new base commit, as
+hex, in `target`; `path` empty) starts again from empty over the new
+base's tree (ADR 0017). A bud starts with a copy of its
 source's op log, sequence numbers included.
 
 ### `delta` (v4)

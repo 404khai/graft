@@ -198,7 +198,9 @@ branch = "main"               # the target, if not Root's current branch
 | `test` | Shell command run confined in the merged scratch checkout. Exit 0 lets the graft land; anything else stops it with the output in `graft queue`. Without it there is no gate (and `graft queue` says so). |
 | `resolver` | Shell command run when files still conflict after the line and structural merges, with `GRAFT_CONFLICTS` (newline-separated paths, each holding git conflict markers), `GRAFT_INTEGRATE_INFO` (a directory with `graft.diff`, `root.diff`, `graft.oplog`, and `task.md` from `--task`) and `GRAFT_NAME`. It must leave no conflict markers. |
 | `timeout_secs` | Limit for the gate and the resolver (default 300). |
-| `mode` | `commit` (default) or `branch`. |
+| `mode` | `commit` (default), `branch` (land on `refs/heads/graft/<name>` in Root), or `push`: as `branch`, then push it to `remote`, and with `pr = true` open a pull request into the target with `gh`. `push` is the only mode that uses the network. |
+| `remote` | The remote `push` mode pushes to (default `origin`). |
+| `pr` | With `mode = "push"`, open a pull request (default `false`). |
 | `branch` | The target branch. `--onto` overrides it. |
 
 `graft trust` approves the gate and the resolver; an unapproved one stops

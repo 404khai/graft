@@ -92,9 +92,27 @@ B + D + F + H.
 - **`graft rebase <name>`** moves a reflink graft to the target's head:
   the same file merge into its working tree, then its base, pin ref and
   `.git` (branch and index, with `git reset --mixed`) move to the new
-  head; conflicts are left as conflict markers and listed.
-  Virtual grafts are refused for now: their op log replays over the old
-  base.
+  head; files only Root changed are checked out with git (modes,
+  symlinks, filters kept); conflicts are left as conflict markers and
+  listed.
+- **Rebasing a virtual graft** keeps the op log exact with a new op,
+  `rebase` (the new base in `target`): replay starts again from empty
+  there. The graft is unmounted (refused while files are held open), each
+  changed file is merged against the new head, and in one transaction
+  the `rebase` op, the ops that recreate the merged files over the new
+  base's tree (`graft_fs::rebase_ops`: parent directories, type changes,
+  blobs) and the new base are journaled; then the pin moves, the graft is
+  remounted and its `.git` reset to the new head. Rings taken before the
+  last rebase cannot be rewound to (their rows belong to the old base).
+- **Symlinks** are never merged: a path that is a symlink on either side
+  is taken from the side that changed it, written as a symlink; both
+  changing it is a conflict.
+- **Push mode** (`mode = "push"`, `remote`, `pr`) is the only network
+  access in Integrate (AGENTS.md §3.8). It is never the default: choosing
+  it in graft.toml, which the operator reviews, is the consent. It lands
+  on `graft/<name>` as `branch` mode does, pushes it with
+  `--force-with-lease` and, with `pr = true`, runs `gh pr create`; without
+  `gh` the branch is still pushed and the queue says so.
 
 ## Consequences
 
@@ -102,5 +120,5 @@ B + D + F + H.
 - Each integration is one commit with the graft's net change.
 - Mergiraf is optional at run time: without it, line-level conflicts stay
   conflicts and say that Mergiraf would be tried.
-- Pushing a branch and opening a PR (network access) is not done here.
-- On-disk format 11: `integrate/` scratch directories, schema v9.
+- On-disk format 11: `integrate/` scratch directories, schema v9, and the
+  `rebase` op log kind.
