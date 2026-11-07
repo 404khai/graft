@@ -169,7 +169,7 @@ Status: in review (`feat/sandboxed-run`, ADR 0014). Landlock on Linux and a gene
 
 ## Phase 11 — Blueprints
 
-Status: in review (`feat/blueprints`, ADR 0015). Not done: the optional Linux network namespace (apps bind a reserved port instead).
+Status: done (PR #23, ADR 0015). Not done: the optional Linux network namespace (apps bind a reserved port instead).
 
 - [x] Two grafts of the web fixture run their dev servers and test suites at the same time with no port or database collision.
   - `two_grafts_run_servers_and_tests_side_by_side` (throwaway Postgres cluster): two `python3 -m http.server` dev servers on each graft's `{{port.app}}`, and both test scripts at once, each writing to and reading its own `app_dev_<graft>` database; the template stays untouched. Passed locally on macOS; CI `blueprint services (linux)` job.
@@ -180,12 +180,16 @@ Status: in review (`feat/blueprints`, ADR 0015). Not done: the optional Linux ne
 
 ## Phase 12 — Radar
 
-Status: not started
+Status: in review (`feat/radar`, ADR 0016). Radar runs in the CLI over every live graft's changes (both backends), not from graftd op-log events: the default reflink backend has no op log. graftd emits no Radar events yet; the MCP phase can use `graft radar --json` or add a stream.
 
-- [ ] Two grafts editing the same function are reported at symbol level within 5 s of the second write (*target*).
-- [ ] Edits to different functions in the same file are reported at path level only.
-- [ ] A seeded behavioural conflict (both pass alone, fail together) is detected by speculative merge.
-- [ ] Radar adds < 5% overhead to write latency (*target*).
+- [x] Two grafts editing the same function are reported at symbol level within 5 s of the second write (*target*).
+  - `watch_reports_a_symbol_overlap_within_five_seconds` (`graft radar --watch`, 1 s interval, reflink grafts): 0.54–0.58 s after the second write, three runs locally on macOS (debug build, load 13–40). `radar_sees_virtual_and_reflink_grafts` covers virtual grafts (NFS locally, FUSE in CI).
+- [x] Edits to different functions in the same file are reported at path level only.
+  - `same_function_is_symbol_level_and_different_functions_path_level`, plus unit tests for Rust, TypeScript, Python and Go (methods are qualified by their type, so different methods of one class do not overlap).
+- [x] A seeded behavioural conflict (both pass alone, fail together) is detected by speculative merge.
+  - `a_seeded_behavioural_conflict_is_detected`: one graft renames a function, the other adds a caller of the old name in the same file; each passes alone, the file merges cleanly, merged the test fails with `NameError`. `--check` with three speculative runs took 0.5–1.0 s. Fixing the caller clears it. `textual_conflicts_are_reported_without_running_tests` covers merge conflicts.
+- [x] Radar adds < 5% overhead to write latency (*target*).
+  - Radar is not on the write path. `write_latency_with_radar_watching`: 2,000 small writes in a reflink graft took ×0.97 as long with `graft radar --watch` at its default 1 s interval (no measurable overhead). **At `--interval 0.1` it was ×1.30–×1.54** (each scan is a git status of every graft), so the target holds only at the default interval or slower. Measured on this loaded Mac, not a quiet machine.
 
 ## Phase 13 — Integrate
 

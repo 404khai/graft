@@ -1,6 +1,6 @@
 # On-disk format
 
-**Format version: 9** (metadata schema v7)
+**Format version: 10** (metadata schema v8)
 
 This file describes everything Graft persists. Any change to a structure
 below bumps the format version, adds a migration, and updates this file in
@@ -35,6 +35,8 @@ $GRAFT_HOME/
         │   └── <graft-id>/
         │       ├── work/<n>    staging files of files open for writing
         │       └── git/        the graft's .git, created on first use
+        ├── radar/              mode 0700, Radar's scratch checkouts (ADR 0016);
+        │                       each is removed when its check ends
         ├── tmp/                mode 0700, created by `graft run` (ADR 0014)
         │   └── <graft-id>/     a graft's private TMPDIR, mode 0700;
         │                       removed when the graft is pruned
@@ -64,6 +66,7 @@ Entries in `roots/` whose name is not a valid Root ID, or that contain no
 | 7 | Schema v6: Bud and Ring (`grafts.budded_from`, `op_log.to_seq` and the `rewind` op, tables `rings` and `ring_delta`; ADR 0013) | Schema v5 → v6 runs automatically on open; tables and nullable columns only added |
 | 8 | Adds `tmp/<graft-id>/`, the private temp dir of `graft run` (ADR 0014); `trusted_commands` also holds approved `[sandbox] write` paths | None: additive; created on first `graft run`, removed by prune |
 | 9 | Schema v7: Blueprints (`grafts.blueprint`, table `graft_resources`; ADR 0015) | Schema v6 → v7 runs automatically on open; a table and a nullable column only added |
+| 10 | Adds `radar/` (scratch checkouts of Radar's behaviour checks) and schema v8 (`radar_checks`; ADR 0016) | Schema v7 → v8 runs automatically on open; a table only added |
 
 ## `config.toml`
 
@@ -233,6 +236,17 @@ on the next mount after a crash.
 | `mode` | INTEGER | Its permission bits |
 
 Primary key: `(graft_id, seq)`.
+
+### `radar_checks` (v8)
+
+Results of Radar's speculative test runs (ADR 0016).
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `fingerprint` | TEXT PK | blake3 (derive key `graft radar check v1`) of the test command, the base commit, and each graft's name and changed files (path and new contents) |
+| `outcome` | TEXT | `pass`, `fail`, `conflict`, `timeout` or `error` |
+| `output` | TEXT | The last 4,000 bytes of the command's output; for `conflict`, the conflicting paths |
+| `checked_at` | INTEGER | Timestamp; rows older than a week are deleted when a check is recorded |
 
 ### `graft_resources` (v7)
 
