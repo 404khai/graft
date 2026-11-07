@@ -82,6 +82,7 @@ struct RawFile {
     #[serde(default)]
     layer: Vec<RawLayer>,
     sandbox: Option<RawSandbox>,
+    radar: Option<RawRadar>,
     #[serde(default)]
     blueprint: std::collections::BTreeMap<String, Spanned<blueprint::RawBlueprint>>,
 }
@@ -91,6 +92,59 @@ struct RawFile {
 struct RawSandbox {
     #[serde(default)]
     write: Vec<Spanned<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRadar {
+    test: Option<Spanned<String>>,
+    timeout_secs: Option<Spanned<u64>>,
+}
+
+/// The `[radar]` table: the fast test command Radar's behaviour checks run
+/// in speculative merges (ADR 0016).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RadarSpec {
+    /// Shell command, run in a merged checkout's top level; `None` turns
+    /// behaviour checks off.
+    pub test: Option<String>,
+    /// How long one run may take, in seconds.
+    pub timeout_secs: u64,
+}
+
+/// Default for [`RadarSpec::timeout_secs`].
+pub const DEFAULT_RADAR_TIMEOUT_SECS: u64 = 300;
+
+/// Parses the `[radar]` table of a `graft.toml` (no test if absent).
+///
+/// # Errors
+///
+/// A [`BlueprintError`] for invalid TOML, unknown keys, an empty command or
+/// a zero timeout.
+pub fn parse_radar(text: &str, file: &str) -> Result<RadarSpec, BlueprintError> {
+    let at = Locator { file, text };
+    let raw = parse_file(&at)?.radar;
+    let mut spec = RadarSpec {
+        test: None,
+        timeout_secs: DEFAULT_RADAR_TIMEOUT_SECS,
+    };
+    let Some(raw) = raw else {
+        return Ok(spec);
+    };
+    if let Some(t) = raw.test {
+        let cmd = t.get_ref().trim();
+        if cmd.is_empty() {
+            return Err(at.error(t.span().start, "radar test command must not be empty"));
+        }
+        spec.test = Some(cmd.to_owned());
+    }
+    if let Some(t) = raw.timeout_secs {
+        if *t.get_ref() == 0 {
+            return Err(at.error(t.span().start, "radar timeout_secs must be at least 1"));
+        }
+        spec.timeout_secs = *t.get_ref();
+    }
+    Ok(spec)
 }
 
 /// The `[sandbox]` table: what `graft run` lets a command write besides its
@@ -317,6 +371,25 @@ mod tests {
 
     fn err(text: &str) -> BlueprintError {
         parse_layers(text, "graft.toml").unwrap_err()
+    }
+
+    #[test]
+    fn parses_the_radar_table() {
+        let r = parse_radar(
+            "[radar]\ntest = \" cargo test -q \"\ntimeout_secs = 60\n",
+            "graft.toml",
+        )
+        .unwrap();
+        assert_eq!(
+            (r.test.as_deref(), r.timeout_secs),
+            (Some("cargo test -q"), 60)
+        );
+        let r = parse_radar("", "graft.toml").unwrap();
+        assert_eq!((r.test, r.timeout_secs), (None, DEFAULT_RADAR_TIMEOUT_SECS));
+        let e = parse_radar("[radar]\ntest = \"\"\n", "graft.toml").unwrap_err();
+        assert_eq!((e.line, e.column), (2, 8));
+        assert!(parse_radar("[radar]\ntimeout_secs = 0\n", "graft.toml").is_err());
+        assert!(parse_radar("[radar]\ntets = \"x\"\n", "graft.toml").is_err());
     }
 
     #[test]
