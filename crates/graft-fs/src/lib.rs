@@ -46,7 +46,8 @@ mod write;
 pub use backend::{CreateReport, FsBackend, FsError, GraftSpec, ReflinkBackend, Result};
 pub use capabilities::{Availability, fuse_availability, nfs_client_availability};
 pub use changes::{
-    ChangesError, layer_mounts, virtual_changes, virtual_diffs, virtual_disk_usage, without_ignored,
+    ChangesError, RebasedFile, layer_mounts, rebase_ops, virtual_changes, virtual_diffs,
+    virtual_disk_usage, without_ignored,
 };
 pub use clone::{CloneReport, ReflinkCloner, clone_tree};
 pub use fstype::{FsType, available_bytes, filesystem_type, same_filesystem};
