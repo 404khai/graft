@@ -7,11 +7,10 @@
 //! by fingerprint.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 use anyhow::{Context, bail};
 use graft_blueprint::{BLUEPRINT_FILE, RadarSpec, parse_radar};
@@ -340,35 +339,12 @@ fn run_check(
             let list: Vec<String> = conflicts.iter().map(|p| p.display().to_string()).collect();
             return Ok((CheckOutcome::Conflict, list.join("\n")));
         }
-        let tmp = dir.join(".graft-radar-tmp");
-        crate::run::create_private_dir(&tmp)?;
-        let policy = graft_sandbox::Policy::new([dir.as_path()])?;
-        let log_path = tmp.join("output");
-        let log = std::fs::File::create(&log_path)?;
-        let command = ["-c", test].map(OsString::from);
-        let mut cmd = crate::run::confined(&policy, &OsString::from("sh"), &command)?;
-        cmd.current_dir(&dir)
-            .env("TMPDIR", &tmp)
-            .env("GRAFT_RADAR", "1")
-            .stdin(Stdio::null())
-            .stdout(log.try_clone()?)
-            .stderr(log);
-        let mut child = cmd.spawn().context("starting the radar test command")?;
-        let deadline = Instant::now() + Duration::from_secs(spec.timeout_secs);
-        let status = loop {
-            if let Some(s) = child.try_wait()? {
-                break Some(s);
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        };
-        let output = std::fs::read(&log_path).unwrap_or_default();
-        let tail =
-            String::from_utf8_lossy(&output[output.len().saturating_sub(4000)..]).into_owned();
+        let (status, tail) = crate::run::run_scratch(
+            &dir,
+            test,
+            &[("GRAFT_RADAR", "1")],
+            Duration::from_secs(spec.timeout_secs),
+        )?;
         Ok(match status {
             Some(s) if s.success() => (CheckOutcome::Pass, tail),
             Some(_) => (CheckOutcome::Fail, tail),
