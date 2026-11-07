@@ -555,8 +555,8 @@ mod fuse {
             r,
             &["new", "w", "--backend", "reflink", "--from", "land"],
         );
-        let w = std::path::PathBuf::from(run(h, r, &["path", "w"]).trim());
-        std::fs::write(w.join("b.txt"), "b from w\n").unwrap();
+        let other = std::path::PathBuf::from(run(h, r, &["path", "w"]).trim());
+        std::fs::write(other.join("b.txt"), "b from w\n").unwrap();
         run(h, r, &["integrate", "w", "--onto", "land"]);
 
         let out = run(h, r, &["rebase", "v", "--onto", "land"]);
