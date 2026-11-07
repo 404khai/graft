@@ -16,6 +16,7 @@ const V4_SQL: &str = include_str!("../src/schema/v4.sql");
 const V5_SQL: &str = include_str!("../src/schema/v5.sql");
 const V6_SQL: &str = include_str!("../src/schema/v6.sql");
 const V7_SQL: &str = include_str!("../src/schema/v7.sql");
+const V8_SQL: &str = include_str!("../src/schema/v8.sql");
 
 fn record() -> RootRecord {
     RootRecord {
@@ -54,7 +55,7 @@ fn columns(path: &std::path::Path, table: &str) -> Vec<String> {
 fn released_migrations_are_never_edited() {
     // If this fails you changed a shipped migration. Revert it and add a new
     // migration instead (AGENTS.md §5, docs/on-disk-format.md).
-    assert_eq!(SCHEMA_VERSION, 7);
+    assert_eq!(SCHEMA_VERSION, 8);
     let hash = |sql: &str| blake3::hash(sql.as_bytes()).to_hex().to_string();
     assert_eq!(hash(V1_SQL), EXPECTED_V1_HASH, "schema/v1.sql changed");
     assert_eq!(hash(V2_SQL), EXPECTED_V2_HASH, "schema/v2.sql changed");
@@ -63,8 +64,10 @@ fn released_migrations_are_never_edited() {
     assert_eq!(hash(V5_SQL), EXPECTED_V5_HASH, "schema/v5.sql changed");
     assert_eq!(hash(V6_SQL), EXPECTED_V6_HASH, "schema/v6.sql changed");
     assert_eq!(hash(V7_SQL), EXPECTED_V7_HASH, "schema/v7.sql changed");
+    assert_eq!(hash(V8_SQL), EXPECTED_V8_HASH, "schema/v8.sql changed");
 }
 
+const EXPECTED_V8_HASH: &str = "8c515a16e30d302809ab6f2da7e33792a6eb82be4055d0c4c34954961224e892";
 const EXPECTED_V7_HASH: &str = "1295bca6a67f9528d1dfebd857e51779a57caf5e614942f719b4e6fee5f725d0";
 const EXPECTED_V6_HASH: &str = "7f577964e7e32b3f824f2d8149004911568d67e9128c4b4d90b806604be457d5";
 const EXPECTED_V5_HASH: &str = "be284ac7e9d0da57b86820b710db7bc57617e4ae3c50b42635ea1094d15e5c85";
@@ -92,6 +95,7 @@ fn migrates_an_empty_directory_to_the_latest_schema() {
             ("index", "layer_refs_by_layer"),
             ("table", "layers"),
             ("table", "op_log"),
+            ("table", "radar_checks"),
             ("table", "ring_delta"),
             ("index", "ring_delta_by_blob"),
             ("table", "rings"),
@@ -549,4 +553,28 @@ fn reserves_resources_once_per_root() {
     assert_eq!(store.resources(a.id).unwrap(), [db]);
     store.delete_graft(a.id).unwrap();
     assert_eq!(store.resources(a.id).unwrap(), []);
+}
+
+#[test]
+fn radar_checks_are_cached_by_fingerprint() {
+    use graft_store::CheckOutcome;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut store, _) = Store::create(dir.path(), &record()).unwrap();
+    let fp = "f".repeat(64);
+    assert_eq!(store.radar_check(&fp).unwrap(), None);
+    store
+        .record_radar_check(&fp, CheckOutcome::Fail, "1 test failed")
+        .unwrap();
+    let c = store.radar_check(&fp).unwrap().unwrap();
+    assert_eq!(
+        (c.outcome, c.output.as_str()),
+        (CheckOutcome::Fail, "1 test failed")
+    );
+    store
+        .record_radar_check(&fp, CheckOutcome::Pass, "")
+        .unwrap();
+    assert_eq!(
+        store.radar_check(&fp).unwrap().unwrap().outcome,
+        CheckOutcome::Pass
+    );
 }
