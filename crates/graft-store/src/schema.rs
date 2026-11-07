@@ -20,6 +20,7 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     include_str!("schema/v6.sql"),
     include_str!("schema/v7.sql"),
     include_str!("schema/v8.sql"),
+    include_str!("schema/v9.sql"),
 ];
 
 /// The schema version this build creates and understands.

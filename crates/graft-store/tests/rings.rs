@@ -254,3 +254,55 @@ fn rings_and_rewinds_refuse_what_they_cannot_do() {
         .unwrap();
     assert!(store.delta(src).unwrap().is_empty());
 }
+
+#[test]
+fn a_rebase_starts_a_new_epoch_that_replay_follows() {
+    let (_dir, mut store, src) = store();
+    write(&mut store, src, 1);
+    store.ring(src, Some("old".parse().unwrap())).unwrap();
+    write(&mut store, src, 2);
+    // Rebase: the graft's changes, recomputed over the new base.
+    let new_base: graft_core::CommitId = "c".repeat(40).parse().unwrap();
+    let mut fresh = Delta::default();
+    let op = Op::Write {
+        kind: WriteKind::Create,
+        path: b"f2".to_vec(),
+        blob: blob(2),
+        mode: 0o644,
+    };
+    let at = Timestamp::from_millis(77);
+    let changes = fresh.apply(&op, at, &NoLower);
+    let seq = store.rebase(src, &new_base, at, &[(op, changes)]).unwrap();
+    assert_eq!(seq, 3);
+    assert_eq!(store.last_rebase(src).unwrap(), 3);
+    assert_eq!(
+        store.graft_by_id(src).unwrap().unwrap().base_commit,
+        new_base
+    );
+    let stored = store.delta(src).unwrap();
+    assert_eq!(stored, fresh);
+    assert!(
+        stored.get(b"f1").is_none(),
+        "the old epoch's entries are gone"
+    );
+    let log = store.op_log(src).unwrap();
+    assert_eq!(
+        log[2].op,
+        Op::Rebase {
+            base: new_base.to_string()
+        }
+    );
+    assert_eq!(Delta::replay(&log, &NoLower), stored);
+    // A ring from before the rebase cannot be restored; a later one can.
+    assert!(matches!(
+        store.rewind(src, &"old".parse().unwrap(), Timestamp::from_millis(80)),
+        Err(StoreError::RingBeforeRebase { .. })
+    ));
+    store.ring(src, Some("new".parse().unwrap())).unwrap();
+    write(&mut store, src, 9);
+    store
+        .rewind(src, &"new".parse().unwrap(), Timestamp::from_millis(90))
+        .unwrap();
+    assert_eq!(store.delta(src).unwrap(), fresh);
+    assert_eq!(Delta::replay(&store.op_log(src).unwrap(), &NoLower), fresh);
+}

@@ -10,6 +10,7 @@ mod blueprints;
 mod cli;
 mod doctor;
 mod grafts;
+mod integrate;
 mod layers;
 mod radar;
 mod repo_policy;

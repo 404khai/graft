@@ -336,7 +336,10 @@ fn two_grafts_run_servers_and_tests_side_by_side() {
             .arg("exec python3 -m http.server \"$APP_PORT\" --bind 127.0.0.1")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        servers.push(cmd.spawn().unwrap());
+        // Its own process group, so the server under `graft run` can be
+        // stopped with it.
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+        servers.push(Server(cmd.spawn().unwrap()));
     }
     let ports: Vec<String> = ["a", "b"]
         .iter()
@@ -370,10 +373,7 @@ fn two_grafts_run_servers_and_tests_side_by_side() {
         );
         assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{g}\n"));
     }
-    for mut s in servers {
-        let _ = s.kill();
-        let _ = s.wait();
-    }
+    drop(servers);
     let dbs = pg.psql(
         "postgres",
         "select datname from pg_database where datname like 'app\\_dev\\_%' order by 1",
@@ -401,6 +401,19 @@ fn two_grafts_run_servers_and_tests_side_by_side() {
         "select count(*) from pg_database where datname like 'app\\_dev\\_%'",
     );
     assert_eq!(dbs, "0\n");
+}
+
+/// A `graft run` dev server; dropping it kills its whole process group,
+/// whatever the test's outcome.
+struct Server(std::process::Child);
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = Command::new("kill")
+            .args(["-KILL", &format!("-{}", self.0.id())])
+            .status();
+        let _ = self.0.wait();
+    }
 }
 
 trait SpawnOutput {

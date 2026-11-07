@@ -63,6 +63,10 @@ fn op_columns(op: &Op) -> OpColumns<'_> {
             path_to: Some(to),
             ..OpColumns::default()
         },
+        Op::Rebase { base } => OpColumns {
+            target: Some(base.as_bytes()),
+            ..OpColumns::default()
+        },
         Op::Rewind { to } => OpColumns {
             to_seq: Some(i64_of(*to)),
             ..OpColumns::default()
@@ -161,6 +165,51 @@ fn i64_of(v: u64) -> i64 {
 
 fn u32_of(v: Option<i64>) -> u32 {
     v.and_then(|v| u32::try_from(v).ok()).unwrap_or(0)
+}
+
+/// Inserts op log row `seq` for `j` and the delta rows it changed.
+pub(crate) fn insert_op(
+    tx: &rusqlite::Transaction<'_>,
+    gid: &str,
+    seq: i64,
+    j: &Journaled<'_>,
+) -> rusqlite::Result<()> {
+    let c = op_columns(j.op);
+    tx.execute(
+            "INSERT INTO op_log (graft_id, seq, at, kind, path, path_to, blob, actor, mode, mtime, target, to_seq)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                gid,
+                seq,
+                j.at.as_millis(),
+                j.op.kind(),
+                j.op.path(),
+                c.path_to,
+                c.blob,
+                j.actor,
+                c.mode,
+                c.mtime,
+                c.target,
+                c.to_seq
+            ],
+        )
+        ?;
+    for (p, _, new) in j.changes {
+        if let Some(e) = new {
+            let c = entry_columns(e);
+            tx.execute(
+                    "INSERT OR REPLACE INTO delta (graft_id, path, kind, blob, lower, target, mode, mtime, opaque)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![gid, p, c.kind, c.blob, c.lower, c.target, c.mode, c.mtime, c.opaque],
+                )
+        } else {
+            tx.execute(
+                "DELETE FROM delta WHERE graft_id = ?1 AND path = ?2",
+                params![gid, p],
+            )
+        }?;
+    }
+    Ok(())
 }
 
 impl Store {
@@ -263,42 +312,7 @@ impl Store {
                 |r| r.get(0),
             )
             .map_err(sql)?;
-        let c = op_columns(j.op);
-        tx.execute(
-            "INSERT INTO op_log (graft_id, seq, at, kind, path, path_to, blob, actor, mode, mtime, target, to_seq)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![
-                gid,
-                seq,
-                j.at.as_millis(),
-                j.op.kind(),
-                j.op.path(),
-                c.path_to,
-                c.blob,
-                j.actor,
-                c.mode,
-                c.mtime,
-                c.target,
-                c.to_seq
-            ],
-        )
-        .map_err(sql)?;
-        for (p, _, new) in j.changes {
-            if let Some(e) = new {
-                let c = entry_columns(e);
-                tx.execute(
-                    "INSERT OR REPLACE INTO delta (graft_id, path, kind, blob, lower, target, mode, mtime, opaque)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                    params![gid, p, c.kind, c.blob, c.lower, c.target, c.mode, c.mtime, c.opaque],
-                )
-            } else {
-                tx.execute(
-                    "DELETE FROM delta WHERE graft_id = ?1 AND path = ?2",
-                    params![gid, p],
-                )
-            }
-            .map_err(sql)?;
-        }
+        insert_op(&tx, &gid, seq, j).map_err(sql)?;
         for s in j.staged {
             match s {
                 StagedChange::Moved { id: sid, path: p } => tx.execute(
@@ -389,6 +403,10 @@ impl Store {
                 "touch" => Op::Touch {
                     path,
                     mtime: mtime.ok_or_else(|| self.corrupt("op_log touch without mtime"))?,
+                },
+                "rebase" => Op::Rebase {
+                    base: String::from_utf8(target.unwrap_or_default())
+                        .map_err(|_| self.corrupt("op_log rebase base is not UTF-8"))?,
                 },
                 "rewind" => Op::Rewind {
                     to: to_seq

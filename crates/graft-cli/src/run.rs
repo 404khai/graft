@@ -186,6 +186,51 @@ pub(crate) fn run_in(
     Ok(status)
 }
 
+/// Runs shell command `script` confined to scratch checkout `dir`, with
+/// `env`, a private `TMPDIR` inside `dir`, and a timeout. Returns its exit
+/// status (`None`: killed at the timeout) and the last 4,000 bytes of its
+/// output. Used by Radar's checks and Integrate's gate and resolver.
+pub(crate) fn run_scratch(
+    dir: &Path,
+    script: &str,
+    env: &[(&str, &str)],
+    timeout: std::time::Duration,
+) -> anyhow::Result<(Option<std::process::ExitStatus>, String)> {
+    use std::process::Stdio;
+    let tmp = dir.join(".graft-scratch-tmp");
+    create_private_dir(&tmp)?;
+    let policy = Policy::new([dir])?;
+    let log_path = tmp.join("output");
+    let log = std::fs::File::create(&log_path)?;
+    let command = ["-c", script].map(OsString::from);
+    let mut cmd = confined(&policy, &OsString::from("sh"), &command)?;
+    cmd.current_dir(dir)
+        .envs(env.iter().copied())
+        .env("TMPDIR", &tmp)
+        .stdin(Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log);
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("starting `{script}`"))?;
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        if let Some(s) = child.try_wait()? {
+            break Some(s);
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let output = std::fs::read(&log_path).unwrap_or_default();
+    let tail = String::from_utf8_lossy(&output[output.len().saturating_sub(4000)..]).into_owned();
+    std::fs::remove_dir_all(&tmp).with_context(|| format!("removing {}", tmp.display()))?;
+    Ok((status, tail))
+}
+
 /// `$GRAFT_HOME/roots/<root-id>/tmp/<graft-id>/`.
 pub(crate) fn tmp_dir(root_dir: &Path, id: GraftId) -> PathBuf {
     root_dir.join("tmp").join(id.to_string())

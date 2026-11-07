@@ -76,6 +76,22 @@ jobs:
       - run: cargo build --workspace --locked
       - run: cargo test --locked -p graft-cli --test e2e blueprints -- --test-threads=1 --nocapture
 
+  integrate:
+    name: integrate with mergiraf (linux)
+    runs-on: ubuntu-latest
+    env:
+      GRAFT_TEST_MERGIRAF: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # Mergiraf is called as a process, never vendored (AGENTS.md §4).
+      - run: cargo install mergiraf --locked --version 0.20.0
+      - run: mergiraf --version
+      - run: cargo build --workspace --locked
+      - run: cargo test --locked -p graft-integrate
+      - run: cargo test --locked -p graft-cli --test e2e integrate -- --test-threads=1
+
   deny:
     name: cargo-deny (${{ matrix.os }})
     strategy:

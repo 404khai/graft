@@ -9,6 +9,7 @@ mod blueprints;
 mod daemon;
 mod doctor;
 mod grafts;
+mod integrate;
 mod layers;
 mod radar;
 mod rings;
@@ -74,6 +75,12 @@ enum Command {
     /// Internal: confine this process, then run the command (Linux).
     #[command(name = "__confine", hide = true)]
     Confine(run::ConfineArgs),
+    /// Land grafts in Root through the queue: merge, test, commit.
+    Integrate(integrate::IntegrateArgs),
+    /// Show the integrate queue: what landed, what is waiting, what stopped.
+    Queue(integrate::QueueArgs),
+    /// Move a graft onto Root's current head, merging its changes.
+    Rebase(integrate::RebaseArgs),
     /// Approve the layer commands and sandbox paths declared in graft.toml.
     Trust(layers::TrustArgs),
     /// Remove layers no graft uses.
@@ -169,6 +176,9 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Radar(args) => ok(radar::radar(&args, &env))?,
         Command::Run(args) => run::run(&args, &env)?,
         Command::Confine(args) => (Output::default(), run::confine(&args)?),
+        Command::Integrate(args) => integrate::integrate(&args, &env)?,
+        Command::Queue(args) => ok(integrate::queue(&args, &env))?,
+        Command::Rebase(args) => ok(integrate::rebase(&args, &env))?,
         Command::Trust(args) => ok(layers::trust(&args, &env))?,
         Command::Gc(args) => ok(layers::gc(&args, &env))?,
         Command::Daemon(args) => ok(daemon::run(&args, &env))?,

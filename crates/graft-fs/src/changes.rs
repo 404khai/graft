@@ -35,6 +35,148 @@ pub enum ChangesError {
         /// The error number.
         errno: i32,
     },
+    /// A blob could not be stored.
+    #[error(transparent)]
+    Store(#[from] graft_store::StoreError),
+    /// A rebased path is a directory in the new base.
+    #[error("{path} is a directory in the new base")]
+    IsDirectory {
+        /// The graft-relative path.
+        path: String,
+    },
+}
+
+/// One file of a graft as it should be after a rebase (`graft rebase`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RebasedFile {
+    /// Graft-relative path.
+    pub path: RelPath,
+    /// Its contents (a symlink's target), or `None` to delete it.
+    pub contents: Option<Vec<u8>>,
+    /// Whether it is a symlink.
+    pub link: bool,
+    /// Its permission bits, for files.
+    pub mode: u32,
+}
+
+/// The ops that recreate `files` over `base`'s tree (with `layers`), from
+/// an empty delta, each with the delta rows it changes: missing parent
+/// directories are created, entries of another type are replaced, and
+/// contents are stored in `blobs`. For [`graft_store::Store::rebase`].
+///
+/// # Errors
+///
+/// If the base cannot be read, a blob cannot be stored, or a path is a
+/// directory in the new base.
+pub fn rebase_ops(
+    objects: &ObjectStore,
+    base: &CommitId,
+    layers: Vec<LayerMount>,
+    files: &[RebasedFile],
+    blobs: &BlobStore,
+    at: graft_core::Timestamp,
+) -> Result<Vec<(graft_store::delta::Op, Vec<graft_store::delta::Change>)>, ChangesError> {
+    use graft_store::delta::{Op, WriteKind};
+    let tree = objects.commit_tree(base)?.tree;
+    let mut b = Rebuild {
+        lower: LowerTree::new(objects.clone(), tree, layers),
+        delta: Delta::default(),
+        ops: Vec::new(),
+        at,
+    };
+    let mut sorted: Vec<&RebasedFile> = files.iter().collect();
+    sorted.sort_by(|x, y| x.path.cmp(&y.path));
+    for f in sorted {
+        let existing = b.delta.resolve(&f.path, &b.lower);
+        let Some(bytes) = &f.contents else {
+            if existing.is_some_and(|n| !n.is_dir()) {
+                b.push(Op::Unlink {
+                    path: f.path.clone(),
+                });
+            }
+            continue;
+        };
+        if existing.as_ref().is_some_and(Node::is_dir) {
+            return Err(ChangesError::IsDirectory {
+                path: String::from_utf8_lossy(&f.path).into_owned(),
+            });
+        }
+        b.parents(&f.path);
+        let exists = b.delta.resolve(&f.path, &b.lower).is_some();
+        if f.link {
+            if exists {
+                b.push(Op::Unlink {
+                    path: f.path.clone(),
+                });
+            }
+            b.push(Op::Symlink {
+                path: f.path.clone(),
+                target: bytes.clone(),
+            });
+        } else {
+            let blob = blobs.put_bytes(bytes)?;
+            let kind = if exists {
+                WriteKind::Write
+            } else {
+                WriteKind::Create
+            };
+            b.push(Op::Write {
+                kind,
+                path: f.path.clone(),
+                blob,
+                mode: f.mode,
+            });
+        }
+    }
+    Ok(b.ops)
+}
+
+/// [`rebase_ops`]' state: the delta built so far over the new lower tree.
+struct Rebuild {
+    lower: LowerTree,
+    delta: Delta,
+    ops: Vec<(graft_store::delta::Op, Vec<graft_store::delta::Change>)>,
+    at: graft_core::Timestamp,
+}
+
+impl Rebuild {
+    fn push(&mut self, op: graft_store::delta::Op) {
+        let changes = self.delta.apply(&op, self.at, &self.lower);
+        self.ops.push((op, changes));
+    }
+
+    /// Makes every ancestor of `path` a directory, top down.
+    fn parents(&mut self, path: &[u8]) {
+        use graft_store::delta::Op;
+        let segments: Vec<&[u8]> = path.split(|b| *b == b'/').collect();
+        let Some((_, dirs)) = segments.split_last() else {
+            return;
+        };
+        let mut parent: RelPath = Vec::new();
+        for seg in dirs {
+            parent = if parent.is_empty() {
+                seg.to_vec()
+            } else {
+                join(&parent, seg)
+            };
+            match self.delta.resolve(&parent, &self.lower) {
+                Some(n) if n.is_dir() => {}
+                Some(_) => {
+                    self.push(Op::Unlink {
+                        path: parent.clone(),
+                    });
+                    self.push(Op::Mkdir {
+                        path: parent.clone(),
+                        mode: 0o755,
+                    });
+                }
+                None => self.push(Op::Mkdir {
+                    path: parent.clone(),
+                    mode: 0o755,
+                }),
+            }
+        }
+    }
 }
 
 /// The changes of a virtual graft's `delta` against `base`, with the file

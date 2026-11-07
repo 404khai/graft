@@ -277,6 +277,14 @@ impl Store {
                 files: staged as u64,
             });
         }
+        if let Some(ring) = self.ring_named(id, label)?
+            && ring.seq < self.last_rebase(id)?
+        {
+            return Err(StoreError::RingBeforeRebase {
+                graft: graft.name,
+                label: label.clone(),
+            });
+        }
         let gid = id.to_string();
         let tx = self.begin()?;
         let done = (|| {

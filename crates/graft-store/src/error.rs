@@ -112,6 +112,17 @@ pub enum StoreError {
         files: u64,
     },
 
+    /// The ring was taken before the graft's last rebase, over another base.
+    #[error(
+        "ring {label} of graft {graft} predates its last rebase, so it cannot be restored over the new base"
+    )]
+    RingBeforeRebase {
+        /// The graft.
+        graft: GraftName,
+        /// The ring.
+        label: RingLabel,
+    },
+
     /// No graft has this ID.
     #[error("no graft with id {id}")]
     NoSuchGraft {

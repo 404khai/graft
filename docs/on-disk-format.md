@@ -1,6 +1,6 @@
 # On-disk format
 
-**Format version: 10** (metadata schema v8)
+**Format version: 11** (metadata schema v9)
 
 This file describes everything Graft persists. Any change to a structure
 below bumps the format version, adds a migration, and updates this file in
@@ -35,6 +35,9 @@ $GRAFT_HOME/
         │   └── <graft-id>/
         │       ├── work/<n>    staging files of files open for writing
         │       └── git/        the graft's .git, created on first use
+        ├── integrate/          mode 0700, Integrate's scratch checkouts
+        │                       (ADR 0017), removed after each request
+        ├── integrate.lock      OS file lock held while the queue is worked
         ├── radar/              mode 0700, Radar's scratch checkouts (ADR 0016);
         │                       each is removed when its check ends
         ├── tmp/                mode 0700, created by `graft run` (ADR 0014)
@@ -67,6 +70,7 @@ Entries in `roots/` whose name is not a valid Root ID, or that contain no
 | 8 | Adds `tmp/<graft-id>/`, the private temp dir of `graft run` (ADR 0014); `trusted_commands` also holds approved `[sandbox] write` paths | None: additive; created on first `graft run`, removed by prune |
 | 9 | Schema v7: Blueprints (`grafts.blueprint`, table `graft_resources`; ADR 0015) | Schema v6 → v7 runs automatically on open; a table and a nullable column only added |
 | 10 | Adds `radar/` (scratch checkouts of Radar's behaviour checks) and schema v8 (`radar_checks`; ADR 0016) | Schema v7 → v8 runs automatically on open; a table only added |
+| 11 | Adds `integrate/` (scratch checkouts), `integrate.lock`, schema v9 (`integrations`) and transient `refs/graft/integrating/<graft-id>` refs in Root (ADR 0017) | Schema v8 → v9 runs automatically on open; a table only added |
 
 ## `config.toml`
 
@@ -184,7 +188,7 @@ Created in v1 and written from the delta store phase on. `WITHOUT ROWID`.
 | `graft_id` | TEXT | References `grafts`, `ON DELETE CASCADE` |
 | `seq` | INTEGER | Per-graft sequence number, from 1 |
 | `at` | INTEGER | Timestamp |
-| `kind` | TEXT | `create`, `write`, `truncate`, `mkdir`, `symlink`, `unlink`, `rmdir`, `rename`, `chmod`, `touch` or (v6) `rewind` |
+| `kind` | TEXT | `create`, `write`, `truncate`, `mkdir`, `symlink`, `unlink`, `rmdir`, `rename`, `chmod`, `touch`, (v6) `rewind` or (format 11) `rebase` |
 | `path` | BLOB | Repo-relative path |
 | `path_to` | BLOB | Destination for renames, else `NULL` |
 | `blob` | TEXT | Resulting `BlobHash`, if any |
@@ -198,7 +202,9 @@ Created in v1 and written from the delta store phase on. `WITHOUT ROWID`.
 is the file's new contents for `create`, `write` and `truncate`. A
 graft's op log replayed from empty through `Delta::replay` reproduces its
 `delta` rows exactly (ADR 0008); a `rewind` restores the state replay had
-right after op `to_seq` (ADR 0013). A bud starts with a copy of its
+right after op `to_seq` (ADR 0013); a `rebase` (its new base commit, as
+hex, in `target`; `path` empty) starts again from empty over the new
+base's tree (ADR 0017). A bud starts with a copy of its
 source's op log, sequence numbers included.
 
 ### `delta` (v4)
@@ -236,6 +242,26 @@ on the next mount after a crash.
 | `mode` | INTEGER | Its permission bits |
 
 Primary key: `(graft_id, seq)`.
+
+### `integrations` (v9)
+
+The Integrate queue (ADR 0017), one row per `graft integrate` request.
+Rows have no foreign key, so the history outlives its grafts.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | INTEGER PK | Queue order (`AUTOINCREMENT`) |
+| `graft_id`, `graft_name` | TEXT | The graft, and its name when queued |
+| `target` | TEXT | The branch it lands on |
+| `message` | TEXT | The commit message given with `-m`, or `NULL` |
+| `dry_run` | INTEGER | 1 for `--dry-run` |
+| `state` | TEXT | `queued`, `running`, `conflict`, `failed`, `landed` or `checked` (a dry run that passed) |
+| `commit_id` | TEXT | The commit it created, once landed |
+| `output` | TEXT | What the steps reported: structural merges, resolver and gate output, conflicts |
+| `enqueued_at`, `updated_at` | INTEGER | Timestamps |
+
+Index `integrations_by_state` on `(state, id)`. A row left `running` by an
+interrupted `graft integrate` is queued again by the next one.
 
 ### `radar_checks` (v8)
 
@@ -396,6 +422,13 @@ and refuses it if it is a symlink, is owned by anyone other than
 | Ref | Points at | Lifetime |
 | --- | --- | --- |
 | `refs/graft/<graft-id>` | The graft's base commit | `graft new` to `graft prune`; keeps the base reachable so `git gc` cannot prune it |
+
+`graft integrate` pushes each landing commit to
+`refs/graft/integrating/<graft-id>` to copy its objects into Root, moves
+the target branch with compare-and-swap (`git update-ref <ref> <new>
+<old>`), then deletes the staging ref, whatever the outcome. In `branch`
+mode it creates or moves `refs/heads/graft/<name>` instead.
+
 
 ## Graft lifecycle on disk
 
