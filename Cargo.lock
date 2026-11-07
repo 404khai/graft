@@ -1434,6 +1434,7 @@ dependencies = [
  "graft-core",
  "graft-daemon",
  "graft-fs",
+ "graft-integrate",
  "graft-radar",
  "graft-root",
  "graft-sandbox",
@@ -1497,6 +1498,10 @@ dependencies = [
 [[package]]
 name = "graft-integrate"
 version = "0.0.0"
+dependencies = [
+ "tempfile",
+ "thiserror",
+]
 
 [[package]]
 name = "graft-mcp"

@@ -481,6 +481,43 @@ mod fuse {
         assert_eq!(v["overlaps"][0]["symbols"], serde_json::json!(["f"]));
     }
 
+    /// AGENTS.md Phase 13: a virtual graft integrates from its delta into
+    /// a branch of Root, as ordinary git history.
+    #[test]
+    fn a_virtual_graft_integrates() {
+        require_fuse();
+        let home = tempfile::tempdir().unwrap();
+        let _daemon = Daemon(home.path());
+        let repo = crate::git_repo();
+        let (h, r) = (home.path(), repo.path());
+        crate::git(r, &["config", "user.name", "Graft Test"]);
+        crate::git(r, &["config", "user.email", "test@graft.invalid"]);
+        crate::git(r, &["branch", "land"]);
+        init(h, r);
+        let v = new_fuse(h, r, "v");
+        std::fs::write(v.join("README.md"), "from a virtual graft\n").unwrap();
+        std::fs::write(v.join("added.txt"), "added\n").unwrap();
+        let report = run(h, r, &["integrate", "v", "--onto", "land"]);
+        assert!(report.contains("landed   v → land"), "{report}");
+        let show = |spec: &str| {
+            let o = Command::new("git")
+                .args(["show", spec])
+                .current_dir(r)
+                .output()
+                .unwrap();
+            String::from_utf8(o.stdout).unwrap()
+        };
+        assert_eq!(show("land:README.md"), "from a virtual graft\n");
+        assert_eq!(show("land:added.txt"), "added\n");
+        let fsck = Command::new("git")
+            .args(["fsck", "--strict"])
+            .current_dir(r)
+            .status()
+            .unwrap();
+        assert!(fsck.success());
+        run(h, r, &["prune", "v"]);
+    }
+
     fn walk_files(dir: &Path) -> Vec<std::path::PathBuf> {
         let mut out = Vec::new();
         for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {

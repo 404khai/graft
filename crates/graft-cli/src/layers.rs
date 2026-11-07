@@ -344,7 +344,13 @@ pub(crate) fn trust(args: &TrustArgs, env: &Environment) -> anyhow::Result<Outpu
     let has_radar = graft_blueprint::parse_radar(&text_at(&located.repo, &base)?, BLUEPRINT_FILE)?
         .test
         .is_some();
-    if specs.is_empty() && sandbox.write.is_empty() && !has_blueprints && !has_radar {
+    let has_integrate = !crate::integrate::approvals_at(&located.repo, &base)?.is_empty();
+    if specs.is_empty()
+        && sandbox.write.is_empty()
+        && !has_blueprints
+        && !has_radar
+        && !has_integrate
+    {
         return Ok(Output::stdout(format!(
             "{BLUEPRINT_FILE} at {rev} declares nothing to approve.\n"
         )));
@@ -358,6 +364,14 @@ pub(crate) fn trust(args: &TrustArgs, env: &Environment) -> anyhow::Result<Outpu
                 located.store.trust(&hash, &what)?;
                 let _ = writeln!(out, "Approved {what}");
             }
+        }
+    }
+    for (hash, what) in crate::integrate::approvals_at(&located.repo, &base)? {
+        if located.store.is_trusted(&hash)? {
+            let _ = writeln!(out, "Already approved {what}");
+        } else {
+            located.store.trust(&hash, &what)?;
+            let _ = writeln!(out, "Approved {what}");
         }
     }
     if let Some(test) =
