@@ -58,6 +58,24 @@ jobs:
       - name: graft doctor
         run: cargo run --locked -q -p graft-cli -- doctor
 
+  blueprint-services:
+    name: blueprint services (linux)
+    runs-on: ubuntu-latest
+    env:
+      GRAFT_TEST_POSTGRES: "1"
+      GRAFT_TEST_DOCKER: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # The runner ships PostgreSQL's binaries outside PATH; the tests start
+      # their own throwaway cluster with them.
+      - name: Put PostgreSQL's tools on PATH
+        run: echo "$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)" >> "$GITHUB_PATH"
+      - run: initdb --version && docker version --format '{{.Server.Version}}'
+      - run: cargo build --workspace --locked
+      - run: cargo test --locked -p graft-cli --test e2e blueprints -- --test-threads=1 --nocapture
+
   deny:
     name: cargo-deny (${{ matrix.os }})
     strategy:

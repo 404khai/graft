@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod blueprints;
 mod daemon;
 mod doctor;
 mod grafts;
@@ -48,6 +49,8 @@ enum Command {
     Ls,
     /// Print a graft's working-tree path, e.g. `cd "$(graft path auth)"`.
     Path(grafts::NameArgs),
+    /// Print a graft's blueprint environment (secrets redacted).
+    Env(blueprints::EnvArgs),
     /// Show what changed in a graft since its base.
     Status(grafts::StatusArgs),
     /// Show a graft's changes as a unified diff.
@@ -152,6 +155,7 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Ls => ok(grafts::ls(&env))?,
         Command::Path(args) => ok(grafts::path(&args, &env))?,
         Command::Status(args) => ok(grafts::status(&args, &env))?,
+        Command::Env(args) => ok(blueprints::env(&args, &env))?,
         Command::Diff(args) => ok(grafts::diff(&args, &env))?,
         Command::Log(args) => ok(grafts::log(&args, &env))?,
         Command::Prune(args) => ok(grafts::prune(&args, &env))?,

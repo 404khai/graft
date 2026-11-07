@@ -33,6 +33,25 @@ pub(crate) struct NewArgs {
     /// `$GRAFT_FS`, then `fs.backend` in `config.toml`, then `reflink`.
     #[arg(long, value_name = "BACKEND")]
     backend: Option<BackendKind>,
+    /// Provision this blueprint of graft.toml: ports, services, env files
+    /// and setup commands (see docs/blueprint.md).
+    #[arg(long, value_name = "NAME")]
+    blueprint: Option<String>,
+}
+
+/// The `--blueprint` of `graft new`, checked for approval before anything
+/// is created.
+fn blueprint_for(
+    args: &NewArgs,
+    located: &Located,
+    base: &graft_core::CommitId,
+) -> anyhow::Result<Option<graft_blueprint::BlueprintSpec>> {
+    let Some(name) = &args.blueprint else {
+        return Ok(None);
+    };
+    let spec = crate::blueprints::spec_at(&located.repo, base, name)?;
+    crate::blueprints::check_approved(&located.store, &spec, args.from.as_deref())?;
+    Ok(Some(spec))
 }
 
 /// Arguments for commands that take one graft name.
@@ -137,13 +156,63 @@ pub(crate) fn daemon(home: &GraftHome, out: &mut Output) -> anyhow::Result<Clien
 pub(crate) fn new(args: &NewArgs, env: &Environment) -> anyhow::Result<Output> {
     let name = parse_name(&args.name)?;
     let kind = choose_backend(args, env)?;
-    timing::time("graft new", || {
+    let mut out = timing::time("graft new", || {
         if kind.is_virtual() {
             new_virtual(args, env, &name, kind)
         } else {
             new_reflink(args, env, &name)
         }
-    })
+    })?;
+    if let Some(bp) = &args.blueprint
+        && let Err(e) = timing::time("provision blueprint", || {
+            provision(env, &name, bp, kind, &mut out)
+        })
+    {
+        // Release what was provisioned and remove the graft.
+        let undo = prune(
+            &PruneArgs {
+                name: name.to_string(),
+                force: true,
+            },
+            env,
+        );
+        let note = match undo {
+            Ok(_) => format!("graft {name} was removed again"),
+            Err(u) => format!(
+                "removing graft {name} again also failed: {u:#}; run `graft prune {name} --force`"
+            ),
+        };
+        return Err(e.context(format!("provisioning blueprint {bp} ({note})")));
+    }
+    Ok(out)
+}
+
+fn provision(
+    env: &Environment,
+    name: &GraftName,
+    blueprint: &str,
+    kind: BackendKind,
+    out: &mut Output,
+) -> anyhow::Result<()> {
+    let mut ctx = open(env)?;
+    let record = find(&ctx.located.store, name)?;
+    let spec = crate::blueprints::spec_at(&ctx.located.repo, &record.base_commit, blueprint)?;
+    let graft_dir = if kind.is_virtual() {
+        daemon(&ctx.home, out)?.mount(&ctx.located.record.id, name)?
+    } else {
+        ctx.backend.path(name)
+    };
+    crate::blueprints::provision(&mut ctx, &record, &spec, &graft_dir, out)?;
+    let _ = writeln!(out.stdout, "  blueprint {blueprint}: provisioned");
+    for (k, v) in crate::blueprints::environment(&ctx, &record, &graft_dir)? {
+        let v = if crate::blueprints::is_secret(&k) {
+            "<redacted>".to_owned()
+        } else {
+            v
+        };
+        let _ = writeln!(out.stdout, "    {k}={v}");
+    }
+    Ok(())
 }
 
 /// Creates a reflink graft: a real working tree (ADR 0003).
@@ -156,6 +225,7 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
     } = open(env)?;
     let rev = args.from.as_deref().unwrap_or("HEAD");
     let base = located.repo.resolve_commit(rev)?;
+    let blueprint = blueprint_for(args, &located, &base)?;
     // Refuse unapproved layer commands before anything is created.
     let planned = timing::time("plan layers", || {
         layers::plan(
@@ -164,6 +234,7 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
             &cache,
             &base,
             args.from.as_deref(),
+            blueprint.as_ref().and_then(|b| b.layers.as_deref()),
         )
     })?;
 
@@ -268,6 +339,7 @@ fn new_virtual(
     } = open(env)?;
     let rev = args.from.as_deref().unwrap_or("HEAD");
     let base = located.repo.resolve_commit(rev)?;
+    let blueprint = blueprint_for(args, &located, &base)?;
     let planned = timing::time("plan layers", || {
         layers::plan(
             &located.repo,
@@ -275,6 +347,7 @@ fn new_virtual(
             &cache,
             &base,
             args.from.as_deref(),
+            blueprint.as_ref().and_then(|b| b.layers.as_deref()),
         )
     })?;
     let mut out = Output::default();
@@ -642,11 +715,14 @@ pub(crate) fn prune(args: &PruneArgs, env: &Environment) -> anyhow::Result<Outpu
     if record.state != GraftState::Pruned {
         ctx.located.store.set_state(record.id, GraftState::Pruned)?;
     }
+    let mut out = Output::default();
+    crate::blueprints::release(&mut ctx, &record, &mut out)?;
     ctx.backend.prune(&name, record.id)?;
     remove_tmp(&ctx, record.id)?;
     ctx.located.repo.unpin(record.id)?;
     ctx.located.store.delete_graft(record.id)?;
-    Ok(Output::stdout(format!("Pruned graft {name}\n")))
+    out.stdout = format!("Pruned graft {name}\n");
+    Ok(out)
 }
 
 /// Removes the graft's `graft run` temp dir, `$GRAFT_HOME/roots/<root-id>/tmp/<graft-id>/`.
@@ -686,6 +762,7 @@ fn prune_virtual(ctx: &mut Ctx, record: &GraftRecord, force: bool) -> anyhow::Re
     if record.state != GraftState::Pruned {
         ctx.located.store.set_state(record.id, GraftState::Pruned)?;
     }
+    crate::blueprints::release(ctx, record, &mut out)?;
     // graftd unmounts and removes the mount point, staging files, .git,
     // delta and blobs nothing else uses.
     let pruned = client.prune(&ctx.located.record.id, name)?;

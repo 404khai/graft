@@ -16,6 +16,7 @@ use crate::{Result, RootError};
 const LAYER_KEY_CONTEXT: &str = "graft layer v1";
 const COMMAND_HASH_CONTEXT: &str = "graft trust v1";
 const SANDBOX_WRITE_CONTEXT: &str = "graft sandbox write v1";
+const BLUEPRINT_ITEM_CONTEXT: &str = "graft blueprint item v1";
 
 fn field(hasher: &mut blake3::Hasher, bytes: &[u8]) {
     hasher.update(&(bytes.len() as u64).to_le_bytes());
@@ -65,6 +66,17 @@ pub fn command_hash(path: &Path, build: &str, toolchain: Option<&str>) -> Comman
     field(&mut h, &graft_core::path_to_bytes(path));
     field(&mut h, build.as_bytes());
     field(&mut h, toolchain.unwrap_or_default().as_bytes());
+    CommandHash::from_bytes(*h.finalize().as_bytes())
+}
+
+/// Identifies one approvable item of blueprint `blueprint` (a setup
+/// command, a service, an env file copied from Root) for the trust gate
+/// (ADR 0015). `item` is its canonical description.
+#[must_use]
+pub fn blueprint_item_hash(blueprint: &str, item: &str) -> CommandHash {
+    let mut h = blake3::Hasher::new_derive_key(BLUEPRINT_ITEM_CONTEXT);
+    field(&mut h, blueprint.as_bytes());
+    field(&mut h, item.as_bytes());
     CommandHash::from_bytes(*h.finalize().as_bytes())
 }
 
