@@ -568,6 +568,9 @@ fn attempt(
             &new[..12],
             landed_ref(&spec, &entry.target, record)
         );
+        if spec.mode == IntegrateMode::Push {
+            publish(ctx, &spec, &entry.target, record, &msg_path, &mut log)?;
+        }
         Ok(Outcome {
             state: IntegrationState::Landed,
             output: log,
@@ -581,8 +584,70 @@ fn attempt(
 fn landed_ref(spec: &IntegrateSpec, target: &str, record: &GraftRecord) -> String {
     match spec.mode {
         IntegrateMode::Commit => format!("refs/heads/{target}"),
-        IntegrateMode::Branch => format!("refs/heads/graft/{}", record.name),
+        IntegrateMode::Branch | IntegrateMode::Push => {
+            format!("refs/heads/graft/{}", record.name)
+        }
     }
+}
+
+/// `push` mode: pushes `graft/<name>` to the remote and, with `pr`,
+/// opens a pull request into `target` with `gh`.
+fn publish(
+    ctx: &Ctx,
+    spec: &IntegrateSpec,
+    target: &str,
+    record: &GraftRecord,
+    message: &Path,
+    log: &mut String,
+) -> anyhow::Result<()> {
+    let root = &ctx.located.record.path;
+    let branch = format!("graft/{}", record.name);
+    let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
+    git(
+        root,
+        &["push", "-q", "--force-with-lease", &spec.remote, &refspec],
+    )
+    .with_context(|| format!("pushing {branch} to {}", spec.remote))?;
+    let _ = writeln!(log, "pushed {branch} to {}", spec.remote);
+    if !spec.pr {
+        return Ok(());
+    }
+    let text = std::fs::read_to_string(message)?;
+    let (title, body) = text.split_once('\n').unwrap_or((text.as_str(), ""));
+    let gh = Command::new("gh")
+        .args([
+            "pr",
+            "create",
+            "--head",
+            &branch,
+            "--base",
+            target,
+            "--title",
+            title,
+            "--body",
+            body.trim(),
+        ])
+        .current_dir(root)
+        .output();
+    match gh {
+        Ok(o) if o.status.success() => {
+            let _ = writeln!(log, "opened {}", String::from_utf8_lossy(&o.stdout).trim());
+        }
+        Ok(o) => {
+            let _ = writeln!(
+                log,
+                "could not open a pull request (gh: {}); {branch} is pushed",
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
+        }
+        Err(_) => {
+            let _ = writeln!(
+                log,
+                "gh is not installed, so no pull request was opened; {branch} is pushed"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Copies commit `new` into Root and moves the ref from `head` to it.
@@ -613,7 +678,7 @@ fn land(
     )?;
     let moved = (|| {
         let refname = landed_ref(spec, target, record);
-        if spec.mode == IntegrateMode::Branch {
+        if spec.mode != IntegrateMode::Commit {
             return git(&root, &["update-ref", &refname, new]).map(drop);
         }
         let checked_out = ctx.located.repo.head_ref()?.as_deref() == Some(refname.as_str());

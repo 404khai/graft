@@ -121,6 +121,8 @@ struct RawIntegrate {
     timeout_secs: Option<Spanned<u64>>,
     mode: Option<Spanned<String>>,
     branch: Option<Spanned<String>>,
+    remote: Option<Spanned<String>>,
+    pr: Option<bool>,
 }
 
 /// How `graft integrate` lands a graft.
@@ -130,6 +132,10 @@ pub enum IntegrateMode {
     Commit,
     /// A branch `graft/<name>` in Root; the target is left alone.
     Branch,
+    /// As [`IntegrateMode::Branch`], then pushed to `remote` (and a pull
+    /// request opened with `gh` if `pr`). The only mode that uses the
+    /// network; choosing it in graft.toml is the operator's consent.
+    Push,
 }
 
 /// The `[integrate]` table (ADR 0017).
@@ -145,6 +151,10 @@ pub struct IntegrateSpec {
     pub mode: IntegrateMode,
     /// The target branch, if not Root's current one.
     pub branch: Option<String>,
+    /// The remote `push` mode pushes to.
+    pub remote: String,
+    /// Whether `push` mode opens a pull request.
+    pub pr: bool,
 }
 
 /// Parses the `[integrate]` table of a `graft.toml`.
@@ -161,6 +171,8 @@ pub fn parse_integrate(text: &str, file: &str) -> Result<IntegrateSpec, Blueprin
         timeout_secs: DEFAULT_RADAR_TIMEOUT_SECS,
         mode: IntegrateMode::Commit,
         branch: None,
+        remote: "origin".to_owned(),
+        pr: false,
     };
     let Some(raw) = parse_file(&at)?.integrate else {
         return Ok(spec);
@@ -188,10 +200,11 @@ pub fn parse_integrate(text: &str, file: &str) -> Result<IntegrateSpec, Blueprin
         spec.mode = match m.get_ref().as_str() {
             "commit" => IntegrateMode::Commit,
             "branch" => IntegrateMode::Branch,
+            "push" => IntegrateMode::Push,
             other => {
                 return Err(at.error(
                     m.span().start,
-                    format!("integrate mode {other:?} must be \"commit\" or \"branch\""),
+                    format!("integrate mode {other:?} must be \"commit\", \"branch\" or \"push\""),
                 ));
             }
         };
@@ -209,6 +222,20 @@ pub fn parse_integrate(text: &str, file: &str) -> Result<IntegrateSpec, Blueprin
             ));
         }
         spec.branch = Some(name.to_owned());
+    }
+    if let Some(remote) = raw.remote {
+        let name = remote.get_ref().trim();
+        if name.is_empty() || name.starts_with('-') || name.contains(char::is_whitespace) {
+            return Err(at.error(
+                remote.span().start,
+                "integrate remote must be a remote name or URL",
+            ));
+        }
+        name.clone_into(&mut spec.remote);
+    }
+    spec.pr = raw.pr.unwrap_or(false);
+    if spec.pr && spec.mode != IntegrateMode::Push {
+        return Err(at.error(0, "integrate pr = true needs mode = \"push\""));
     }
     Ok(spec)
 }
@@ -487,6 +514,16 @@ mod tests {
             (s.timeout_secs, s.mode, s.branch.as_deref()),
             (9, IntegrateMode::Branch, Some("main"))
         );
+        let p = parse_integrate(
+            "[integrate]\nmode = \"push\"\nremote = \"upstream\"\npr = true\n",
+            "graft.toml",
+        )
+        .unwrap();
+        assert_eq!(
+            (p.mode, p.remote.as_str(), p.pr),
+            (IntegrateMode::Push, "upstream", true)
+        );
+        assert!(parse_integrate("[integrate]\npr = true\n", "graft.toml").is_err());
         let d = parse_integrate("", "graft.toml").unwrap();
         assert_eq!(
             (d.test, d.mode, d.branch),

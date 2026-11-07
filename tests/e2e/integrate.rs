@@ -366,3 +366,63 @@ fn symlinks_land_as_symlinks() {
         "target.txt"
     );
 }
+
+/// `mode = "push"` pushes graft/<name> to the remote and opens a pull
+/// request with `gh`. Offline: the remote is a local bare repository and
+/// `gh` a stand-in script that records its arguments.
+#[test]
+fn push_mode_pushes_a_branch_and_opens_a_pull_request() {
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "-q", "--bare"]);
+    let toml = format!(
+        "[integrate]\nmode = \"push\"\nremote = \"{}\"\npr = true\n",
+        remote.path().display()
+    );
+    let f = Fixture::new(&toml, &[("p.txt", "p\n")]);
+    let a = f.new_graft("a");
+    std::fs::write(a.join("p.txt"), "pushed\n").unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    let args_file = bin.path().join("gh-args");
+    std::fs::write(
+        bin.path().join("gh"),
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\necho https://example.invalid/pull/1\n",
+            args_file.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        bin.path().join("gh"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let before = f.rev("land");
+    let o = f
+        .cmd()
+        .env("PATH", path)
+        .args(["integrate", "a", "--onto", "land", "-m", "feat: push p"])
+        .output()
+        .unwrap();
+    assert!(
+        o.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(f.rev("land"), before, "push mode moved the target");
+    assert_eq!(out(remote.path(), &["show", "graft/a:p.txt"]), "pushed\n");
+    let gh = std::fs::read_to_string(&args_file).unwrap();
+    assert!(
+        gh.starts_with("pr\ncreate\n--head\ngraft/a\n--base\nland\n--title\nfeat: push p\n"),
+        "{gh}"
+    );
+    assert!(
+        f.ok(&["queue", "--verbose"])
+            .contains("opened https://example.invalid/pull/1")
+    );
+}
