@@ -158,11 +158,14 @@ Status: done for virtual grafts (FUSE, NFS), PR #21, ADR 0013. Scoped with the o
 
 ## Phase 10 — Sandboxed run
 
-Status: not started
+Status: in review (`feat/sandboxed-run`, ADR 0014). Landlock on Linux and a generated Seatbelt profile on macOS, no namespaces yet (see ADR 0014: no private `/tmp` mount or PID namespace; `TMPDIR` points at a private per-graft directory instead).
 
-- [ ] A test process inside `graft run` fails to write to Root's working tree, another graft, and `$HOME` (outside allowed paths).
-- [ ] Common agents and toolchains run normally inside the sandbox (test with a fixture script that runs git, cargo/npm and a network call if allowed).
-- [ ] Clear error messages when the kernel lacks Landlock support.
+- [x] A test process inside `graft run` fails to write to Root's working tree, another graft, and `$HOME` (outside allowed paths).
+  - `writes_outside_the_graft_are_denied` (reflink graft; also a rename into another graft) and `run_tags_the_op_log_and_stays_in_the_mount` (virtual graft). Passed locally on macOS 27 (Seatbelt, reflink and NFS); Linux (Landlock) runs in the CI `test` and `fuse` jobs. Removing the profile's deny rule makes the test fail.
+- [x] Common agents and toolchains run normally inside the sandbox (test with a fixture script that runs git, cargo/npm and a network call if allowed).
+  - `git_cargo_and_the_network_work_inside_the_sandbox`: `git add`/`commit`/`status`, `cargo run --offline`, and a loopback HTTP request with `curl`. npm is not in the test (this Mac's node is broken); node's `os.tmpdir()` was checked by hand to follow the private `TMPDIR`.
+- [x] Clear error messages when the kernel lacks Landlock support.
+  - `graft run` refuses before starting anything, naming the kernel requirement (5.13+, `landlock` in `/sys/kernel/security/lsm`); `graft doctor` reports the sandbox mechanism. The tests check that message on a kernel without Landlock, but every CI runner has Landlock, so that branch has not run in CI.
 
 ## Phase 11 — Blueprints
 

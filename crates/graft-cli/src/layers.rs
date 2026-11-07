@@ -282,7 +282,7 @@ pub(crate) struct TrustArgs {
     from: Option<String>,
 }
 
-/// Approves the layer commands in `graft.toml`.
+/// Approves the layer commands and sandbox write paths in `graft.toml`.
 pub(crate) fn trust(args: &TrustArgs, env: &Environment) -> anyhow::Result<Output> {
     let home = env.require_home()?;
     let mut located = graft_store::registry::locate(home, Path::new("."))?;
@@ -294,12 +294,23 @@ pub(crate) fn trust(args: &TrustArgs, env: &Environment) -> anyhow::Result<Outpu
             base.short(7)
         )));
     };
-    if specs.is_empty() {
+    let sandbox = crate::run::sandbox_at(&located.repo, &base)?;
+    if specs.is_empty() && sandbox.write.is_empty() {
         return Ok(Output::stdout(format!(
-            "{BLUEPRINT_FILE} at {rev} declares no layers; nothing to approve.\n"
+            "{BLUEPRINT_FILE} at {rev} declares no layers or sandbox paths; nothing to approve.\n"
         )));
     }
     let mut out = String::new();
+    for path in &sandbox.write {
+        let hash = graft_root::layer::sandbox_write_hash(path);
+        let what = format!("sandbox write {path}");
+        if located.store.is_trusted(&hash)? {
+            let _ = writeln!(out, "Already approved {what}");
+        } else {
+            located.store.trust(&hash, &what)?;
+            let _ = writeln!(out, "Approved {what}");
+        }
+    }
     for spec in &specs {
         let hash = hash_of(spec);
         let what = describe(spec);

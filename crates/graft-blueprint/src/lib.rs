@@ -2,8 +2,8 @@
 //!
 //! A Blueprint lives in `graft.toml` at the top of the repository. This
 //! crate parses it. For now that means the `[[layer]]` entries used by the
-//! layer cache; ports, services, env files and templates arrive with the full
-//! Blueprint phase.
+//! layer cache and the `[sandbox]` table used by `graft run`; ports,
+//! services, env files and templates arrive with the full Blueprint phase.
 //!
 //! ```toml
 //! [[layer]]
@@ -11,6 +11,9 @@
 //! inputs = ["package.json", "package-lock.json"] # files whose contents key it
 //! build = "npm ci"                              # run in the graft's top level
 //! toolchain = "node --version"                  # optional: output is part of the key
+//!
+//! [sandbox]
+//! write = ["~/.cargo", "~/.npm"]  # extra writable paths for `graft run`
 //! ```
 //!
 //! Every error carries the file, line and column it refers to.
@@ -69,6 +72,86 @@ pub struct LayerSpec {
 struct RawFile {
     #[serde(default)]
     layer: Vec<RawLayer>,
+    sandbox: Option<RawSandbox>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSandbox {
+    #[serde(default)]
+    write: Vec<Spanned<String>>,
+}
+
+/// The `[sandbox]` table: what `graft run` lets a command write besides its
+/// graft (ADR 0014).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SandboxSpec {
+    /// Extra writable paths, as written: absolute, or starting with `~/`
+    /// for the user's home directory. Expand them with [`expand_home`].
+    pub write: Vec<String>,
+}
+
+/// `path` with a leading `~/` replaced by `home`.
+#[must_use]
+pub fn expand_home(path: &str, home: &Path) -> PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => home.join(rest),
+        None => PathBuf::from(path),
+    }
+}
+
+/// Checks a `[sandbox] write` entry.
+fn sandbox_path(raw: &str) -> Result<(), &'static str> {
+    let rest = if let Some(rest) = raw.strip_prefix("~/") {
+        rest
+    } else if let Some(rest) = raw.strip_prefix('/') {
+        rest
+    } else {
+        return Err("must be absolute or start with ~/");
+    };
+    let rest = rest.trim_end_matches('/');
+    if rest.is_empty() {
+        return Err("must not be / or the whole home directory");
+    }
+    for segment in rest.split('/') {
+        match segment {
+            "." | ".." => return Err("must not contain . or .. components"),
+            "" => return Err("must not contain empty components"),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn parse_file(at: &Locator<'_>) -> Result<RawFile, BlueprintError> {
+    toml::from_str(at.text).map_err(|e| {
+        let offset = e.span().map_or(0, |s| s.start);
+        at.error(offset, e.message().trim().to_owned())
+    })
+}
+
+/// Parses the `[sandbox]` table of a `graft.toml` (empty if absent).
+///
+/// # Errors
+///
+/// A [`BlueprintError`] for invalid TOML, unknown keys, or paths that are
+/// relative, `/`, `~`, contain `.`/`..`, or repeat.
+pub fn parse_sandbox(text: &str, file: &str) -> Result<SandboxSpec, BlueprintError> {
+    let at = Locator { file, text };
+    let Some(raw) = parse_file(&at)?.sandbox else {
+        return Ok(SandboxSpec::default());
+    };
+    let mut write = Vec::new();
+    for w in raw.write {
+        let path = w.get_ref().clone();
+        sandbox_path(&path)
+            .map_err(|why| at.error(w.span().start, format!("sandbox write path {why}")))?;
+        if write.contains(&path) {
+            return Err(at.error(w.span().start, "duplicate sandbox write path"));
+        }
+        write.push(path);
+    }
+    Ok(SandboxSpec { write })
 }
 
 #[derive(Deserialize)]
@@ -145,10 +228,7 @@ fn safe_relative(raw: &str) -> Result<PathBuf, &'static str> {
 /// commands, duplicate inputs, or layers that overlap.
 pub fn parse_layers(text: &str, file: &str) -> Result<Vec<LayerSpec>, BlueprintError> {
     let at = Locator { file, text };
-    let raw: RawFile = toml::from_str(text).map_err(|e| {
-        let offset = e.span().map_or(0, |s| s.start);
-        at.error(offset, e.message().trim().to_owned())
-    })?;
+    let raw = parse_file(&at)?;
 
     let mut layers: Vec<(LayerSpec, usize)> = Vec::new();
     for layer in raw.layer {
@@ -226,6 +306,38 @@ mod tests {
 
     fn err(text: &str) -> BlueprintError {
         parse_layers(text, "graft.toml").unwrap_err()
+    }
+
+    #[test]
+    fn parses_the_sandbox_table() {
+        let text = "[[layer]]\npath = \"n\"\ninputs = [\"a\"]\nbuild = \"b\"\n\n[sandbox]\nwrite = [\"~/.cargo\", \"/opt/cache/\"]\n";
+        assert_eq!(
+            parse_sandbox(text, "graft.toml").unwrap().write,
+            ["~/.cargo", "/opt/cache/"]
+        );
+        assert_eq!(parse_layers(text, "graft.toml").unwrap().len(), 1);
+        assert_eq!(
+            parse_sandbox("", "graft.toml").unwrap(),
+            SandboxSpec::default()
+        );
+        for bad in ["rel", "/", "~", "~/", "/a/../b", "~/./x", "//x", "/a//b"] {
+            let e = parse_sandbox(&format!("[sandbox]\nwrite = [\"{bad}\"]\n"), "graft.toml")
+                .unwrap_err();
+            assert_eq!((e.line, e.column), (2, 10), "{bad}: {e}");
+            assert!(e.message.starts_with("sandbox write path"), "{bad}: {e}");
+        }
+        let e = parse_sandbox("[sandbox]\nwrite = [\"/a\", \"/a\"]\n", "graft.toml").unwrap_err();
+        assert!(e.message.contains("duplicate"), "{e}");
+        let e = parse_sandbox("[sandbox]\nwirte = []\n", "graft.toml").unwrap_err();
+        assert!(e.message.contains("unknown field"), "{e}");
+        assert_eq!(
+            expand_home("~/.npm", Path::new("/home/u")),
+            PathBuf::from("/home/u/.npm")
+        );
+        assert_eq!(
+            expand_home("/opt", Path::new("/home/u")),
+            PathBuf::from("/opt")
+        );
     }
 
     #[test]

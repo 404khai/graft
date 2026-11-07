@@ -11,6 +11,7 @@ mod grafts;
 mod layers;
 mod rings;
 mod root;
+mod run;
 mod timing;
 mod virtual_grafts;
 
@@ -61,7 +62,12 @@ enum Command {
     Ring(rings::RingArgs),
     /// Return a graft to one of its rings (reversible: it rings first).
     Rewind(rings::RewindArgs),
-    /// Approve the layer build commands declared in graft.toml.
+    /// Run a command confined to a graft: it can only write inside it.
+    Run(run::RunArgs),
+    /// Internal: confine this process, then run the command (Linux).
+    #[command(name = "__confine", hide = true)]
+    Confine(run::ConfineArgs),
+    /// Approve the layer commands and sandbox paths declared in graft.toml.
     Trust(layers::TrustArgs),
     /// Remove layers no graft uses.
     Gc(layers::GcArgs),
@@ -152,6 +158,8 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Bud(args) => ok(rings::bud(&args, &env))?,
         Command::Ring(args) => ok(rings::ring(&args, &env))?,
         Command::Rewind(args) => ok(rings::rewind(&args, &env))?,
+        Command::Run(args) => run::run(&args, &env)?,
+        Command::Confine(args) => (Output::default(), run::confine(&args)?),
         Command::Trust(args) => ok(layers::trust(&args, &env))?,
         Command::Gc(args) => ok(layers::gc(&args, &env))?,
         Command::Daemon(args) => ok(daemon::run(&args, &env))?,

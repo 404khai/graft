@@ -174,6 +174,12 @@ pub(crate) fn run(args: &Args, env: &Environment) -> (String, ExitCode) {
         describe(&graft_fs::nfs_client_availability()),
     );
 
+    let sandbox = match graft_sandbox::mechanism() {
+        (m, Ok(())) => format!("available ({m})"),
+        (m, Err(why)) => format!("unavailable ({m}: {why}); graft run will refuse to start"),
+    };
+    row(&mut out, "sandbox", sandbox);
+
     let code = if healthy {
         ExitCode::SUCCESS
     } else {

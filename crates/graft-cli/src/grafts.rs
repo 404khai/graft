@@ -643,9 +643,22 @@ pub(crate) fn prune(args: &PruneArgs, env: &Environment) -> anyhow::Result<Outpu
         ctx.located.store.set_state(record.id, GraftState::Pruned)?;
     }
     ctx.backend.prune(&name, record.id)?;
+    remove_tmp(&ctx, record.id)?;
     ctx.located.repo.unpin(record.id)?;
     ctx.located.store.delete_graft(record.id)?;
     Ok(Output::stdout(format!("Pruned graft {name}\n")))
+}
+
+/// Removes the graft's `graft run` temp dir, `$GRAFT_HOME/roots/<root-id>/tmp/<graft-id>/`.
+fn remove_tmp(ctx: &Ctx, id: graft_core::GraftId) -> anyhow::Result<()> {
+    let dir = crate::run::tmp_dir(&ctx.root_dir(), id);
+    match std::fs::symlink_metadata(&dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e).with_context(|| format!("inspecting {}", dir.display())),
+        Ok(m) if !m.is_dir() => bail!("{} is not a directory; not removing it", dir.display()),
+        Ok(_) => {}
+    }
+    std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))
 }
 
 /// Prunes a FUSE graft: graftd unmounts it (lazily if busy), then the empty
@@ -687,6 +700,7 @@ fn prune_virtual(ctx: &mut Ctx, record: &GraftRecord, force: bool) -> anyhow::Re
         ));
     }
     ReflinkBackend::new(ctx.backend.mounts().join(".layer-build")).prune(name, record.id)?;
+    remove_tmp(ctx, record.id)?;
     ctx.located.repo.unpin(record.id)?;
     ctx.located.store.delete_graft(record.id)?;
     out.stdout = format!("Pruned graft {name}\n");

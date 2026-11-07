@@ -413,6 +413,37 @@ mod fuse {
         );
     }
 
+    /// AGENTS.md Phase 10: `graft run` in a virtual graft confines the
+    /// command to the mount and tags its op log rows with the run session.
+    #[test]
+    fn run_tags_the_op_log_and_stays_in_the_mount() {
+        require_fuse();
+        let home = tempfile::tempdir().unwrap();
+        let _daemon = Daemon(home.path());
+        let repo = crate::git_repo();
+        let (h, r) = (home.path(), repo.path());
+        init(h, r);
+        let v = new_fuse(h, r, "v");
+        let escape = r.join("escape.txt");
+        let script = format!(
+            "echo $GRAFT_RUN; echo run > ran.txt && ! (echo x > '{}' 2>/dev/null)",
+            escape.display()
+        );
+        let session = run(h, r, &["run", "v", "--", "sh", "-c", &script]);
+        let session = session.trim();
+        assert_eq!(session.len(), 32, "{session}");
+        assert_eq!(std::fs::read_to_string(v.join("ran.txt")).unwrap(), "run\n");
+        assert!(!escape.exists());
+        let log = run(h, r, &["log", "v"]);
+        let line = log.lines().find(|l| l.contains("ran.txt")).unwrap();
+        assert!(line.ends_with(&format!("[run:{session}]")), "{log}");
+        // Writes after the run are not attributed to it.
+        std::fs::write(v.join("later.txt"), "later\n").unwrap();
+        let log = run(h, r, &["log", "v"]);
+        let line = log.lines().find(|l| l.contains("later.txt")).unwrap();
+        assert!(!line.contains("[run:"), "{log}");
+    }
+
     fn walk_files(dir: &Path) -> Vec<std::path::PathBuf> {
         let mut out = Vec::new();
         for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {

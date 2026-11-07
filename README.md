@@ -39,6 +39,15 @@ graft ring auth before-refactor       # checkpoint; `graft ring auth --list`
 graft rewind auth before-refactor     # go back; prints how to undo it
 ```
 
+Run an agent or any command so it can only write inside its graft (and a
+private `TMPDIR`): writes to Root, other grafts or `$HOME` fail. Landlock on
+Linux, Seatbelt on macOS; tool caches can be allowed in
+[`graft.toml`](docs/blueprint.md#sandbox).
+
+```sh
+graft run auth -- claude                  # or codex, npm test, cargo build
+```
+
 Dependency trees are built once and shared: declare them as layers in
 `graft.toml` ([reference](docs/blueprint.md)), approve the build command once
 with `graft trust`, and every graft after the first gets `node_modules` (or
