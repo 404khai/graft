@@ -1,6 +1,6 @@
 # On-disk format
 
-**Format version: 8** (metadata schema v6)
+**Format version: 9** (metadata schema v7)
 
 This file describes everything Graft persists. Any change to a structure
 below bumps the format version, adds a migration, and updates this file in
@@ -63,6 +63,7 @@ Entries in `roots/` whose name is not a valid Root ID, or that contain no
 | 6 | Schema v5: `grafts.backend` accepts `nfs`; the socket moves to `/tmp/graft-<uid>/` when `run/graftd.sock` would be too long | Schema v4 → v5 rebuilds `grafts` (foreign keys off, checked before commit); every row and child row is kept |
 | 7 | Schema v6: Bud and Ring (`grafts.budded_from`, `op_log.to_seq` and the `rewind` op, tables `rings` and `ring_delta`; ADR 0013) | Schema v5 → v6 runs automatically on open; tables and nullable columns only added |
 | 8 | Adds `tmp/<graft-id>/`, the private temp dir of `graft run` (ADR 0014); `trusted_commands` also holds approved `[sandbox] write` paths | None: additive; created on first `graft run`, removed by prune |
+| 9 | Schema v7: Blueprints (`grafts.blueprint`, table `graft_resources`; ADR 0015) | Schema v6 → v7 runs automatically on open; a table and a nullable column only added |
 
 ## `config.toml`
 
@@ -232,6 +233,28 @@ on the next mount after a crash.
 | `mode` | INTEGER | Its permission bits |
 
 Primary key: `(graft_id, seq)`.
+
+### `graft_resources` (v7)
+
+`WITHOUT ROWID`. What a graft's blueprint provisioned, so prune can
+release it (ADR 0015). A row is written before its resource is created.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `graft_id` | TEXT | References `grafts`, `ON DELETE CASCADE` |
+| `kind` | TEXT | `port`, `postgres-database`, `docker-volume` or `docker-network` |
+| `name` | TEXT | The blueprint's port or service name |
+| `value` | TEXT | Port number, database name, or Docker volume/network name |
+
+Primary key `(graft_id, kind, name)`. Unique index
+`graft_resources_value_unique` on `(kind, value)`: a port or name belongs
+to one graft of the Root. `grafts.blueprint` (v7, TEXT or `NULL`) names the
+blueprint a graft was created with.
+
+Docker resources are named `graft-<first 8 hex of root-id>-<graft>-<service>`
+and labelled `dev.graft.id=<graft-id>`; prune removes only resources that
+carry that label. Postgres databases are named `<template>_<graft>` with
+hyphens as underscores, at most 63 bytes.
 
 ### `rings` (v6)
 

@@ -15,6 +15,7 @@ const V3_SQL: &str = include_str!("../src/schema/v3.sql");
 const V4_SQL: &str = include_str!("../src/schema/v4.sql");
 const V5_SQL: &str = include_str!("../src/schema/v5.sql");
 const V6_SQL: &str = include_str!("../src/schema/v6.sql");
+const V7_SQL: &str = include_str!("../src/schema/v7.sql");
 
 fn record() -> RootRecord {
     RootRecord {
@@ -53,7 +54,7 @@ fn columns(path: &std::path::Path, table: &str) -> Vec<String> {
 fn released_migrations_are_never_edited() {
     // If this fails you changed a shipped migration. Revert it and add a new
     // migration instead (AGENTS.md §5, docs/on-disk-format.md).
-    assert_eq!(SCHEMA_VERSION, 6);
+    assert_eq!(SCHEMA_VERSION, 7);
     let hash = |sql: &str| blake3::hash(sql.as_bytes()).to_hex().to_string();
     assert_eq!(hash(V1_SQL), EXPECTED_V1_HASH, "schema/v1.sql changed");
     assert_eq!(hash(V2_SQL), EXPECTED_V2_HASH, "schema/v2.sql changed");
@@ -61,8 +62,10 @@ fn released_migrations_are_never_edited() {
     assert_eq!(hash(V4_SQL), EXPECTED_V4_HASH, "schema/v4.sql changed");
     assert_eq!(hash(V5_SQL), EXPECTED_V5_HASH, "schema/v5.sql changed");
     assert_eq!(hash(V6_SQL), EXPECTED_V6_HASH, "schema/v6.sql changed");
+    assert_eq!(hash(V7_SQL), EXPECTED_V7_HASH, "schema/v7.sql changed");
 }
 
+const EXPECTED_V7_HASH: &str = "1295bca6a67f9528d1dfebd857e51779a57caf5e614942f719b4e6fee5f725d0";
 const EXPECTED_V6_HASH: &str = "7f577964e7e32b3f824f2d8149004911568d67e9128c4b4d90b806604be457d5";
 const EXPECTED_V5_HASH: &str = "be284ac7e9d0da57b86820b710db7bc57617e4ae3c50b42635ea1094d15e5c85";
 const EXPECTED_V4_HASH: &str = "c7b248df89c9a936bd19af41959b2a81913132d837c0ee73388bf7dad59af641";
@@ -81,6 +84,8 @@ fn migrates_an_empty_directory_to_the_latest_schema() {
         [
             ("table", "delta"),
             ("index", "delta_by_blob"),
+            ("table", "graft_resources"),
+            ("index", "graft_resources_value_unique"),
             ("table", "grafts"),
             ("index", "grafts_name_unique"),
             ("table", "layer_refs"),
@@ -106,7 +111,8 @@ fn migrates_an_empty_directory_to_the_latest_schema() {
             "created_at",
             "updated_at",
             "backend",
-            "budded_from"
+            "budded_from",
+            "blueprint"
         ]
     );
     assert_eq!(
@@ -485,4 +491,62 @@ fn upgrades_a_v5_database_with_deltas_in_place() {
     assert_eq!(bud.budded_from, Some(g.id));
     assert_eq!(store.delta(bud.id).unwrap(), store.delta(g.id).unwrap());
     assert_eq!(store.integrity_check().unwrap(), Vec::<String>::new());
+}
+
+#[test]
+fn reserves_resources_once_per_root() {
+    use graft_store::{Resource, ResourceKind};
+    let dir = tempfile::tempdir().unwrap();
+    let (mut store, _) = Store::create(dir.path(), &record()).unwrap();
+    let base: graft_core::CommitId = "d".repeat(40).parse().unwrap();
+    let a = store
+        .create_graft(
+            &"a".parse().unwrap(),
+            &base,
+            graft_core::BackendKind::Reflink,
+        )
+        .unwrap();
+    let b = store
+        .create_graft(
+            &"b".parse().unwrap(),
+            &base,
+            graft_core::BackendKind::Reflink,
+        )
+        .unwrap();
+    store.set_blueprint(a.id, "web").unwrap();
+    assert_eq!(
+        store
+            .graft_by_id(a.id)
+            .unwrap()
+            .unwrap()
+            .blueprint
+            .as_deref(),
+        Some("web")
+    );
+    let port = |v: &str| Resource {
+        kind: ResourceKind::Port,
+        name: "app".into(),
+        value: v.into(),
+    };
+    assert!(store.reserve(a.id, &port("5000")).unwrap());
+    assert!(
+        store.reserve(a.id, &port("5000")).unwrap(),
+        "idempotent for its holder"
+    );
+    assert!(!store.reserve(b.id, &port("5000")).unwrap(), "taken by a");
+    assert!(store.reserve(b.id, &port("5001")).unwrap());
+    let db = Resource {
+        kind: ResourceKind::PostgresDatabase,
+        name: "db".into(),
+        value: "app_dev_a".into(),
+    };
+    assert!(store.reserve(a.id, &db).unwrap());
+    let mut ports = store.reserved_ports().unwrap();
+    ports.sort_unstable();
+    assert_eq!(ports, [5000, 5001]);
+    assert_eq!(store.resources(a.id).unwrap(), [port("5000"), db.clone()]);
+    store.release(a.id, ResourceKind::Port, "app").unwrap();
+    assert_eq!(store.resources(a.id).unwrap(), [db]);
+    store.delete_graft(a.id).unwrap();
+    assert_eq!(store.resources(a.id).unwrap(), []);
 }

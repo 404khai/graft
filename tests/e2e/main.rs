@@ -6,6 +6,7 @@
 // Test helpers outside #[test] fns: panicking on setup failure is the point.
 #![allow(clippy::unwrap_used)]
 
+mod blueprints;
 mod cli;
 mod doctor;
 mod grafts;

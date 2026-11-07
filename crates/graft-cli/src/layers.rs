@@ -83,10 +83,14 @@ pub(crate) fn plan(
     cache: &LayerCache,
     base: &CommitId,
     from: Option<&str>,
+    only: Option<&[PathBuf]>,
 ) -> anyhow::Result<Vec<Planned>> {
-    let Some(specs) = layers_at(repo, base)? else {
+    let Some(mut specs) = layers_at(repo, base)? else {
         return Ok(Vec::new());
     };
+    if let Some(only) = only {
+        specs.retain(|s| only.contains(&s.path));
+    }
     // Approval is checked first, so an untrusted toolchain command never runs.
     let trusted = |spec: &LayerSpec| store.is_trusted(&hash_of(spec));
     let mut untrusted = Vec::new();
@@ -295,12 +299,23 @@ pub(crate) fn trust(args: &TrustArgs, env: &Environment) -> anyhow::Result<Outpu
         )));
     };
     let sandbox = crate::run::sandbox_at(&located.repo, &base)?;
-    if specs.is_empty() && sandbox.write.is_empty() {
+    let has_blueprints = !crate::blueprints::blueprints_at(&located.repo, &base)?.is_empty();
+    if specs.is_empty() && sandbox.write.is_empty() && !has_blueprints {
         return Ok(Output::stdout(format!(
             "{BLUEPRINT_FILE} at {rev} declares no layers or sandbox paths; nothing to approve.\n"
         )));
     }
     let mut out = String::new();
+    for spec in crate::blueprints::blueprints_at(&located.repo, &base)?.values() {
+        for (hash, what) in crate::blueprints::approvals(spec) {
+            if located.store.is_trusted(&hash)? {
+                let _ = writeln!(out, "Already approved {what}");
+            } else {
+                located.store.trust(&hash, &what)?;
+                let _ = writeln!(out, "Approved {what}");
+            }
+        }
+    }
     for path in &sandbox.write {
         let hash = graft_root::layer::sandbox_write_hash(path);
         let what = format!("sandbox write {path}");

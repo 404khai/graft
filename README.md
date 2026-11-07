@@ -48,6 +48,11 @@ Linux, Seatbelt on macOS; tool caches can be allowed in
 graft run auth -- claude                  # or codex, npm test, cargo build
 ```
 
+A Blueprint in `graft.toml` gives every graft its own ports, Postgres
+database, Docker volumes and `.env` files, so two agents can run the same
+app and its tests side by side: `graft new a --blueprint web`, then
+`graft env a` ([reference](docs/blueprint.md#blueprintname)).
+
 Dependency trees are built once and shared: declare them as layers in
 `graft.toml` ([reference](docs/blueprint.md)), approve the build command once
 with `graft trust`, and every graft after the first gets `node_modules` (or

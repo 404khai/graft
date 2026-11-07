@@ -169,11 +169,14 @@ Status: in review (`feat/sandboxed-run`, ADR 0014). Landlock on Linux and a gene
 
 ## Phase 11 — Blueprints
 
-Status: not started
+Status: in review (`feat/blueprints`, ADR 0015). Not done: the optional Linux network namespace (apps bind a reserved port instead).
 
-- [ ] Two grafts of the web fixture run their dev servers and test suites at the same time with no port or database collision.
-- [ ] Prune removes the graft's database, volumes and port reservations.
-- [ ] Template rendering errors are reported with file and line.
+- [x] Two grafts of the web fixture run their dev servers and test suites at the same time with no port or database collision.
+  - `two_grafts_run_servers_and_tests_side_by_side` (throwaway Postgres cluster): two `python3 -m http.server` dev servers on each graft's `{{port.app}}`, and both test scripts at once, each writing to and reading its own `app_dev_<graft>` database; the template stays untouched. Passed locally on macOS; CI `blueprint services (linux)` job.
+- [x] Prune removes the graft's database, volumes and port reservations.
+  - Databases and ports: the test above and `ports_env_files_and_env_are_per_graft`. Docker volumes and networks: `docker_resources_are_namespaced_and_pruned`, which only runs in the CI `blueprint services (linux)` job (no Docker daemon on this Mac).
+- [x] Template rendering errors are reported with file and line.
+  - `template_errors_name_the_file_and_line_and_leave_nothing` (`graft.toml:2:25`, `conf/app.env.template:2:7`) and the parser's unit tests.
 
 ## Phase 12 — Radar
 

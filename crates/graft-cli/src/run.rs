@@ -15,8 +15,9 @@ use graft_core::{CommitId, GraftId, GraftState};
 use graft_fs::FsBackend;
 use graft_root::Repo;
 use graft_sandbox::Policy;
+use graft_store::GraftRecord;
 
-use crate::grafts::{daemon, find, open, parse_name};
+use crate::grafts::{Ctx, daemon, find, open, parse_name};
 use crate::{Environment, Output};
 
 /// Arguments for `graft run`.
@@ -74,7 +75,20 @@ pub(crate) fn run(args: &RunArgs, env: &Environment) -> anyhow::Result<(Output, 
         );
     }
     let mut out = Output::default();
+    let status = run_in(&ctx, &record, &args.write, &args.command, &mut out)?;
+    Ok((out, exit_code(status)))
+}
 
+/// Runs `command` confined to graft `record`, with its blueprint's
+/// environment, and waits for it. `extra_write` paths are writable too.
+pub(crate) fn run_in(
+    ctx: &Ctx,
+    record: &GraftRecord,
+    extra_write: &[PathBuf],
+    command: &[OsString],
+    out: &mut Output,
+) -> anyhow::Result<std::process::ExitStatus> {
+    let name = &record.name;
     // Extra paths from graft.toml at the base must be approved.
     let spec = sandbox_at(&ctx.located.repo, &record.base_commit)?;
     let mut unapproved = Vec::new();
@@ -110,17 +124,17 @@ pub(crate) fn run(args: &RunArgs, env: &Environment) -> anyhow::Result<(Output, 
             ));
         }
     }
-    extra.extend(args.write.iter().cloned());
+    extra.extend(extra_write.iter().cloned());
 
     // Where the graft is, mounting a virtual one if needed.
     let mut client = if record.backend.is_virtual() {
-        Some(daemon(&ctx.home, &mut out)?)
+        Some(daemon(&ctx.home, out)?)
     } else {
         None
     };
     let graft_dir = match &mut client {
-        Some(c) => c.mount(&ctx.located.record.id, &name)?,
-        None => ctx.backend.path(&name),
+        Some(c) => c.mount(&ctx.located.record.id, name)?,
+        None => ctx.backend.path(name),
     };
     let tmp = tmp_dir(&ctx.root_dir(), record.id);
     create_private_dir(&tmp)?;
@@ -134,12 +148,13 @@ pub(crate) fn run(args: &RunArgs, env: &Environment) -> anyhow::Result<(Output, 
         .and_then(|d| d.canonicalize().ok())
         .filter(|d| d.starts_with(&policy.writable()[0]))
         .unwrap_or_else(|| policy.writable()[0].clone());
-    let (program, rest) = args
-        .command
+    let blueprint_env = crate::blueprints::environment(ctx, record, &graft_dir)?;
+    let (program, rest) = command
         .split_first()
         .context("graft run needs a command after --")?;
     let mut cmd = confined(&policy, program, rest)?;
     cmd.current_dir(&cwd)
+        .envs(blueprint_env)
         .env("GRAFT_NAME", name.as_str())
         .env("GRAFT_ID", record.id.to_string())
         .env("GRAFT_RUN", &session)
@@ -149,7 +164,7 @@ pub(crate) fn run(args: &RunArgs, env: &Environment) -> anyhow::Result<(Output, 
 
     let actor = format!("run:{session}");
     if let Some(c) = &mut client {
-        c.set_actor(&ctx.located.record.id, &name, Some(&actor))
+        c.set_actor(&ctx.located.record.id, name, Some(&actor))
             .context("tagging the op log with the run session")?;
     }
     tracing::debug!(graft = %name, session, "starting confined command");
@@ -162,13 +177,13 @@ pub(crate) fn run(args: &RunArgs, env: &Environment) -> anyhow::Result<(Output, 
     };
     if let Some(c) = &mut client {
         // Writes from the run are journaled under its actor before it goes.
-        let _ = c.sync(&ctx.located.record.id, &name);
-        if let Err(e) = c.set_actor(&ctx.located.record.id, &name, None) {
+        let _ = c.sync(&ctx.located.record.id, name);
+        if let Err(e) = c.set_actor(&ctx.located.record.id, name, None) {
             out.warnings
                 .push(format!("could not clear the op log actor {actor}: {e}"));
         }
     }
-    Ok((out, exit_code(status)))
+    Ok(status)
 }
 
 /// `$GRAFT_HOME/roots/<root-id>/tmp/<graft-id>/`.
