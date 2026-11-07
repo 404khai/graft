@@ -329,12 +329,17 @@ fn rebase_moves_a_live_graft_onto_the_new_head() {
     let a = f.new_graft("a");
     let b = f.new_graft("b");
     std::fs::write(a.join("one.txt"), "one\n").unwrap();
+    std::os::unix::fs::symlink("one.txt", a.join("one-link")).unwrap();
     std::fs::write(b.join("two.txt"), "two\n").unwrap();
     f.ok(&["integrate", "a", "--onto", "land"]);
     let rebased = f.ok(&["rebase", "b", "--onto", "land"]);
     assert!(rebased.contains("Rebased graft b onto land"), "{rebased}");
     assert_eq!(std::fs::read_to_string(b.join("one.txt")).unwrap(), "one\n");
     assert_eq!(std::fs::read_to_string(b.join("two.txt")).unwrap(), "two\n");
+    assert_eq!(
+        std::fs::read_link(b.join("one-link")).unwrap(),
+        PathBuf::from("one.txt")
+    );
     // b's own change is all that differs from its new base.
     assert_eq!(out(&b, &["status", "--porcelain"]), " M two.txt\n");
     let status = f.ok(&["status", "b"]);
@@ -345,5 +350,19 @@ fn rebase_moves_a_live_graft_onto_the_new_head() {
     assert!(
         f.ok(&["rebase", "b", "--onto", "land"])
             .contains("already based")
+    );
+}
+
+#[test]
+fn symlinks_land_as_symlinks() {
+    let f = Fixture::new("", &[("target.txt", "t\n")]);
+    let a = f.new_graft("a");
+    std::os::unix::fs::symlink("target.txt", a.join("link")).unwrap();
+    f.ok(&["integrate", "a", "--onto", "land"]);
+    let tree = out(f.repo.path(), &["ls-tree", "land", "link"]);
+    assert!(tree.starts_with("120000 "), "not a symlink in git: {tree}");
+    assert_eq!(
+        out(f.repo.path(), &["cat-file", "-p", "land:link"]),
+        "target.txt"
     );
 }

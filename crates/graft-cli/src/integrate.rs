@@ -200,11 +200,23 @@ fn apply(
     let mut applied = Applied::default();
     for d in diffs {
         let target = dir.join(&d.change.path);
-        let ours = match std::fs::read(&target) {
-            Ok(b) => Some(b),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e).with_context(|| format!("reading {}", target.display())),
-        };
+        let (ours, ours_link) = read_entry(&target)?.map_or((None, false), |(b, l)| (Some(b), l));
+        let theirs_link = graft_is_link(ctx, record, &d.change.path);
+        if ours_link || theirs_link {
+            // Symlinks are not merged: one side must have left it alone.
+            if ours.as_deref() == d.new.as_deref() && ours_link == theirs_link {
+                continue;
+            }
+            if ours.as_deref() == d.old.as_deref() {
+                write_entry(&target, d.new.as_deref(), theirs_link)?;
+                continue;
+            }
+            applied.conflicts.push((
+                d.change.path.clone(),
+                "a symlink changed in both Root and the graft".to_owned(),
+            ));
+            continue;
+        }
         let result = merger.merge(
             &d.change.path,
             d.old.as_deref(),
@@ -247,6 +259,54 @@ fn apply(
         }
     }
     Ok(applied)
+}
+
+/// The contents of `path` (a symlink's target), and whether it is a
+/// symlink; `None` if absent.
+fn read_entry(path: &Path) -> anyhow::Result<Option<(Vec<u8>, bool)>> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("inspecting {}", path.display())),
+    };
+    if meta.file_type().is_symlink() {
+        let t = std::fs::read_link(path).with_context(|| format!("reading {}", path.display()))?;
+        return Ok(Some((t.as_os_str().as_bytes().to_vec(), true)));
+    }
+    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    Ok(Some((bytes, false)))
+}
+
+/// Replaces `path` with a file or a symlink (`contents` is its target), or
+/// removes it if `contents` is `None`.
+fn write_entry(path: &Path, contents: Option<&[u8]>, link: bool) -> anyhow::Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_dir() => bail!("{} is a directory", path.display()),
+        Ok(_) => {
+            std::fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
+        }
+        Err(_) => {}
+    }
+    let Some(bytes) = contents else {
+        return Ok(());
+    };
+    if let Some(p) = path.parent() {
+        std::fs::create_dir_all(p).with_context(|| format!("creating {}", p.display()))?;
+    }
+    if link {
+        std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(bytes), path)
+            .with_context(|| format!("creating symlink {}", path.display()))
+    } else {
+        std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
+    }
+}
+
+/// Whether `path` is a symlink in the graft.
+fn graft_is_link(ctx: &Ctx, record: &GraftRecord, path: &Path) -> bool {
+    std::fs::symlink_metadata(ctx.backend.path(&record.name).join(path))
+        .is_ok_and(|m| m.file_type().is_symlink())
 }
 
 /// Whether `bytes` still has a conflict marker line.
@@ -813,22 +873,23 @@ pub(crate) fn rebase(args: &RebaseArgs, env: &Environment) -> anyhow::Result<Out
         diffs.iter().map(|d| &d.change.path).collect();
     // First bring every file Root changed and the graft did not to the new
     // head, then merge the graft's own changes over the new head's files.
+    let mut from_head = Vec::new();
     for path in changed_in_root(&ctx.located.record.path, &record.base_commit, &head)? {
         if touched.contains(&path) {
             continue;
         }
-        let target_path = dir.join(&path);
-        match ctx.located.repo.read_file_at(&head, &path)? {
-            Some(bytes) => {
-                if let Some(p) = target_path.parent() {
-                    std::fs::create_dir_all(p)?;
-                }
-                std::fs::write(&target_path, bytes)?;
-            }
-            None => {
-                let _ = std::fs::remove_file(&target_path);
-            }
+        if ctx.located.repo.tree_has(&head, &path)? {
+            from_head.push(path);
+        } else {
+            write_entry(&dir.join(&path), None, false)?;
         }
+    }
+    // git checks them out with their modes, symlinks and filters.
+    for chunk in from_head.chunks(200) {
+        let mut cmd = vec!["checkout".to_owned(), head.to_string(), "--".to_owned()];
+        cmd.extend(chunk.iter().map(|p| p.display().to_string()));
+        let args: Vec<&str> = cmd.iter().map(String::as_str).collect();
+        git(&dir, &args)?;
     }
     let scratch = ctx.root_dir().join("integrate");
     std::fs::create_dir_all(&scratch)?;
