@@ -717,6 +717,21 @@ impl Store {
 
     /// Moves a graft to `next`, enforcing [`GraftState::can_become`].
     ///
+    /// Moves graft `id` to a new base commit (`graft rebase`).
+    ///
+    /// # Errors
+    ///
+    /// SQLite errors.
+    pub fn set_base(&mut self, id: GraftId, base: &CommitId) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE grafts SET base_commit = ?2, updated_at = ?3 WHERE graft_id = ?1",
+                (id.to_string(), base.as_str(), Timestamp::now().as_millis()),
+            )
+            .map_err(|e| self.sql(e))?;
+        Ok(())
+    }
+
     /// # Errors
     ///
     /// [`StoreError::NoSuchGraft`], [`StoreError::InvalidTransition`], and
