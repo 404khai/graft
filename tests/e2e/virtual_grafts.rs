@@ -444,6 +444,43 @@ mod fuse {
         assert!(!line.contains("[run:"), "{log}");
     }
 
+    /// AGENTS.md Phase 12: Radar reads virtual grafts' changes from their
+    /// delta and finds a same-function overlap with a reflink graft.
+    #[test]
+    fn radar_sees_virtual_and_reflink_grafts() {
+        require_fuse();
+        let home = tempfile::tempdir().unwrap();
+        let _daemon = Daemon(home.path());
+        let repo = crate::git_repo();
+        let (h, r) = (home.path(), repo.path());
+        std::fs::write(
+            r.join("lib.py"),
+            "def f():\n    return 1\n\n\ndef g():\n    return 2\n",
+        )
+        .unwrap();
+        crate::git(r, &["add", "lib.py"]);
+        crate::git(r, &["commit", "-qm", "lib"]);
+        init(h, r);
+        let v = new_fuse(h, r, "v");
+        run(h, r, &["new", "w", "--backend", "reflink"]);
+        let w = std::path::PathBuf::from(run(h, r, &["path", "w"]).trim());
+        std::fs::write(
+            v.join("lib.py"),
+            "def f():\n    return 10\n\n\ndef g():\n    return 2\n",
+        )
+        .unwrap();
+        std::fs::write(
+            w.join("lib.py"),
+            "def f():\n    return 11\n\n\ndef g():\n    return 2\n",
+        )
+        .unwrap();
+        let out = run(h, r, &["radar", "--json"]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["overlaps"][0]["level"], "symbol", "{out}");
+        assert_eq!(v["overlaps"][0]["grafts"], serde_json::json!(["v", "w"]));
+        assert_eq!(v["overlaps"][0]["symbols"], serde_json::json!(["f"]));
+    }
+
     fn walk_files(dir: &Path) -> Vec<std::path::PathBuf> {
         let mut out = Vec::new();
         for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {

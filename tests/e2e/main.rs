@@ -11,6 +11,7 @@ mod cli;
 mod doctor;
 mod grafts;
 mod layers;
+mod radar;
 mod repo_policy;
 mod root;
 mod run;
