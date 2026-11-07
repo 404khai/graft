@@ -223,7 +223,10 @@ impl Merger {
         let markers = out.stdout;
         if let Some(m) = &self.mergiraf {
             let merged = dir.join(format!("merged{ext}"));
+            // Mergiraf keeps a record of each merge in its data directory;
+            // keep it in the scratch directory, never in the user's home.
             let status = Command::new(m)
+                .env("XDG_DATA_HOME", dir.join("mergiraf-data"))
                 .arg("merge")
                 .args([&files[1], &files[0], &files[2]])
                 .arg("-o")
@@ -312,6 +315,47 @@ mod tests {
             "{markers}"
         );
         assert!(reason.contains("Mergiraf is not installed"));
+    }
+
+    /// Runs only where Mergiraf is installed (`$GRAFT_MERGIRAF` or `PATH`).
+    #[test]
+    fn mergiraf_resolves_what_a_line_merge_cannot() {
+        let m = Merger::detect();
+        if m.mergiraf().is_none() {
+            assert_ne!(
+                std::env::var("GRAFT_TEST_MERGIRAF").as_deref(),
+                Ok("1"),
+                "GRAFT_TEST_MERGIRAF=1 but no mergiraf in $GRAFT_MERGIRAF or PATH"
+            );
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let base = "pub struct Config {\n    pub name: String,\n}\n";
+        let ours = "pub struct Config {\n    pub name: String,\n    pub port: u16,\n}\n";
+        let theirs = "pub struct Config {\n    pub name: String,\n    pub verbose: bool,\n}\n";
+        let merged = m
+            .merge(
+                Path::new("src/config.rs"),
+                Some(base.as_bytes()),
+                Some(ours.as_bytes()),
+                Some(theirs.as_bytes()),
+                dir.path(),
+            )
+            .unwrap();
+        let Merged::Clean { contents, method } = merged else {
+            panic!("expected a clean merge, got {merged:?}");
+        };
+        assert_eq!(method, Method::Structural);
+        let text = String::from_utf8(contents.unwrap()).unwrap();
+        assert!(
+            text.contains("pub port: u16,") && text.contains("pub verbose: bool,"),
+            "{text}"
+        );
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            0,
+            "scratch left"
+        );
     }
 
     #[test]
