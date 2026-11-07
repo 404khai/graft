@@ -191,7 +191,7 @@ pub(crate) fn tmp_dir(root_dir: &Path, id: GraftId) -> PathBuf {
     root_dir.join("tmp").join(id.to_string())
 }
 
-fn create_private_dir(dir: &Path) -> anyhow::Result<()> {
+pub(crate) fn create_private_dir(dir: &Path) -> anyhow::Result<()> {
     use std::os::unix::fs::DirBuilderExt as _;
     std::fs::DirBuilder::new()
         .recursive(true)
@@ -201,7 +201,11 @@ fn create_private_dir(dir: &Path) -> anyhow::Result<()> {
 }
 
 /// The command that runs `program` under `policy` on this platform.
-fn confined(policy: &Policy, program: &OsString, args: &[OsString]) -> anyhow::Result<Command> {
+pub(crate) fn confined(
+    policy: &Policy,
+    program: &OsString,
+    args: &[OsString],
+) -> anyhow::Result<Command> {
     #[cfg(target_os = "linux")]
     {
         let (mechanism, usable) = graft_sandbox::mechanism();

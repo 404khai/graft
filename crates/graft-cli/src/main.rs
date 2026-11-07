@@ -10,6 +10,7 @@ mod daemon;
 mod doctor;
 mod grafts;
 mod layers;
+mod radar;
 mod rings;
 mod root;
 mod run;
@@ -65,6 +66,9 @@ enum Command {
     Ring(rings::RingArgs),
     /// Return a graft to one of its rings (reversible: it rings first).
     Rewind(rings::RewindArgs),
+    /// Show overlapping work across live grafts: same file, same symbol,
+    /// merge conflicts, or tests that fail only when merged.
+    Radar(radar::RadarArgs),
     /// Run a command confined to a graft: it can only write inside it.
     Run(run::RunArgs),
     /// Internal: confine this process, then run the command (Linux).
@@ -162,6 +166,7 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Bud(args) => ok(rings::bud(&args, &env))?,
         Command::Ring(args) => ok(rings::ring(&args, &env))?,
         Command::Rewind(args) => ok(rings::rewind(&args, &env))?,
+        Command::Radar(args) => ok(radar::radar(&args, &env))?,
         Command::Run(args) => run::run(&args, &env)?,
         Command::Confine(args) => (Output::default(), run::confine(&args)?),
         Command::Trust(args) => ok(layers::trust(&args, &env))?,

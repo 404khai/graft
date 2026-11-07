@@ -940,6 +940,16 @@ impl GraftRepo {
     /// Git and I/O errors.
     pub fn diff_since(&self, base: &CommitId) -> Result<Vec<FileDiff>> {
         let changes = self.changes_since(base)?;
+        self.diff_of(base, changes)
+    }
+
+    /// `changes` (from [`GraftRepo::changes_since`], possibly filtered)
+    /// with old and new contents.
+    ///
+    /// # Errors
+    ///
+    /// Git and I/O errors.
+    pub fn diff_of(&self, base: &CommitId, changes: Vec<Change>) -> Result<Vec<FileDiff>> {
         let tree = self
             .repo
             .find_tree(self.tree_of(base)?)

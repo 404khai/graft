@@ -53,6 +53,12 @@ database, Docker volumes and `.env` files, so two agents can run the same
 app and its tests side by side: `graft new a --blueprint web`, then
 `graft env a` ([reference](docs/blueprint.md#blueprintname)).
 
+See overlapping work while agents work, not at merge time: `graft radar`
+lists grafts that changed the same file or the same function, type or
+export (tree-sitter: Rust, TypeScript, Python, Go), and with a `[radar]
+test` command it merges overlapping grafts in scratch checkouts and reports
+tests that fail only when combined. `graft radar --watch` keeps it current.
+
 Dependency trees are built once and shared: declare them as layers in
 `graft.toml` ([reference](docs/blueprint.md)), approve the build command once
 with `graft trust`, and every graft after the first gets `node_modules` (or

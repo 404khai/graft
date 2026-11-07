@@ -158,3 +158,25 @@ file copied from Root. `graft new --blueprint` refuses, listing what is
 unapproved, until then. Rendered env files need no approval: they are
 read from the graft's own checkout and written inside it.
 
+## `[radar]`
+
+The fast test command for Radar's behaviour checks ([ADR 0016](decisions/0016-radar.md)).
+When two live grafts overlap, `graft radar --check` (or `--watch`) merges
+them in scratch checkouts of their base and runs it in each graft's
+changes alone and in both merged. A failure that only appears merged is
+reported as a `behaviour` overlap.
+
+```toml
+[radar]
+test = "cargo test -q --lib"
+timeout_secs = 120
+```
+
+| Key | Meaning |
+| --- | --- |
+| `test` | Shell command (`sh -c`), run confined in the scratch checkout's top level with `GRAFT_RADAR=1`. Approve it with `graft trust`. Without it, Radar reports path, symbol and merge-conflict overlaps only. |
+| `timeout_secs` | How long one run may take (default 300). A run past it is killed and counts as failing. |
+
+Layers already in the cache are cloned into the scratch checkouts; Radar
+never builds one.
+

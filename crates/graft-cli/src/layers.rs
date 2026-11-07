@@ -49,6 +49,16 @@ fn layers_at(repo: &Repo, base: &CommitId) -> anyhow::Result<Option<Vec<LayerSpe
     Ok(Some(parse_layers(&text, BLUEPRINT_FILE)?))
 }
 
+/// The text of `graft.toml` at `base` (empty if none).
+fn text_at(repo: &Repo, base: &CommitId) -> anyhow::Result<String> {
+    Ok(repo
+        .read_file_at(base, Path::new(BLUEPRINT_FILE))?
+        .map(String::from_utf8)
+        .transpose()
+        .context("graft.toml is not valid UTF-8")?
+        .unwrap_or_default())
+}
+
 fn describe(spec: &LayerSpec) -> String {
     let mut s = format!("{}: build `{}`", spec.path.display(), spec.build);
     if let Some(t) = &spec.toolchain {
@@ -278,6 +288,37 @@ pub(crate) fn apply(
     Ok(applied)
 }
 
+/// Clones every planned layer that is already in the cache into `dir`
+/// (a scratch checkout, not a graft: no references are recorded and
+/// nothing is built). Returns the layers that were missing.
+pub(crate) fn link_ready(
+    planned: &[Planned],
+    cache: &LayerCache,
+    dir: &Path,
+) -> anyhow::Result<Vec<PathBuf>> {
+    let mut missing = Vec::new();
+    for p in planned {
+        if !cache.is_ready(&p.key) {
+            missing.push(p.spec.path.clone());
+            continue;
+        }
+        let lock = cache.lock(&p.key)?;
+        let cloner = match graft_fs::same_filesystem(cache.dir(), dir) {
+            Ok(true) => ReflinkCloner::new(),
+            _ => ReflinkCloner::copy_only("different filesystems"),
+        };
+        let target = dir.join(&p.spec.path);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        clone_tree(&cache.path(&p.key), &target, &cloner)
+            .with_context(|| format!("layer {}: copying it", p.spec.path.display()))?;
+        drop(lock);
+    }
+    Ok(missing)
+}
+
 /// Arguments for `graft trust`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct TrustArgs {
@@ -300,9 +341,12 @@ pub(crate) fn trust(args: &TrustArgs, env: &Environment) -> anyhow::Result<Outpu
     };
     let sandbox = crate::run::sandbox_at(&located.repo, &base)?;
     let has_blueprints = !crate::blueprints::blueprints_at(&located.repo, &base)?.is_empty();
-    if specs.is_empty() && sandbox.write.is_empty() && !has_blueprints {
+    let has_radar = graft_blueprint::parse_radar(&text_at(&located.repo, &base)?, BLUEPRINT_FILE)?
+        .test
+        .is_some();
+    if specs.is_empty() && sandbox.write.is_empty() && !has_blueprints && !has_radar {
         return Ok(Output::stdout(format!(
-            "{BLUEPRINT_FILE} at {rev} declares no layers or sandbox paths; nothing to approve.\n"
+            "{BLUEPRINT_FILE} at {rev} declares nothing to approve.\n"
         )));
     }
     let mut out = String::new();
@@ -314,6 +358,18 @@ pub(crate) fn trust(args: &TrustArgs, env: &Environment) -> anyhow::Result<Outpu
                 located.store.trust(&hash, &what)?;
                 let _ = writeln!(out, "Approved {what}");
             }
+        }
+    }
+    if let Some(test) =
+        graft_blueprint::parse_radar(&text_at(&located.repo, &base)?, BLUEPRINT_FILE)?.test
+    {
+        let hash = crate::radar::approval_hash(&test);
+        let what = format!("radar test `{test}`");
+        if located.store.is_trusted(&hash)? {
+            let _ = writeln!(out, "Already approved {what}");
+        } else {
+            located.store.trust(&hash, &what)?;
+            let _ = writeln!(out, "Approved {what}");
         }
     }
     for path in &sandbox.write {
