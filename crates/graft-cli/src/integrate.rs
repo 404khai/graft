@@ -909,7 +909,137 @@ fn changed_in_root(root: &Path, from: &CommitId, to: &CommitId) -> anyhow::Resul
         .collect())
 }
 
-/// `graft rebase`: moves a reflink graft onto the target's head.
+/// Each file `diffs` changed, merged against `head`, as it should be after
+/// a rebase; and the conflicts, for people.
+fn rebased_files(
+    ctx: &Ctx,
+    record: &GraftRecord,
+    head: &CommitId,
+    diffs: &[FileDiff],
+) -> anyhow::Result<(Vec<graft_fs::RebasedFile>, Vec<String>)> {
+    use graft_store::delta::Entry;
+    let delta = ctx.located.store.delta(record.id)?;
+    let scratch = ctx.root_dir().join("integrate");
+    std::fs::create_dir_all(&scratch)?;
+    let merger = Merger::detect();
+    let mut files = Vec::new();
+    let mut conflicts = Vec::new();
+    for d in diffs {
+        let path = graft_core::path_to_bytes(&d.change.path);
+        let ours = ctx.located.repo.read_file_at(head, &d.change.path)?;
+        let (link, mode) = match delta.get(&path) {
+            Some(Entry::Symlink { .. }) => (true, 0),
+            Some(Entry::File { mode, .. }) => (false, *mode),
+            _ => (false, 0o644),
+        };
+        let contents = if link {
+            if ours.as_deref() != d.old.as_deref() && ours.as_deref() != d.new.as_deref() {
+                conflicts.push(format!(
+                    "{}: a symlink changed in both Root and the graft (the graft's is kept)",
+                    d.change.path.display()
+                ));
+            }
+            d.new.clone()
+        } else {
+            match merger.merge(
+                &d.change.path,
+                d.old.as_deref(),
+                ours.as_deref(),
+                d.new.as_deref(),
+                &scratch,
+            )? {
+                Merged::Clean { contents, .. } => contents,
+                Merged::Conflict { markers, reason } => {
+                    conflicts.push(format!("{}: {reason}", d.change.path.display()));
+                    markers.or_else(|| d.new.clone())
+                }
+            }
+        };
+        files.push(graft_fs::RebasedFile {
+            path,
+            contents,
+            link,
+            mode,
+        });
+    }
+    Ok((files, conflicts))
+}
+
+/// `graft rebase` of a virtual graft: its changes are merged against the
+/// new head and journaled as a new op log epoch over it (ADR 0017).
+fn rebase_virtual(
+    ctx: &mut Ctx,
+    record: &GraftRecord,
+    target: &str,
+    head: &CommitId,
+) -> anyhow::Result<Output> {
+    let name = &record.name;
+    let mut out = Output::default();
+    let mut client = crate::grafts::daemon(&ctx.home, &mut out)?;
+    let root_id = ctx.located.record.id;
+    let mounted = client
+        .mounts()?
+        .iter()
+        .any(|m| m.root == root_id.to_string() && m.graft == name.as_str());
+    if mounted {
+        client.sync(&root_id, name)?;
+    }
+    let diffs = changes(ctx, record, &mut out)?;
+    let (files, conflicts) = rebased_files(ctx, record, head, &diffs)?;
+    // The old view must go before the delta changes under it.
+    let unmounted = client.unmount(&root_id, name)?;
+    if unmounted.lazy {
+        let remounted = client.mount(&root_id, name);
+        bail!(
+            "graft {name} is in use (files are open in it), so it was not rebased{}; close them and retry",
+            remounted
+                .err()
+                .map(|e| format!(" and could not be remounted: {e}"))
+                .unwrap_or_default()
+        );
+    }
+    let result = (|| -> anyhow::Result<()> {
+        let objects = graft_root::tree::ObjectStore::open(&ctx.located.repo);
+        let layers = graft_fs::layer_mounts(&ctx.located.store, &ctx.root_dir(), record.id)?;
+        let blobs = graft_store::blobs::BlobStore::new(ctx.root_dir().join("blobs"));
+        let now = graft_core::Timestamp::now();
+        let ops = graft_fs::rebase_ops(&objects, head, layers, &files, &blobs, now)?;
+        ctx.located.store.rebase(record.id, head, now, &ops)?;
+        ctx.located.repo.pin(record.id, head, name)?;
+        Ok(())
+    })();
+    let mount = client.mount(&root_id, name);
+    result?;
+    let mount = mount.with_context(|| format!("remounting graft {name} after the rebase"))?;
+    // The graft's .git (if it has one yet) moves to the new head too.
+    if ctx
+        .root_dir()
+        .join("grafts")
+        .join(record.id.to_string())
+        .join("git")
+        .join("HEAD")
+        .is_file()
+    {
+        git(&mount, &["reset", "-q", "--mixed", head.as_str()])?;
+    }
+    let _ = writeln!(
+        out.stdout,
+        "Rebased graft {name} onto {target} ({})",
+        head.short(7)
+    );
+    if !conflicts.is_empty() {
+        let _ = writeln!(
+            out.stdout,
+            "Conflicts to resolve in the graft (marked with <<<<<<<):"
+        );
+        for c in conflicts {
+            let _ = writeln!(out.stdout, "  {c}");
+        }
+    }
+    Ok(out)
+}
+
+/// `graft rebase`: moves a graft onto the target's head.
 pub(crate) fn rebase(args: &RebaseArgs, env: &Environment) -> anyhow::Result<Output> {
     let name = parse_name(&args.name)?;
     let mut ctx = open(env)?;
@@ -920,9 +1050,6 @@ pub(crate) fn rebase(args: &RebaseArgs, env: &Environment) -> anyhow::Result<Out
             record.state
         );
     }
-    if record.backend.is_virtual() {
-        bail!("graft {name} is virtual; rebasing virtual grafts is not supported yet (ADR 0017)");
-    }
     let target = target_branch(&ctx, args.onto.as_deref())?;
     let head = branch_head(&ctx, &target)?;
     if head == record.base_commit {
@@ -930,6 +1057,9 @@ pub(crate) fn rebase(args: &RebaseArgs, env: &Environment) -> anyhow::Result<Out
             "graft {name} is already based on {target} ({})\n",
             head.short(7)
         )));
+    }
+    if record.backend.is_virtual() {
+        return rebase_virtual(&mut ctx, &record, &target, &head);
     }
     let mut out = Output::default();
     let dir = ctx.backend.path(&name);

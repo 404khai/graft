@@ -518,6 +518,77 @@ mod fuse {
         run(h, r, &["prune", "v"]);
     }
 
+    /// AGENTS.md Phase 13: a live virtual graft sees Root's new head after
+    /// `graft rebase`, keeping its own changes; replay stays exact.
+    #[test]
+    fn a_virtual_graft_rebases_onto_a_new_head() {
+        require_fuse();
+        let home = tempfile::tempdir().unwrap();
+        let _daemon = Daemon(home.path());
+        let repo = crate::git_repo();
+        let (h, r) = (home.path(), repo.path());
+        crate::git(r, &["config", "user.name", "Graft Test"]);
+        crate::git(r, &["config", "user.email", "test@graft.invalid"]);
+        std::fs::write(r.join("a.txt"), "a\n").unwrap();
+        std::fs::write(r.join("b.txt"), "b\n").unwrap();
+        crate::git(r, &["add", "-A"]);
+        crate::git(r, &["commit", "-qm", "files"]);
+        crate::git(r, &["branch", "land"]);
+        init(h, r);
+        let v = new_fuse(h, r, "v");
+        std::fs::write(v.join("a.txt"), "a from v\n").unwrap();
+        std::fs::create_dir(v.join("new")).unwrap();
+        std::fs::write(v.join("new/v.txt"), "v\n").unwrap();
+        run(h, r, &["ring", "v", "before"]);
+        let git_status = |dir: &Path| {
+            let o = Command::new("git")
+                .args(["status", "--porcelain"])
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            String::from_utf8(o.stdout).unwrap()
+        };
+        assert!(git_status(&v).contains("a.txt"));
+        // Another graft lands a change to b.txt.
+        run(
+            h,
+            r,
+            &["new", "w", "--backend", "reflink", "--from", "land"],
+        );
+        let w = std::path::PathBuf::from(run(h, r, &["path", "w"]).trim());
+        std::fs::write(w.join("b.txt"), "b from w\n").unwrap();
+        run(h, r, &["integrate", "w", "--onto", "land"]);
+
+        let out = run(h, r, &["rebase", "v", "--onto", "land"]);
+        assert!(out.contains("Rebased graft v onto land"), "{out}");
+        assert_eq!(
+            std::fs::read_to_string(v.join("a.txt")).unwrap(),
+            "a from v\n"
+        );
+        assert_eq!(std::fs::read_to_string(v.join("new/v.txt")).unwrap(), "v\n");
+        assert_eq!(
+            std::fs::read_to_string(v.join("b.txt")).unwrap(),
+            "b from w\n"
+        );
+        let status = run(h, r, &["status", "v"]);
+        assert!(
+            status.contains("a.txt") && !status.contains("b.txt"),
+            "{status}"
+        );
+        let gs = git_status(&v);
+        assert!(gs.contains("a.txt") && !gs.contains("b.txt"), "{gs}");
+        assert!(run(h, r, &["log", "v"]).contains("rebase"));
+        let o = graft_d(h)
+            .current_dir(r)
+            .args(["rewind", "v", "before"])
+            .output()
+            .unwrap();
+        assert!(!o.status.success());
+        assert!(String::from_utf8_lossy(&o.stderr).contains("predates its last rebase"));
+        // And it integrates cleanly on top.
+        run(h, r, &["integrate", "v", "--onto", "land"]);
+    }
+
     fn walk_files(dir: &Path) -> Vec<std::path::PathBuf> {
         let mut out = Vec::new();
         for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
