@@ -17,6 +17,7 @@ const V5_SQL: &str = include_str!("../src/schema/v5.sql");
 const V6_SQL: &str = include_str!("../src/schema/v6.sql");
 const V7_SQL: &str = include_str!("../src/schema/v7.sql");
 const V8_SQL: &str = include_str!("../src/schema/v8.sql");
+const V9_SQL: &str = include_str!("../src/schema/v9.sql");
 
 fn record() -> RootRecord {
     RootRecord {
@@ -55,7 +56,7 @@ fn columns(path: &std::path::Path, table: &str) -> Vec<String> {
 fn released_migrations_are_never_edited() {
     // If this fails you changed a shipped migration. Revert it and add a new
     // migration instead (AGENTS.md §5, docs/on-disk-format.md).
-    assert_eq!(SCHEMA_VERSION, 8);
+    assert_eq!(SCHEMA_VERSION, 9);
     let hash = |sql: &str| blake3::hash(sql.as_bytes()).to_hex().to_string();
     assert_eq!(hash(V1_SQL), EXPECTED_V1_HASH, "schema/v1.sql changed");
     assert_eq!(hash(V2_SQL), EXPECTED_V2_HASH, "schema/v2.sql changed");
@@ -65,8 +66,10 @@ fn released_migrations_are_never_edited() {
     assert_eq!(hash(V6_SQL), EXPECTED_V6_HASH, "schema/v6.sql changed");
     assert_eq!(hash(V7_SQL), EXPECTED_V7_HASH, "schema/v7.sql changed");
     assert_eq!(hash(V8_SQL), EXPECTED_V8_HASH, "schema/v8.sql changed");
+    assert_eq!(hash(V9_SQL), EXPECTED_V9_HASH, "schema/v9.sql changed");
 }
 
+const EXPECTED_V9_HASH: &str = "ab5771f767b3982887c10d71bf1278fe04630dd985c70b737b9adc068d3c105b";
 const EXPECTED_V8_HASH: &str = "8c515a16e30d302809ab6f2da7e33792a6eb82be4055d0c4c34954961224e892";
 const EXPECTED_V7_HASH: &str = "1295bca6a67f9528d1dfebd857e51779a57caf5e614942f719b4e6fee5f725d0";
 const EXPECTED_V6_HASH: &str = "7f577964e7e32b3f824f2d8149004911568d67e9128c4b4d90b806604be457d5";
@@ -91,6 +94,8 @@ fn migrates_an_empty_directory_to_the_latest_schema() {
             ("index", "graft_resources_value_unique"),
             ("table", "grafts"),
             ("index", "grafts_name_unique"),
+            ("table", "integrations"),
+            ("index", "integrations_by_state"),
             ("table", "layer_refs"),
             ("index", "layer_refs_by_layer"),
             ("table", "layers"),
@@ -577,4 +582,56 @@ fn radar_checks_are_cached_by_fingerprint() {
         store.radar_check(&fp).unwrap().unwrap().outcome,
         CheckOutcome::Pass
     );
+}
+
+#[test]
+fn the_integrate_queue_is_ordered_and_persistent() {
+    use graft_store::IntegrationState;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut store, _) = Store::create(dir.path(), &record()).unwrap();
+    let base: graft_core::CommitId = "d".repeat(40).parse().unwrap();
+    let a = store
+        .create_graft(
+            &"a".parse().unwrap(),
+            &base,
+            graft_core::BackendKind::Reflink,
+        )
+        .unwrap();
+    let b = store
+        .create_graft(
+            &"b".parse().unwrap(),
+            &base,
+            graft_core::BackendKind::Reflink,
+        )
+        .unwrap();
+    let ia = store
+        .enqueue(a.id, &a.name, "main", Some("feat: a"), false)
+        .unwrap();
+    let ib = store.enqueue(b.id, &b.name, "main", None, true).unwrap();
+    assert!(ia < ib);
+    let next = store.next_queued().unwrap().unwrap();
+    assert_eq!(
+        (next.id, next.graft_name.as_str(), next.message.as_deref()),
+        (ia, "a", Some("feat: a"))
+    );
+    store
+        .set_integration(ia, IntegrationState::Running, "", None)
+        .unwrap();
+    assert_eq!(store.next_queued().unwrap().unwrap().id, ib);
+    // An interrupted run is queued again.
+    assert_eq!(store.requeue_running().unwrap(), 1);
+    assert_eq!(store.next_queued().unwrap().unwrap().id, ia);
+    store
+        .set_integration(ia, IntegrationState::Landed, "ok", Some(&"e".repeat(40)))
+        .unwrap();
+    let landed = store.integration(ia).unwrap().unwrap();
+    assert_eq!(
+        (landed.state, landed.commit),
+        (IntegrationState::Landed, Some("e".repeat(40)))
+    );
+    // History outlives the graft.
+    store.delete_graft(a.id).unwrap();
+    let all = store.integrations(10).unwrap();
+    assert_eq!(all.iter().map(|i| i.id).collect::<Vec<_>>(), [ia, ib]);
+    assert!(all[1].dry_run);
 }

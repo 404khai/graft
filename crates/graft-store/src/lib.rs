@@ -27,6 +27,7 @@ pub mod blobs;
 pub mod delta;
 mod error;
 mod journal;
+mod queue;
 mod radar;
 pub mod registry;
 mod resources;
@@ -43,6 +44,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
 pub use error::{Result, StoreError};
 pub use journal::{Journaled, Staged, StagedChange};
+pub use queue::{Integration, IntegrationState};
 pub use radar::{CheckOutcome, RadarCheck};
 pub use resources::{Resource, ResourceKind};
 pub use rings::{Rewound, Ring};
