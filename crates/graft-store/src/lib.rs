@@ -28,6 +28,7 @@ pub mod delta;
 mod error;
 mod journal;
 pub mod registry;
+mod resources;
 mod rings;
 mod schema;
 
@@ -41,6 +42,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
 pub use error::{Result, StoreError};
 pub use journal::{Journaled, Staged, StagedChange};
+pub use resources::{Resource, ResourceKind};
 pub use rings::{Rewound, Ring};
 pub use schema::SCHEMA_VERSION;
 
@@ -91,6 +93,8 @@ pub struct GraftRecord {
     pub updated_at: Timestamp,
     /// The graft it was budded from, if any (ADR 0013).
     pub budded_from: Option<GraftId>,
+    /// The blueprint it was created with, if any (ADR 0015).
+    pub blueprint: Option<String>,
 }
 
 /// A layer recorded in the layer cache.
@@ -396,6 +400,7 @@ impl Store {
             created_at: now,
             updated_at: now,
             budded_from: None,
+            blueprint: None,
         };
         let result = self.conn.execute(
             "INSERT INTO grafts (graft_id, name, base_commit, state, created_at, updated_at, backend)
@@ -422,8 +427,7 @@ impl Store {
         }
     }
 
-    const GRAFT_COLUMNS: &'static str =
-        "graft_id, name, base_commit, state, created_at, updated_at, backend, budded_from";
+    const GRAFT_COLUMNS: &'static str = "graft_id, name, base_commit, state, created_at, updated_at, backend, budded_from, blueprint";
 
     fn decode_graft(&self, row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<GraftRecord>> {
         let id: String = row.get(0)?;
@@ -434,6 +438,7 @@ impl Store {
         let updated_at: i64 = row.get(5)?;
         let backend: String = row.get(6)?;
         let budded_from: Option<String> = row.get(7)?;
+        let blueprint: Option<String> = row.get(8)?;
         Ok((|| {
             Ok(GraftRecord {
                 id: id
@@ -457,6 +462,7 @@ impl Store {
                     .map(|b| b.parse())
                     .transpose()
                     .map_err(|e| self.corrupt(format!("grafts.budded_from: {e}")))?,
+                blueprint,
             })
         })())
     }
