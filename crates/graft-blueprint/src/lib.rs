@@ -2,8 +2,9 @@
 //!
 //! A Blueprint lives in `graft.toml` at the top of the repository. This
 //! crate parses it. For now that means the `[[layer]]` entries used by the
-//! layer cache and the `[sandbox]` table used by `graft run`; ports,
-//! services, env files and templates arrive with the full Blueprint phase.
+//! layer cache, the `[sandbox]` table used by `graft run`, and the
+//! `[blueprint.<name>]` tables that give a graft its own ports, services,
+//! env files and environment (ADR 0015), with [`template`]s.
 //!
 //! ```toml
 //! [[layer]]
@@ -25,6 +26,14 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 use toml::Spanned;
+
+mod blueprint;
+pub mod template;
+
+pub use blueprint::{
+    BlueprintSpec, EnvFileSpec, GRAFT_VARIABLES, PortSpec, ServiceKind, ServiceSpec,
+    parse_blueprints, unknown_variable,
+};
 
 /// The Blueprint's file name, relative to the repository's top level.
 pub const BLUEPRINT_FILE: &str = "graft.toml";
@@ -73,6 +82,8 @@ struct RawFile {
     #[serde(default)]
     layer: Vec<RawLayer>,
     sandbox: Option<RawSandbox>,
+    #[serde(default)]
+    blueprint: std::collections::BTreeMap<String, Spanned<blueprint::RawBlueprint>>,
 }
 
 #[derive(Deserialize)]
@@ -386,8 +397,8 @@ build = "  cargo build  "
         let e = err("[[layer]]\npath = \"x\"\ninputs = [\"a\"]\nbuild = \"b\"\nbiuld = \"c\"\n");
         assert_eq!(e.line, 5, "{e}");
         assert!(e.message.contains("biuld"), "{e}");
-        let e = err("[blueprint.web]\n");
-        assert!(e.message.contains("blueprint"), "{e}");
+        let e = err("[blueprnt.web]\n");
+        assert!(e.message.contains("blueprnt"), "{e}");
     }
 
     #[test]
