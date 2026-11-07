@@ -59,6 +59,13 @@ export (tree-sitter: Rust, TypeScript, Python, Go), and with a `[radar]
 test` command it merges overlapping grafts in scratch checkouts and reports
 tests that fail only when combined. `graft radar --watch` keeps it current.
 
+Land finished grafts as ordinary git history: `graft integrate a b` merges
+each graft onto the target's head in a scratch checkout (line merge, then
+[Mergiraf](https://mergiraf.org) when it is installed), runs the
+`[integrate] test` gate, and commits only if it passes. `graft queue` shows
+what landed and why anything stopped; `graft rebase b` brings a live graft
+up to date.
+
 Dependency trees are built once and shared: declare them as layers in
 `graft.toml` ([reference](docs/blueprint.md)), approve the build command once
 with `graft trust`, and every graft after the first gets `node_modules` (or

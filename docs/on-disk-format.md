@@ -1,6 +1,6 @@
 # On-disk format
 
-**Format version: 10** (metadata schema v8)
+**Format version: 11** (metadata schema v9)
 
 This file describes everything Graft persists. Any change to a structure
 below bumps the format version, adds a migration, and updates this file in
@@ -35,6 +35,9 @@ $GRAFT_HOME/
         │   └── <graft-id>/
         │       ├── work/<n>    staging files of files open for writing
         │       └── git/        the graft's .git, created on first use
+        ├── integrate/          mode 0700, Integrate's scratch checkouts
+        │                       (ADR 0017), removed after each request
+        ├── integrate.lock      OS file lock held while the queue is worked
         ├── radar/              mode 0700, Radar's scratch checkouts (ADR 0016);
         │                       each is removed when its check ends
         ├── tmp/                mode 0700, created by `graft run` (ADR 0014)
@@ -67,6 +70,7 @@ Entries in `roots/` whose name is not a valid Root ID, or that contain no
 | 8 | Adds `tmp/<graft-id>/`, the private temp dir of `graft run` (ADR 0014); `trusted_commands` also holds approved `[sandbox] write` paths | None: additive; created on first `graft run`, removed by prune |
 | 9 | Schema v7: Blueprints (`grafts.blueprint`, table `graft_resources`; ADR 0015) | Schema v6 → v7 runs automatically on open; a table and a nullable column only added |
 | 10 | Adds `radar/` (scratch checkouts of Radar's behaviour checks) and schema v8 (`radar_checks`; ADR 0016) | Schema v7 → v8 runs automatically on open; a table only added |
+| 11 | Adds `integrate/` (scratch checkouts), `integrate.lock`, schema v9 (`integrations`) and transient `refs/graft/integrating/<graft-id>` refs in Root (ADR 0017) | Schema v8 → v9 runs automatically on open; a table only added |
 
 ## `config.toml`
 
@@ -237,6 +241,26 @@ on the next mount after a crash.
 
 Primary key: `(graft_id, seq)`.
 
+### `integrations` (v9)
+
+The Integrate queue (ADR 0017), one row per `graft integrate` request.
+Rows have no foreign key, so the history outlives its grafts.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | INTEGER PK | Queue order (`AUTOINCREMENT`) |
+| `graft_id`, `graft_name` | TEXT | The graft, and its name when queued |
+| `target` | TEXT | The branch it lands on |
+| `message` | TEXT | The commit message given with `-m`, or `NULL` |
+| `dry_run` | INTEGER | 1 for `--dry-run` |
+| `state` | TEXT | `queued`, `running`, `conflict`, `failed`, `landed` or `checked` (a dry run that passed) |
+| `commit_id` | TEXT | The commit it created, once landed |
+| `output` | TEXT | What the steps reported: structural merges, resolver and gate output, conflicts |
+| `enqueued_at`, `updated_at` | INTEGER | Timestamps |
+
+Index `integrations_by_state` on `(state, id)`. A row left `running` by an
+interrupted `graft integrate` is queued again by the next one.
+
 ### `radar_checks` (v8)
 
 Results of Radar's speculative test runs (ADR 0016).
@@ -396,6 +420,13 @@ and refuses it if it is a symlink, is owned by anyone other than
 | Ref | Points at | Lifetime |
 | --- | --- | --- |
 | `refs/graft/<graft-id>` | The graft's base commit | `graft new` to `graft prune`; keeps the base reachable so `git gc` cannot prune it |
+
+`graft integrate` pushes each landing commit to
+`refs/graft/integrating/<graft-id>` to copy its objects into Root, moves
+the target branch with compare-and-swap (`git update-ref <ref> <new>
+<old>`), then deletes the staging ref, whatever the outcome. In `branch`
+mode it creates or moves `refs/heads/graft/<name>` instead.
+
 
 ## Graft lifecycle on disk
 
