@@ -29,6 +29,7 @@ mod error;
 mod journal;
 mod queue;
 mod radar;
+mod rebase;
 pub mod registry;
 mod resources;
 mod rings;

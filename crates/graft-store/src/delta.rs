@@ -135,6 +135,14 @@ pub enum Op {
         /// The sequence number of the ring's last op (0: the empty delta).
         to: u64,
     },
+    /// The graft moved to a new base commit (`graft rebase`, ADR 0017):
+    /// the delta starts again from empty over the new base's tree, and the
+    /// ops after this one recreate the graft's changes there. Like
+    /// [`Op::Rewind`], [`Delta::apply`] ignores it.
+    Rebase {
+        /// The new base commit, as hex.
+        base: String,
+    },
 }
 
 impl Op {
@@ -162,6 +170,7 @@ impl Op {
             Self::Chmod { .. } => "chmod",
             Self::Touch { .. } => "touch",
             Self::Rewind { .. } => "rewind",
+            Self::Rebase { .. } => "rebase",
         }
     }
 
@@ -177,7 +186,7 @@ impl Op {
             | Self::Chmod { path, .. }
             | Self::Touch { path, .. } => path,
             Self::Rename { from, .. } => from,
-            Self::Rewind { .. } => &[],
+            Self::Rewind { .. } | Self::Rebase { .. } => &[],
         }
     }
 }
@@ -594,7 +603,7 @@ impl Delta {
                     self.set(&mut changes, &dest, Some(Self::entry_for(node)));
                 }
             }
-            Op::Rewind { .. } => {}
+            Op::Rewind { .. } | Op::Rebase { .. } => {}
         }
         changes
     }
@@ -614,7 +623,9 @@ impl Delta {
     }
 
     /// Replays `records` (oldest first) from an empty delta. A rewind to
-    /// `n` restores the state replay had right after op `n`.
+    /// `n` restores the state replay had right after op `n`; a rebase
+    /// starts again from empty. `lower` is the tree of the graft's current
+    /// base, which every op after its last rebase was applied over.
     #[must_use]
     pub fn replay<'a>(records: impl IntoIterator<Item = &'a Record>, lower: &dyn Lower) -> Self {
         let records: Vec<&Record> = records.into_iter().collect();
@@ -633,6 +644,9 @@ impl Delta {
         for r in records {
             if let Op::Rewind { to } = r.op {
                 d = states.get(&to).cloned().unwrap_or_default();
+            } else if let Op::Rebase { .. } = r.op {
+                d = Self::default();
+                states.clear();
             } else {
                 d.apply(&r.op, r.at, lower);
             }
