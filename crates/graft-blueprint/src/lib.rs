@@ -83,6 +83,7 @@ struct RawFile {
     layer: Vec<RawLayer>,
     sandbox: Option<RawSandbox>,
     radar: Option<RawRadar>,
+    integrate: Option<RawIntegrate>,
     #[serde(default)]
     blueprint: std::collections::BTreeMap<String, Spanned<blueprint::RawBlueprint>>,
 }
@@ -110,6 +111,106 @@ pub struct RadarSpec {
     pub test: Option<String>,
     /// How long one run may take, in seconds.
     pub timeout_secs: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawIntegrate {
+    test: Option<Spanned<String>>,
+    resolver: Option<Spanned<String>>,
+    timeout_secs: Option<Spanned<u64>>,
+    mode: Option<Spanned<String>>,
+    branch: Option<Spanned<String>>,
+}
+
+/// How `graft integrate` lands a graft.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntegrateMode {
+    /// One commit on the target branch.
+    Commit,
+    /// A branch `graft/<name>` in Root; the target is left alone.
+    Branch,
+}
+
+/// The `[integrate]` table (ADR 0017).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntegrateSpec {
+    /// The test gate: a shell command run in the merged checkout.
+    pub test: Option<String>,
+    /// A command run when files still conflict after the structural merge.
+    pub resolver: Option<String>,
+    /// How long the gate or resolver may take, in seconds.
+    pub timeout_secs: u64,
+    /// Commit or branch.
+    pub mode: IntegrateMode,
+    /// The target branch, if not Root's current one.
+    pub branch: Option<String>,
+}
+
+/// Parses the `[integrate]` table of a `graft.toml`.
+///
+/// # Errors
+///
+/// A [`BlueprintError`] for invalid TOML, unknown keys, empty commands, a
+/// zero timeout, an unknown mode or an empty branch name.
+pub fn parse_integrate(text: &str, file: &str) -> Result<IntegrateSpec, BlueprintError> {
+    let at = Locator { file, text };
+    let mut spec = IntegrateSpec {
+        test: None,
+        resolver: None,
+        timeout_secs: DEFAULT_RADAR_TIMEOUT_SECS,
+        mode: IntegrateMode::Commit,
+        branch: None,
+    };
+    let Some(raw) = parse_file(&at)?.integrate else {
+        return Ok(spec);
+    };
+    let command =
+        |c: Option<Spanned<String>>, what: &str| -> Result<Option<String>, BlueprintError> {
+            match c {
+                None => Ok(None),
+                Some(c) if c.get_ref().trim().is_empty() => Err(at.error(
+                    c.span().start,
+                    format!("integrate {what} command must not be empty"),
+                )),
+                Some(c) => Ok(Some(c.get_ref().trim().to_owned())),
+            }
+        };
+    spec.test = command(raw.test, "test")?;
+    spec.resolver = command(raw.resolver, "resolver")?;
+    if let Some(t) = raw.timeout_secs {
+        if *t.get_ref() == 0 {
+            return Err(at.error(t.span().start, "integrate timeout_secs must be at least 1"));
+        }
+        spec.timeout_secs = *t.get_ref();
+    }
+    if let Some(m) = raw.mode {
+        spec.mode = match m.get_ref().as_str() {
+            "commit" => IntegrateMode::Commit,
+            "branch" => IntegrateMode::Branch,
+            other => {
+                return Err(at.error(
+                    m.span().start,
+                    format!("integrate mode {other:?} must be \"commit\" or \"branch\""),
+                ));
+            }
+        };
+    }
+    if let Some(b) = raw.branch {
+        let name = b.get_ref().trim();
+        if name.is_empty()
+            || name.starts_with('-')
+            || name.contains("..")
+            || name.contains(char::is_whitespace)
+        {
+            return Err(at.error(
+                b.span().start,
+                "integrate branch must be a plain branch name",
+            ));
+        }
+        spec.branch = Some(name.to_owned());
+    }
+    Ok(spec)
 }
 
 /// Default for [`RadarSpec::timeout_secs`].
@@ -371,6 +472,37 @@ mod tests {
 
     fn err(text: &str) -> BlueprintError {
         parse_layers(text, "graft.toml").unwrap_err()
+    }
+
+    #[test]
+    fn parses_the_integrate_table() {
+        let s = parse_integrate(
+            "[integrate]\ntest = \"make test\"\nresolver = \"fix\"\ntimeout_secs = 9\nmode = \"branch\"\nbranch = \"main\"\n",
+            "graft.toml",
+        )
+        .unwrap();
+        assert_eq!(s.test.as_deref(), Some("make test"));
+        assert_eq!(s.resolver.as_deref(), Some("fix"));
+        assert_eq!(
+            (s.timeout_secs, s.mode, s.branch.as_deref()),
+            (9, IntegrateMode::Branch, Some("main"))
+        );
+        let d = parse_integrate("", "graft.toml").unwrap();
+        assert_eq!(
+            (d.test, d.mode, d.branch),
+            (None, IntegrateMode::Commit, None)
+        );
+        for (bad, needle) in [
+            ("mode = \"rebase\"", "mode"),
+            ("test = \" \"", "test command"),
+            ("branch = \"a..b\"", "branch"),
+            ("timeout_secs = 0", "timeout"),
+            ("tset = \"x\"", "unknown field"),
+        ] {
+            let e = parse_integrate(&format!("[integrate]\n{bad}\n"), "graft.toml").unwrap_err();
+            assert!(e.message.contains(needle), "{bad}: {e}");
+            assert_eq!(e.line, 2, "{bad}");
+        }
     }
 
     #[test]
