@@ -61,4 +61,5 @@ pub type FuseBackend = VirtualBackend;
 /// The virtual backend on macOS: grafts served over NFS loopback (ADR 0009).
 #[cfg(target_os = "macos")]
 pub type NfsBackend = VirtualBackend;
+pub use view::Admission;
 pub use write::{OpenMode, SetAttr};

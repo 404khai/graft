@@ -307,6 +307,18 @@ impl GraftView {
             retire(w);
             return Ok(());
         }
+        if let Some(admission) = &self.admission
+            && let Err(why) = admission.admit(w.graft, &path, &s.work)
+        {
+            // Refused: nothing is journaled, and the file keeps what it had.
+            tracing::warn!(path = %String::from_utf8_lossy(&path), why, "write refused");
+            if drop {
+                retire(w);
+            } else {
+                s.dirty.store(true, Ordering::Release);
+            }
+            return Err(Errno::EACCES);
+        }
         let stored = (|| {
             if sync {
                 s.file.sync_data()?;

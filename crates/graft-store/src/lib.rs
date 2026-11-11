@@ -24,6 +24,7 @@
 #![forbid(unsafe_code)]
 
 pub mod blobs;
+mod claims;
 pub mod delta;
 mod error;
 mod journal;
@@ -43,6 +44,7 @@ use graft_core::{
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
+pub use claims::{AdmissionRow, ClaimRow};
 pub use error::{Result, StoreError};
 pub use journal::{Journaled, Staged, StagedChange};
 pub use queue::{Integration, IntegrationState};

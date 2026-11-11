@@ -12,6 +12,7 @@ mod doctor;
 mod grafts;
 mod integrate;
 mod layers;
+mod plan;
 mod radar;
 mod repo_policy;
 mod root;

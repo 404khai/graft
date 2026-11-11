@@ -66,6 +66,13 @@ each graft onto the target's head in a scratch checkout (line merge, then
 what landed and why anything stopped; `graft rebase b` brings a live graft
 up to date.
 
+Split a task before agents start: `graft plan task.md` reads the files and
+symbols the task names, partitions them along the code's dependency graph
+so tightly coupled files stay together, puts changes to shared hub files in
+a first "contract" node, and orders the rest. `graft plan task.md --apply`
+creates the grafts that are ready, each holding claims on its files; a
+graft that touches another's claims is refused, by name.
+
 Dependency trees are built once and shared: declare them as layers in
 `graft.toml` ([reference](docs/blueprint.md)), approve the build command once
 with `graft trust`, and every graft after the first gets `node_modules` (or

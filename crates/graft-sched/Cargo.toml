@@ -7,5 +7,13 @@ rust-version.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[dependencies]
+graft-radar.workspace = true
+serde.workspace = true
+tree-sitter.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

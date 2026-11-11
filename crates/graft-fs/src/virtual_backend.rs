@@ -54,6 +54,17 @@ pub struct VirtualBackend {
     /// `$GRAFT_HOME/roots/<root-id>`: the store, blobs and per-graft state.
     root_dir: PathBuf,
     mounted: Mutex<HashMap<GraftName, mechanism::Mounted>>,
+    admission: Option<AdmissionHook>,
+}
+
+/// The admission hook, shown as present or not in `Debug`.
+#[derive(Clone)]
+struct AdmissionHook(Arc<dyn crate::view::Admission>);
+
+impl std::fmt::Debug for AdmissionHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AdmissionHook")
+    }
 }
 
 impl VirtualBackend {
@@ -66,7 +77,16 @@ impl VirtualBackend {
             dirs: ReflinkBackend::new(mounts),
             root_dir,
             mounted: Mutex::new(HashMap::new()),
+            admission: None,
         }
+    }
+
+    /// Admits each finished write in grafts mounted from now on (claims,
+    /// ADR 0018).
+    #[must_use]
+    pub fn with_admission(mut self, admission: Arc<dyn crate::view::Admission>) -> Self {
+        self.admission = Some(AdmissionHook(admission));
+        self
     }
 
     /// The Root's blob store.
@@ -210,6 +230,7 @@ impl VirtualBackend {
                 dir: self.graft_dir(spec.id),
                 git_init: Some(git_init(&objects, spec, &layers)),
                 git_in_background: cfg!(target_os = "macos"),
+                admission: self.admission.as_ref().map(|a| Arc::clone(&a.0)),
             };
             let view = GraftView::writable(
                 objects,

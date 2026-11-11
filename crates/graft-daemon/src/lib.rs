@@ -13,6 +13,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod admission;
 pub mod client;
 pub mod mounter;
 pub mod paths;

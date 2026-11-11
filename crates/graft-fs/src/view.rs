@@ -41,6 +41,8 @@ pub struct Errno(pub i32);
 impl Errno {
     /// Operation not permitted.
     pub const EPERM: Self = Self(libc::EPERM);
+    /// Permission denied (a write refused by admission).
+    pub const EACCES: Self = Self(libc::EACCES);
     /// No such file or directory.
     pub const ENOENT: Self = Self(libc::ENOENT);
     /// I/O error: the cause is logged.
@@ -164,6 +166,23 @@ pub struct Journal {
     /// instead of making the first caller wait (for NFS, whose client
     /// times out on slow calls).
     pub git_in_background: bool,
+    /// Decides whether a finished write may be journaled (claims, ADR
+    /// 0018). `None` admits everything.
+    pub admission: Option<Arc<dyn Admission>>,
+}
+
+/// Admission of writes against other grafts' claims (ADR 0018). graft-fs
+/// cannot know about claims (they live above it); graftd supplies this.
+pub trait Admission: Send + Sync {
+    /// Whether graft `graft` may journal `contents` (a file on disk) as the
+    /// new contents of `path`. `Err` carries the verdict, naming the
+    /// graft that holds the claim; the write is then refused with
+    /// `EACCES` and not journaled.
+    ///
+    /// # Errors
+    ///
+    /// The refusal.
+    fn admit(&self, graft: GraftId, path: &[u8], contents: &Path) -> Result<(), String>;
 }
 
 impl std::fmt::Debug for Journal {
@@ -428,6 +447,7 @@ pub struct GraftView {
     /// The blob store, outside the write lock so reads never wait on it.
     pub(crate) blobs: Option<BlobStore>,
     pub(crate) git: Option<GitDir>,
+    pub(crate) admission: Option<Arc<dyn Admission>>,
 }
 
 impl std::fmt::Debug for GraftView {
@@ -502,6 +522,7 @@ impl GraftView {
             writer: None,
             blobs: None,
             git: None,
+            admission: None,
         })
     }
 
@@ -549,6 +570,7 @@ impl GraftView {
             .git_init
             .map(|init| GitDir::new(journal.dir.join("git"), init, journal.git_in_background));
         view.blobs = Some(journal.blobs);
+        view.admission = journal.admission;
         view.writer = Some(Mutex::new(Writer {
             store: journal.store,
             graft: journal.graft,

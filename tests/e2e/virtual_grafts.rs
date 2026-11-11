@@ -589,6 +589,42 @@ mod fuse {
         run(h, r, &["integrate", "v", "--onto", "land"]);
     }
 
+    /// AGENTS.md Phase 14: admission rejects a write to a symbol another
+    /// live graft claims, names that graft, and journals nothing.
+    #[test]
+    fn a_write_to_a_claimed_symbol_is_refused() {
+        require_fuse();
+        let home = tempfile::tempdir().unwrap();
+        let _daemon = Daemon(home.path());
+        let repo = crate::git_repo();
+        let (h, r) = (home.path(), repo.path());
+        let lib = "def total():\n    return 1\n\n\ndef other():\n    return 2\n";
+        std::fs::write(r.join("lib.py"), lib).unwrap();
+        crate::git(r, &["add", "lib.py"]);
+        crate::git(r, &["commit", "-qm", "lib"]);
+        init(h, r);
+        run(h, r, &["new", "holder", "--backend", "reflink"]);
+        run(h, r, &["claim", "holder", "lib.py::total"]);
+        let v = new_fuse(h, r, "v");
+        // Changing an unclaimed symbol is fine.
+        std::fs::write(v.join("lib.py"), lib.replace("return 2", "return 3")).unwrap();
+        run(h, r, &["status", "v"]);
+        assert!(run(h, r, &["diff", "v"]).contains("+    return 3"));
+        // Changing the claimed one is refused when graftd journals it.
+        std::fs::write(v.join("lib.py"), lib.replace("return 1", "return 10")).unwrap();
+        run(h, r, &["status", "v"]);
+        let claims = run(h, r, &["claims"]);
+        assert!(
+            claims.contains("lib.py: rejected: lib.py::total is claimed by graft holder"),
+            "{claims}"
+        );
+        let diff = run(h, r, &["diff", "v"]);
+        assert!(
+            !diff.contains("return 10"),
+            "a refused write was journaled: {diff}"
+        );
+    }
+
     fn walk_files(dir: &Path) -> Vec<std::path::PathBuf> {
         let mut out = Vec::new();
         for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {

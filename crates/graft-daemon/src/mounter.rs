@@ -93,6 +93,15 @@ mod virtual_mounter {
     use graft_root::Repo;
     use graft_store::GraftRecord;
 
+    /// A virtual backend for the Root whose mounts are `mounts`, with
+    /// claims admission (ADR 0018).
+    fn new_backend(mounts: &Path) -> VirtualBackend {
+        let root_dir = mounts.parent().map(Path::to_owned).unwrap_or_default();
+        VirtualBackend::new(mounts.to_owned()).with_admission(std::sync::Arc::new(
+            crate::admission::ClaimsAdmission::new(root_dir),
+        ))
+    }
+
     use crate::server::Mounter;
 
     /// One [`VirtualBackend`] per Root.
@@ -118,9 +127,7 @@ mod virtual_mounter {
                 ));
             }
             let mut roots = self.roots.lock().unwrap_or_else(PoisonError::into_inner);
-            let backend = roots
-                .entry(root)
-                .or_insert_with(|| VirtualBackend::new(mounts.to_owned()));
+            let backend = roots.entry(root).or_insert_with(|| new_backend(mounts));
             backend
                 .mount(
                     repo,
@@ -141,9 +148,7 @@ mod virtual_mounter {
             graft: &GraftName,
         ) -> Result<Option<bool>, String> {
             let mut roots = self.roots.lock().unwrap_or_else(PoisonError::into_inner);
-            let backend = roots
-                .entry(root)
-                .or_insert_with(|| VirtualBackend::new(mounts.to_owned()));
+            let backend = roots.entry(root).or_insert_with(|| new_backend(mounts));
             match backend.unmount(graft) {
                 Ok(how) => Ok(how.map(|h| h == Unmounted::Lazy)),
                 Err(e) => Err(e.to_string()),
@@ -152,9 +157,7 @@ mod virtual_mounter {
 
         fn prune(&self, root: RootId, mounts: &Path, graft: &GraftRecord) -> Result<bool, String> {
             let mut roots = self.roots.lock().unwrap_or_else(PoisonError::into_inner);
-            let backend = roots
-                .entry(root)
-                .or_insert_with(|| VirtualBackend::new(mounts.to_owned()));
+            let backend = roots.entry(root).or_insert_with(|| new_backend(mounts));
             let lazy = backend
                 .unmount(&graft.name)
                 .map_err(|e| e.to_string())?
@@ -183,7 +186,7 @@ mod virtual_mounter {
             let mut roots = self.roots.lock().unwrap_or_else(PoisonError::into_inner);
             roots
                 .entry(root)
-                .or_insert_with(|| VirtualBackend::new(mounts.to_owned()))
+                .or_insert_with(|| new_backend(mounts))
                 .sweep_blobs()
                 .map_err(|e| e.to_string())
         }

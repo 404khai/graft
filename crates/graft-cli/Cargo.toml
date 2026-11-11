@@ -29,6 +29,7 @@ graft-integrate.workspace = true
 graft-radar.workspace = true
 graft-root.workspace = true
 graft-sandbox.workspace = true
+graft-sched.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 graft-store.workspace = true

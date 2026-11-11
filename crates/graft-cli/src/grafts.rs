@@ -39,6 +39,19 @@ pub(crate) struct NewArgs {
     blueprint: Option<String>,
 }
 
+impl NewArgs {
+    /// `graft new <name> [--backend B]` at Root's HEAD, for commands that
+    /// create grafts themselves (`graft plan --apply`).
+    pub(crate) fn named(name: String, backend: Option<BackendKind>) -> Self {
+        Self {
+            name,
+            from: None,
+            backend,
+            blueprint: None,
+        }
+    }
+}
+
 /// The `--blueprint` of `graft new`, checked for approval before anything
 /// is created.
 fn blueprint_for(
