@@ -309,6 +309,45 @@ fn graft_is_link(ctx: &Ctx, record: &GraftRecord, path: &Path) -> bool {
         .is_ok_and(|m| m.file_type().is_symlink())
 }
 
+/// Admits every change of `record` against other live grafts' claims
+/// (ADR 0018); the refusals, if any. Reflink grafts never pass writes
+/// through Graft, so this is where their claims are enforced.
+fn claims_refuse(
+    ctx: &mut Ctx,
+    record: &GraftRecord,
+    diffs: &[FileDiff],
+) -> anyhow::Result<Option<String>> {
+    let claims = crate::plan::claims_for_admission(&ctx.located.store, None)?;
+    if claims.iter().all(|c| c.graft == record.name.as_str()) {
+        return Ok(None);
+    }
+    let mine = crate::plan::plan_of(&claims, record.name.as_str());
+    let mut refused = String::new();
+    for d in diffs {
+        let changed = graft_radar::symbols::changed_symbols(
+            &d.change.path,
+            d.old.as_deref(),
+            d.new.as_deref(),
+        );
+        let verdict = graft_sched::admission::admit(
+            record.name.as_str(),
+            mine.as_ref(),
+            &d.change.path,
+            changed.as_ref(),
+            &claims,
+        );
+        if verdict != graft_sched::admission::Verdict::Allowed {
+            let text = verdict.describe();
+            let path = d.change.path.display().to_string();
+            ctx.located
+                .store
+                .record_admission(record.name.as_str(), &path, &text)?;
+            let _ = writeln!(refused, "{path}: {text}");
+        }
+    }
+    Ok((!refused.is_empty()).then_some(refused))
+}
+
 /// Whether `bytes` still has a conflict marker line.
 fn has_markers(bytes: &[u8]) -> bool {
     String::from_utf8_lossy(bytes)
@@ -472,6 +511,35 @@ fn resolve(
     Ok(None)
 }
 
+/// Checks before merging: approvals, something to integrate, claims.
+/// The graft's changes, or the outcome that stops the entry.
+fn preflight(
+    ctx: &mut Ctx,
+    record: &GraftRecord,
+    spec: &IntegrateSpec,
+    out: &mut Output,
+) -> anyhow::Result<Result<Vec<FileDiff>, Outcome>> {
+    for (hash, what) in approvals(spec) {
+        if !ctx.located.store.is_trusted(&hash)? {
+            return Ok(Err(Outcome::stop(
+                IntegrationState::Failed,
+                format!("{what} is not approved; review it and run `graft trust`"),
+            )));
+        }
+    }
+    let diffs = changes(ctx, record, out)?;
+    if diffs.is_empty() {
+        return Ok(Err(Outcome::stop(
+            IntegrationState::Failed,
+            "nothing to integrate: no changes since base",
+        )));
+    }
+    if let Some(refused) = claims_refuse(ctx, record, &diffs)? {
+        return Ok(Err(Outcome::stop(IntegrationState::Failed, refused)));
+    }
+    Ok(Ok(diffs))
+}
+
 /// Runs one request in a scratch checkout of the target's head.
 fn attempt(
     ctx: &mut Ctx,
@@ -482,21 +550,10 @@ fn attempt(
 ) -> anyhow::Result<Outcome> {
     let head = branch_head(ctx, &entry.target)?;
     let spec = spec_at(&ctx.located.repo, &head)?;
-    for (hash, what) in approvals(&spec) {
-        if !ctx.located.store.is_trusted(&hash)? {
-            return Ok(Outcome::stop(
-                IntegrationState::Failed,
-                format!("{what} is not approved; review it and run `graft trust`"),
-            ));
-        }
-    }
-    let diffs = changes(ctx, record, out)?;
-    if diffs.is_empty() {
-        return Ok(Outcome::stop(
-            IntegrationState::Failed,
-            "nothing to integrate: no changes since base",
-        ));
-    }
+    let diffs = match preflight(ctx, record, &spec, out)? {
+        Ok(d) => d,
+        Err(stop) => return Ok(stop),
+    };
     let backend = ReflinkBackend::new(ctx.root_dir().join("integrate"));
     let id = GraftId::random()?;
     let name: GraftName = format!("land-{}", &id.to_string()[..12]).parse()?;

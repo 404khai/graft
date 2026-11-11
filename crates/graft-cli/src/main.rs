@@ -11,6 +11,7 @@ mod doctor;
 mod grafts;
 mod integrate;
 mod layers;
+mod plan;
 mod radar;
 mod rings;
 mod root;
@@ -67,6 +68,13 @@ enum Command {
     Ring(rings::RingArgs),
     /// Return a graft to one of its rings (reversible: it rings first).
     Rewind(rings::RewindArgs),
+    /// Split a task into an ordered DAG of grafts along the code's
+    /// dependency graph; --apply creates the ready ones.
+    Plan(plan::PlanArgs),
+    /// Claim files or symbols for a graft, if no other live graft holds them.
+    Claim(plan::ClaimArgs),
+    /// List live claims and recently refused writes.
+    Claims(plan::ClaimsArgs),
     /// Show overlapping work across live grafts: same file, same symbol,
     /// merge conflicts, or tests that fail only when merged.
     Radar(radar::RadarArgs),
@@ -173,6 +181,9 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Bud(args) => ok(rings::bud(&args, &env))?,
         Command::Ring(args) => ok(rings::ring(&args, &env))?,
         Command::Rewind(args) => ok(rings::rewind(&args, &env))?,
+        Command::Plan(args) => ok(plan::run_plan(&args, &env))?,
+        Command::Claim(args) => plan::claim(&args, &env)?,
+        Command::Claims(args) => ok(plan::claims(&args, &env))?,
         Command::Radar(args) => ok(radar::radar(&args, &env))?,
         Command::Run(args) => run::run(&args, &env)?,
         Command::Confine(args) => (Output::default(), run::confine(&args)?),
