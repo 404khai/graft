@@ -38,11 +38,13 @@ commands outside a graft.
 **Radar events**
 
 - E. A polling tool only. Agents must remember to poll.
-- F. `graft_radar` returns the current overlaps; with `watch: true` it
-  also starts one `graft radar --watch --json` for the session and
-  forwards each overlap that appears or goes, for the named graft, as an
-  MCP logging notification (`notifications/message`, logger
-  `graft.radar`). The server declares the logging capability.
+- F. Logging notifications (`notifications/message`) for each change.
+  The SDK marks MCP logging deprecated (SEP-2577), so it would not last.
+- G. Resources: `graft://radar` and `graft://radar/<graft>` are Radar's
+  JSON report. A client that subscribes (`resources/subscribe`) starts one
+  `graft radar --watch --json` for the session, and is sent
+  `notifications/resources/updated` for each subscribed URI whenever an
+  overlap it covers appears or goes; it reads the resource to see what.
 
 **Confirmation**
 
@@ -53,7 +55,7 @@ error saying what would happen. `graft_run` only runs commands through
 
 ## Decision
 
-B + D + F, with the confirmations above.
+B + D + G, with the confirmations above.
 
 - `graft mcp` serves the tools over stdio. It runs in the directory it was
   started in, which must be inside a registered Root.

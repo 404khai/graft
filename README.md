@@ -73,6 +73,31 @@ a first "contract" node, and orders the rest. `graft plan task.md --apply`
 creates the grafts that are ready, each holding claims on its files; a
 graft that touches another's claims is refused, by name.
 
+### Use it from an agent (MCP)
+
+`graft mcp` serves Graft to any MCP client over stdio: agents create
+grafts, run commands in them, watch Radar and integrate, with destructive
+calls needing `confirm: true`. The tools and resources are documented in
+[docs/mcp.md](docs/mcp.md). Register the Root once with `graft init`, then
+point your client at it:
+
+- **Claude Code**: `claude mcp add graft -- graft mcp --root /path/to/repo`,
+  or in the repository's `.mcp.json`:
+
+  ```json
+  { "mcpServers": { "graft": { "command": "graft", "args": ["mcp", "--root", "/path/to/repo"] } } }
+  ```
+
+- **Codex**: in `~/.codex/config.toml`:
+
+  ```toml
+  [mcp_servers.graft]
+  command = "graft"
+  args = ["mcp", "--root", "/path/to/repo"]
+  ```
+
+- **Cursor**: in `.cursor/mcp.json` (the same shape as `.mcp.json` above).
+
 Dependency trees are built once and shared: declare them as layers in
 `graft.toml` ([reference](docs/blueprint.md)), approve the build command once
 with `graft trust`, and every graft after the first gets `node_modules` (or
