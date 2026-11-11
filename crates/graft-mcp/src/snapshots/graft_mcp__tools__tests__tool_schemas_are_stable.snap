@@ -1,0 +1,328 @@
+---
+source: crates/graft-mcp/src/tools.rs
+expression: "serde_json::to_string_pretty(&all).unwrap()"
+---
+[
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "readOnlyHint": false,
+      "title": "Create a graft"
+    },
+    "description": "Create a graft: a private copy-on-write workspace checked out from Root. Returns where it is.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "description": "Filesystem backend (default: the configured one).",
+          "enum": [
+            "reflink",
+            "fuse",
+            "nfs"
+          ],
+          "type": "string"
+        },
+        "blueprint": {
+          "description": "Blueprint of graft.toml to provision: ports, services, env files.",
+          "type": "string"
+        },
+        "from": {
+          "description": "Revision to start from (default: Root's HEAD).",
+          "type": "string"
+        },
+        "name": {
+          "description": "Graft name: lowercase letters, digits and hyphens, at most 40 characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "graft_new"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true,
+      "title": "List grafts"
+    },
+    "description": "List grafts with their base, state, changed files and disk use.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "name": "graft_list"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true,
+      "title": "Show a graft's changes"
+    },
+    "description": "Show what changed in a graft since its base (or summarise every graft).",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Graft name: lowercase letters, digits and hyphens, at most 40 characters.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "graft_status"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true,
+      "title": "Diff a graft"
+    },
+    "description": "Show a graft's changes as a unified diff.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Graft name: lowercase letters, digits and hyphens, at most 40 characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "graft_diff"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "readOnlyHint": false,
+      "title": "Run a command in a graft"
+    },
+    "description": "Run a command confined to a graft: it can only write inside the graft (and its private TMPDIR), with the graft's blueprint environment. The command is an argument list, not a shell line.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "description": "Program and arguments, e.g. [\"cargo\", \"test\"].",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "name": {
+          "description": "Graft name: lowercase letters, digits and hyphens, at most 40 characters.",
+          "type": "string"
+        },
+        "timeout_secs": {
+          "description": "Kill it after this many seconds (default 600).",
+          "maximum": 86400,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "command"
+      ],
+      "type": "object"
+    },
+    "name": "graft_run"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "readOnlyHint": false,
+      "title": "Fork a graft"
+    },
+    "description": "Fork a virtual graft in constant time: a new graft with the same base and a copy of its changes.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "dst": {
+          "description": "The new graft's name.",
+          "type": "string"
+        },
+        "src": {
+          "description": "Graft name: lowercase letters, digits and hyphens, at most 40 characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "src",
+        "dst"
+      ],
+      "type": "object"
+    },
+    "name": "graft_bud"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "readOnlyHint": false,
+      "title": "Checkpoint a graft"
+    },
+    "description": "Checkpoint a virtual graft's changes as a named ring (restore it later with `graft rewind`), or list its rings.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "description": "The ring's label (default ring-<seq>).",
+          "type": "string"
+        },
+        "list": {
+          "description": "List the graft's rings instead.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Graft name: lowercase letters, digits and hyphens, at most 40 characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "graft_ring"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true,
+      "title": "Find overlapping work"
+    },
+    "description": "Overlaps between live grafts, as JSON: same file (path), same symbol, merge conflicts, or tests that fail only when merged (behaviour). To be told when overlaps change, subscribe to the resource graft://radar/<graft> (or graft://radar for all).",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "check": {
+          "description": "Run the behaviour checks (speculative merges with the [radar] test) first.",
+          "type": "boolean"
+        },
+        "graft": {
+          "description": "Only overlaps involving this graft.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "graft_radar"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "readOnlyHint": false,
+      "title": "Land grafts in Root"
+    },
+    "description": "Merge grafts onto a branch of Root through the integrate queue: structural merge, test gate, one commit each. Changes Root's history, so it needs confirm: true unless dry_run.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Required (true) to land anything.",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "description": "Run every step except landing.",
+          "type": "boolean"
+        },
+        "message": {
+          "description": "Commit message.",
+          "type": "string"
+        },
+        "names": {
+          "description": "Grafts, in order.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "onto": {
+          "description": "Branch to land on.",
+          "type": "string"
+        },
+        "prune": {
+          "description": "Prune each graft once it has landed.",
+          "type": "boolean"
+        },
+        "update_checkout": {
+          "description": "Allow landing on the branch Root has checked out (fast-forwards Root's clean working tree).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "names"
+      ],
+      "type": "object"
+    },
+    "name": "graft_integrate"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "readOnlyHint": false,
+      "title": "Plan a task"
+    },
+    "description": "Split a task into an ordered DAG of grafts along the code's dependency graph, as JSON. The task names files and symbols in `code spans`. With apply, creates the grafts that are ready and records their claims.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "apply": {
+          "description": "Create the ready grafts.",
+          "type": "boolean"
+        },
+        "backend": {
+          "enum": [
+            "reflink",
+            "fuse",
+            "nfs"
+          ],
+          "type": "string"
+        },
+        "task": {
+          "description": "The task, as Markdown.",
+          "type": "string"
+        },
+        "task_file": {
+          "description": "Or a path to it.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "graft_plan"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "readOnlyHint": false,
+      "title": "Remove a graft"
+    },
+    "description": "Remove a graft. Refuses if work would be lost; force discards it and needs confirm: true.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Required (true) with force.",
+          "type": "boolean"
+        },
+        "force": {
+          "description": "Discard uncommitted or unintegrated work.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Graft name: lowercase letters, digits and hyphens, at most 40 characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "graft_prune"
+  }
+]
