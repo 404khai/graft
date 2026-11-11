@@ -95,8 +95,19 @@ enum Command {
     Gc(layers::GcArgs),
     /// Show or stop graftd, the daemon that serves virtual grafts.
     Daemon(daemon::Args),
+    /// Serve Graft's tools to an agent over MCP (stdio), for this Root.
+    Mcp(McpArgs),
     /// Report platform, filesystem, reflink and FUSE/NFS support.
     Doctor(doctor::Args),
+}
+
+/// Arguments for `graft mcp`.
+#[derive(Debug, clap::Args)]
+struct McpArgs {
+    /// The repository to serve (default: the current directory). MCP
+    /// clients do not all start servers in the project's directory.
+    #[arg(long, value_name = "PATH")]
+    root: Option<std::path::PathBuf>,
 }
 
 /// What a command prints: `stdout` as is, each warning on stderr.
@@ -193,6 +204,19 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Trust(args) => ok(layers::trust(&args, &env))?,
         Command::Gc(args) => ok(layers::gc(&args, &env))?,
         Command::Daemon(args) => ok(daemon::run(&args, &env))?,
+        Command::Mcp(args) => {
+            if let Some(root) = &args.root {
+                std::env::set_current_dir(root)
+                    .with_context(|| format!("entering {}", root.display()))?;
+            }
+            // Fail early, with a message the client shows, outside a Root.
+            let home = env.require_home()?;
+            graft_store::registry::locate(home, std::path::Path::new("."))?;
+            let bin = std::env::current_exe().context("finding the graft binary")?;
+            let cwd = std::env::current_dir().context("reading the current directory")?;
+            graft_mcp::serve_stdio(bin, cwd).map_err(|e| anyhow::anyhow!("MCP server: {e}"))?;
+            (Output::default(), ExitCode::SUCCESS)
+        }
         Command::Doctor(args) => {
             let (stdout, code) = doctor::run(&args, &env);
             (Output::stdout(stdout), code)
