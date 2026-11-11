@@ -1,6 +1,6 @@
 //! MCP server for Graft (ADR 0019).
 //!
-//! `graft mcp` serves the [`tools`] over stdio with the official Rust MCP
+//! `graft mcp` serves the [`tools()`] over stdio with the official Rust MCP
 //! SDK. Each call runs the `graft` binary itself with arguments built from
 //! the validated parameters ([`tools::invocation`]), so the tools behave
 //! exactly as the CLI does, safety checks included. Destructive calls need
