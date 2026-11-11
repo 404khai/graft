@@ -34,7 +34,9 @@ impl Lang {
         })
     }
 
-    fn grammar(self) -> tree_sitter::Language {
+    /// The tree-sitter grammar.
+    #[must_use]
+    pub fn grammar(self) -> tree_sitter::Language {
         match self {
             Self::Rust => tree_sitter_rust::LANGUAGE.into(),
             Self::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
@@ -145,7 +147,10 @@ fn classify(lang: Lang, node: Node<'_>, src: &[u8]) -> Def {
 
 /// Every definition in `src`, by qualified name, with its text. Repeated
 /// names (overloads, `#[cfg]` twins) get `#2`, `#3`... suffixes.
-fn definitions(lang: Lang, src: &[u8]) -> Option<BTreeMap<String, String>> {
+///
+/// `None` if `src` does not parse.
+#[must_use]
+pub fn definitions(lang: Lang, src: &[u8]) -> Option<BTreeMap<String, String>> {
     let mut parser = Parser::new();
     parser.set_language(&lang.grammar()).ok()?;
     let tree = parser.parse(src, None)?;
