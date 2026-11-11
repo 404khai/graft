@@ -1546,6 +1546,12 @@ dependencies = [
 [[package]]
 name = "graft-sched"
 version = "0.0.0"
+dependencies = [
+ "graft-radar",
+ "serde",
+ "tempfile",
+ "tree-sitter",
+]
 
 [[package]]
 name = "graft-store"
