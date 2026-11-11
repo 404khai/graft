@@ -105,5 +105,12 @@ B + E + G.
 - A refused write in a virtual graft is lost unless the writer retries
   (the error comes back from `close`, which many tools ignore); the
   verdict log is where an agent or person finds out why.
+- Admission judges file contents when they are journaled. A file emptied
+  in place is admitted, because `open(O_TRUNC)` then `write` can journal
+  the empty file first on NFS; its next contents are checked. Deleting or
+  renaming a claimed file is not checked at write time; integrate still
+  catches it (a deleted file changes all its symbols).
+- Claims fail open: if graftd cannot read the store, writes are admitted
+  with a warning rather than lost.
 - New: schema v10, `graft plan`, `graft claim`, `graft claims`; graft-fs
   gains an `Admission` hook that graftd fills from graft-sched.

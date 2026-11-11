@@ -1,6 +1,6 @@
 # On-disk format
 
-**Format version: 11** (metadata schema v9)
+**Format version: 12** (metadata schema v10)
 
 This file describes everything Graft persists. Any change to a structure
 below bumps the format version, adds a migration, and updates this file in
@@ -71,6 +71,7 @@ Entries in `roots/` whose name is not a valid Root ID, or that contain no
 | 9 | Schema v7: Blueprints (`grafts.blueprint`, table `graft_resources`; ADR 0015) | Schema v6 → v7 runs automatically on open; a table and a nullable column only added |
 | 10 | Adds `radar/` (scratch checkouts of Radar's behaviour checks) and schema v8 (`radar_checks`; ADR 0016) | Schema v7 → v8 runs automatically on open; a table only added |
 | 11 | Adds `integrate/` (scratch checkouts), `integrate.lock`, schema v9 (`integrations`) and transient `refs/graft/integrating/<graft-id>` refs in Root (ADR 0017) | Schema v8 → v9 runs automatically on open; a table only added |
+| 12 | Schema v10: `claims` and `admissions` (ADR 0018) | Schema v9 → v10 runs automatically on open; tables only added |
 
 ## `config.toml`
 
@@ -242,6 +243,26 @@ on the next mount after a crash.
 | `mode` | INTEGER | Its permission bits |
 
 Primary key: `(graft_id, seq)`.
+
+### `claims` (v10)
+
+`WITHOUT ROWID`. A graft's soft claim on a file or one symbol in it
+(ADR 0018). Only claims of `live` grafts count.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `graft_id` | TEXT | References `grafts`, `ON DELETE CASCADE` |
+| `path` | TEXT | Graft-relative path |
+| `symbol` | TEXT | Qualified symbol as Radar names it, or `''` for the whole file |
+| `plan` | TEXT | The plan that created it (16 hex digits of blake3 over Root's HEAD and the task), or `NULL` |
+| `plan_order` | INTEGER | The node's position in that plan, or `NULL` |
+
+Primary key `(graft_id, path, symbol)`; index `claims_by_path`.
+
+### `admissions` (v10)
+
+Refused writes: `id` (INTEGER PK, `AUTOINCREMENT`), `graft_name`, `path`,
+`verdict` (naming the holder), `at`.
 
 ### `integrations` (v9)
 
