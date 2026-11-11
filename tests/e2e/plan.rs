@@ -61,13 +61,14 @@ impl Fixture {
         String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr)
     }
 
-    fn task(&self) -> String {
-        fixtures().join("three-modules.md").display().to_string()
-    }
-
     fn path(&self, name: &str) -> PathBuf {
         PathBuf::from(self.ok(&["path", name]).trim())
     }
+}
+
+/// The fixture task's path.
+fn task() -> String {
+    fixtures().join("three-modules.md").display().to_string()
 }
 
 fn edit(file: &Path, from: &str, to: &str) {
@@ -79,7 +80,7 @@ fn edit(file: &Path, from: &str, to: &str) {
 #[test]
 fn plans_the_fixture_with_the_contract_first() {
     let f = Fixture::new();
-    let task = f.task();
+    let task = task();
     let text = f.ok(&["plan", &task]);
     let expected = "4 node(s), width 3:\n\
 1. contract (contract)\n     app/types.py\n\
@@ -97,7 +98,7 @@ fn plans_the_fixture_with_the_contract_first() {
 #[test]
 fn apply_creates_ready_nodes_and_claims_enforce_them() {
     let f = Fixture::new();
-    let task = f.task();
+    let task = task();
     // Only the contract is ready.
     let applied = f.ok(&["plan", &task, "--apply"]);
     assert!(
@@ -178,7 +179,7 @@ fn apply_creates_ready_nodes_and_claims_enforce_them() {
 #[test]
 fn a_later_node_is_queued_behind_an_earlier_one() {
     let f = Fixture::new();
-    let task = f.task();
+    let task = task();
     f.ok(&["plan", &task, "--apply"]);
     let contract = f.path("contract");
     edit(
