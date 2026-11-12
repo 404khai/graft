@@ -221,7 +221,7 @@ Status: done (PR #26, ADR 0018). Partitioning is Louvain in a fixed order with L
 
 ## Phase 15 — MCP server
 
-Status: in review (`feat/mcp-server`, ADR 0019). The server runs the `graft` binary for each tool (one implementation, so the MCP tools keep every CLI safety check); graftd is reached through the CLI as before. Radar events are MCP resource subscriptions (`graft://radar`, `graft://radar/<graft>`), not logging notifications, which the SDK deprecates (SEP-2577).
+Status: done (PR #27, ADR 0019). The server runs the `graft` binary for each tool (one implementation, so the MCP tools keep every CLI safety check); graftd is reached through the CLI as before. Radar events are MCP resource subscriptions (`graft://radar`, `graft://radar/<graft>`), not logging notifications, which the SDK deprecates (SEP-2577).
 
 - [x] An MCP client test harness can run the full cycle: plan → new → run → radar → integrate → prune.
   - `an_agent_runs_the_whole_cycle_over_mcp` drives `graft mcp` with raw JSON-RPC over stdio: plan, two grafts, `graft_run` edits (and a refused write outside the graft), Radar as a tool, a resource and a subscription (`notifications/resources/updated` arrives), a dry-run and a real integrate, and prunes.
@@ -232,9 +232,13 @@ Status: in review (`feat/mcp-server`, ADR 0019). The server runs the `graft` bin
 
 ## Phase 16 — Materialize, hardening and first release
 
-Status: not started
+Status: in review (`chore/first-release`, ADR 0020). Chunk-level copy-up is not done: no measurement shows whole-file copy-up as a cost (it stays with the deferred performance work). Publishing 0.1.0 waits for the maintainer to choose a licence.
 
-- [ ] Materialize round-trips: materialize → edit → re-import produces the expected delta.
+- [x] Materialize round-trips: materialize → edit → re-import produces the expected delta.
+  - `materialize_edit_and_import_round_trips`: a graft materialized to a directory, edited as plain files (change, add, delete, `chmod +x`, symlink) and imported into a fresh graft and back into the original gives exactly the expected changes in both; a branch round-trips the same way; importing an unchanged export changes nothing. `graft import` is the re-import command.
 - [ ] 24 h of fuzzing with no crashes.
-- [ ] README states measured results, not targets.
+  - Five cargo-fuzz targets (`fuzz/`): the FUSE/NFS request handlers (with an op-log-replay oracle), op log decoding, every `graft.toml` parser, templates, and tree-sitter analysis. The `Fuzz` workflow runs each for ~24.5 h; see the PR for its state.
+- [x] README states measured results, not targets.
+  - "Measured results" quotes the committed benchmark run (42113580319), including where grafts lose to worktrees.
 - [ ] Release workflow produces signed binaries for both platforms.
+  - `.github/workflows/release.yml` builds Linux x86_64/aarch64 and macOS arm64 archives and signs them with GitHub artifact attestations (Sigstore); a tag creates a draft release with a Homebrew formula. See the PR for the run.
