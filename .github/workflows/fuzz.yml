@@ -39,7 +39,9 @@ jobs:
         working-directory: fuzz
         run: |
           mkdir -p corpus/${{ matrix.target }}
-          cargo fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} -- \
+          # The prebuilt cargo-fuzz is a musl binary and would default to musl,
+          # which AddressSanitizer cannot instrument.
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} -- \
             -max_total_time=$SECONDS_PER_ROUND -rss_limit_mb=4096 -print_final_stats=1
       - if: always()
         uses: actions/upload-artifact@v7
@@ -78,7 +80,9 @@ jobs:
         working-directory: fuzz
         run: |
           mkdir -p corpus/${{ matrix.target }}
-          cargo fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} -- \
+          # The prebuilt cargo-fuzz is a musl binary and would default to musl,
+          # which AddressSanitizer cannot instrument.
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} -- \
             -max_total_time=$SECONDS_PER_ROUND -rss_limit_mb=4096 -print_final_stats=1
       - if: always()
         uses: actions/upload-artifact@v7
@@ -117,7 +121,9 @@ jobs:
         working-directory: fuzz
         run: |
           mkdir -p corpus/${{ matrix.target }}
-          cargo fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} -- \
+          # The prebuilt cargo-fuzz is a musl binary and would default to musl,
+          # which AddressSanitizer cannot instrument.
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} -- \
             -max_total_time=$SECONDS_PER_ROUND -rss_limit_mb=4096 -print_final_stats=1
       - if: always()
         uses: actions/upload-artifact@v7
@@ -156,7 +162,9 @@ jobs:
         working-directory: fuzz
         run: |
           mkdir -p corpus/${{ matrix.target }}
-          cargo fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} -- \
+          # The prebuilt cargo-fuzz is a musl binary and would default to musl,
+          # which AddressSanitizer cannot instrument.
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} -- \
             -max_total_time=$SECONDS_PER_ROUND -rss_limit_mb=4096 -print_final_stats=1
       - if: always()
         uses: actions/upload-artifact@v7
@@ -195,7 +203,9 @@ jobs:
         working-directory: fuzz
         run: |
           mkdir -p corpus/${{ matrix.target }}
-          cargo fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} -- \
+          # The prebuilt cargo-fuzz is a musl binary and would default to musl,
+          # which AddressSanitizer cannot instrument.
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} -- \
             -max_total_time=$SECONDS_PER_ROUND -rss_limit_mb=4096 -print_final_stats=1
       - if: always()
         uses: actions/upload-artifact@v7
