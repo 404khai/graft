@@ -1,9 +1,11 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "bench"]
+# Fuzz targets build with cargo-fuzz on nightly (fuzz/rust-toolchain.toml).
+exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
 repository = "https://github.com/404khai/graft"

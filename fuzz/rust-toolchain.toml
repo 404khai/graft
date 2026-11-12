@@ -1,0 +1,4 @@
+# libFuzzer instrumentation (-Zsanitizer) needs nightly; the workspace
+# itself stays on the pinned stable toolchain.
+[toolchain]
+channel = "nightly"
