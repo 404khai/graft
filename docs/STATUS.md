@@ -240,5 +240,5 @@ Status: in review (`chore/first-release`, ADR 0020). Chunk-level copy-up is not 
   - Five cargo-fuzz targets (`fuzz/`): the FUSE/NFS request handlers (with an op-log-replay oracle), op log decoding, every `graft.toml` parser, templates, and tree-sitter analysis. The `Fuzz` workflow runs each for ~24.5 h; see the PR for its state.
 - [x] README states measured results, not targets.
   - "Measured results" quotes the committed benchmark run (42113580319), including where grafts lose to worktrees.
-- [ ] Release workflow produces signed binaries for both platforms.
-  - `.github/workflows/release.yml` builds Linux x86_64/aarch64 and macOS arm64 archives and signs them with GitHub artifact attestations (Sigstore); a tag creates a draft release with a Homebrew formula. See the PR for the run.
+- [x] Release workflow produces signed binaries for both platforms.
+  - `.github/workflows/release.yml` builds Linux x86_64/aarch64 and macOS arm64 archives and signs them with GitHub artifact attestations (Sigstore); a tag creates a draft release with a Homebrew formula. Release run 43306915013 built all three; `gh attestation verify graft-0.1.0-aarch64-apple-darwin.tar.gz --repo 404khai/graft` succeeds (and fails for another repository), and the binary reports `graft 0.1.0`. Not notarised by Apple (needs the maintainer's Developer ID).
