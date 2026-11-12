@@ -243,7 +243,14 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .badges { display: flex; align-items: center; gap: 20px; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: #a9b2aa; }
 .badges i { font-style: normal; }
 .badge-box { border: 1px solid #2c342e; padding: 10px 14px; }
-.blocks { color: #2ea050; letter-spacing: 0; margin-right: 6px; }
+.blocks { display: inline-flex; gap: 5px; margin-right: 10px; vertical-align: -1px; }
+.blocks b { width: 9px; height: 9px; background: #1f7a3a; animation: block-load 1.5s steps(1, end) infinite; }
+.blocks b:nth-child(2) { animation-delay: .5s; }
+.blocks b:nth-child(3) { animation-delay: 1s; }
+@keyframes block-load { 0% { background: var(--sprout); box-shadow: 0 0 6px rgba(184, 242, 140, .6); } 33.4%, 100% { background: #1f7a3a; box-shadow: none; } }
+@media (prefers-reduced-motion: reduce) { .blocks b { animation: none; } }
+.footer-author { color: var(--sprout); text-decoration: underline; text-underline-offset: 3px; }
+.footer-author:hover { color: #fff; }
 .badge-git { display: inline-flex; align-items: center; gap: 10px; }
 .badge-git i { display: grid; place-items: center; width: 20px; height: 20px; background: #2ea050; color: #0c0f0d; font-weight: 700; letter-spacing: 0; text-transform: none; }
 

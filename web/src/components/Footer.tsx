@@ -26,9 +26,9 @@ export function Footer() {
         <span aria-hidden="true">graft</span>
       </div>
       <div className="footer-bar">
-        <div className="footer-meta"><span>© 2026 Graft contributors</span><span>Linux · macOS</span></div>
+        <div className="footer-meta"><span>© 2026 built by <a className="footer-author" href="https://404khai.vercel.app">404khai</a></span><span>Linux · macOS</span></div>
         <div className="badges">
-          <span className="badge-box"><i className="blocks">■■■■</i> 0.1.0 coming soon</span>
+          <span className="badge-box"><i className="blocks" aria-hidden="true"><b /><b /><b /></i> 0.1.0 coming soon</span>
           <span className="badge-git"><i>g</i> Built on plain git</span>
         </div>
       </div>
