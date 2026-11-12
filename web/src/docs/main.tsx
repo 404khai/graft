@@ -7,7 +7,9 @@ import { BounceSidebar } from "../components/nexvyn/BounceSidebar";
 import { NavigationCompass } from "../components/nexvyn/NavigationCompass";
 import { ScrollIndicator } from "../components/nexvyn/ScrollIndicator";
 import { BlueprintSheet } from "../components/art/BlueprintSheet";
+import { McpLink } from "../components/art/McpLink";
 import { RadarScope } from "../components/art/RadarScope";
+import { TreePuzzle } from "../components/art/TreePuzzle";
 import { GH, PAGES, type DocPage } from "./content";
 import "../styles.css";
 import "./docs.css";
@@ -33,6 +35,9 @@ function TileArt({ page }: { page: DocPage }) {
       </RadarScope>
     );
   if (page.id === "blueprints") return <BlueprintSheet className="doc-tile-blueprint" />;
+  if (page.id === "integrate") return <TreePuzzle />;
+  if (page.id === "mcp") return <McpLink />;
+  if (page.id === "commands") return <img className="doc-tile-art art-wide" src="/branch-code.svg" alt="" />;
   if (page.art === "graft") return <GraftLogo className="doc-tile-art" title="" />;
   return <img className="doc-tile-art" src={`/${page.art}.svg`} alt="" />;
 }
@@ -92,7 +97,7 @@ function Page({ page }: { page: DocPage }) {
   return (
     <>
       <header className="doc-page-head">
-        {page.id === "radar" || page.id === "blueprints" ? (
+        {["radar", "blueprints", "integrate", "mcp", "commands"].includes(page.id) ? (
           <div className="doc-page-art"><TileArt page={page} /></div>
         ) : (
           <Flora kind={page.art === "graft" ? "leaf2" : page.art} className="doc-page-peek" style={{ "--r": "-14deg" }} />
