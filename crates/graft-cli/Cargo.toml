@@ -26,6 +26,7 @@ graft-core.workspace = true
 graft-daemon.workspace = true
 graft-fs.workspace = true
 graft-integrate.workspace = true
+graft-mcp.workspace = true
 graft-radar.workspace = true
 graft-root.workspace = true
 graft-sandbox.workspace = true

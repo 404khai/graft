@@ -208,7 +208,7 @@ Status: done (PR #25, ADR 0017). Integration happens in a scratch reflink checko
 
 ## Phase 14 — Scheduler
 
-Status: in review (`feat/scheduler`, ADR 0018). Partitioning is Louvain in a fixed order with Leiden's connectivity refinement (no new dependency). Claims are enforced at write time for virtual grafts (graftd's admission hook) and at integrate time for reflink grafts, whose writes never pass through Graft; `graft claim` asks explicitly.
+Status: done (PR #26, ADR 0018). Partitioning is Louvain in a fixed order with Leiden's connectivity refinement (no new dependency). Claims are enforced at write time for virtual grafts (graftd's admission hook) and at integrate time for reflink grafts, whose writes never pass through Graft; `graft claim` asks explicitly.
 
 - [x] On a fixture task touching three modules, the plan places tightly coupled files in the same node.
   - `tests/fixtures/tasks/three-modules.md` over the project `three-modules.sh` writes: billing, users and search each land in one node (`coupled_files_share_a_node_and_the_hub_goes_first`, `plans_the_fixture_with_the_contract_first`).
@@ -221,11 +221,14 @@ Status: in review (`feat/scheduler`, ADR 0018). Partitioning is Louvain in a fix
 
 ## Phase 15 — MCP server
 
-Status: not started
+Status: in review (`feat/mcp-server`, ADR 0019). The server runs the `graft` binary for each tool (one implementation, so the MCP tools keep every CLI safety check); graftd is reached through the CLI as before. Radar events are MCP resource subscriptions (`graft://radar`, `graft://radar/<graft>`), not logging notifications, which the SDK deprecates (SEP-2577).
 
-- [ ] An MCP client test harness can run the full cycle: plan → new → run → radar → integrate → prune.
-- [ ] Tool schemas are documented and covered by snapshot tests.
-- [ ] Destructive tools refuse without confirmation.
+- [x] An MCP client test harness can run the full cycle: plan → new → run → radar → integrate → prune.
+  - `an_agent_runs_the_whole_cycle_over_mcp` drives `graft mcp` with raw JSON-RPC over stdio: plan, two grafts, `graft_run` edits (and a refused write outside the graft), Radar as a tool, a resource and a subscription (`notifications/resources/updated` arrives), a dry-run and a real integrate, and prunes.
+- [x] Tool schemas are documented and covered by snapshot tests.
+  - `tool_schemas_are_stable` (insta) pins all eleven schemas; `docs/mcp.md` is generated from them.
+- [x] Destructive tools refuse without confirmation.
+  - `graft_integrate` (unless `dry_run`) and `graft_prune` with `force` return a tool error asking for `confirm: true`; unit tests and the end-to-end cycle check both.
 
 ## Phase 16 — Materialize, hardening and first release
 
