@@ -177,12 +177,6 @@ Contributors, human or agent, start with [AGENTS.md](AGENTS.md).
 
 ## License
 
-Licensed under either of
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE)), or
-- MIT license ([LICENSE-MIT](LICENSE-MIT)),
-
-at your option. Unless you explicitly state otherwise, any contribution
-intentionally submitted for inclusion in Graft, as defined in the Apache-2.0
-license, shall be dual licensed as above, without any additional terms or
-conditions.
+MIT: see [LICENSE](LICENSE). You may use, change and redistribute Graft,
+including in commercial work, as long as copies keep the copyright notice and
+the licence text. Contributions are accepted under the same licence.

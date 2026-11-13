@@ -26,7 +26,7 @@ allow = [
 confidence-threshold = 0.9
 
 [licenses.private]
-# Workspace crates are checked too: they are MIT OR Apache-2.0.
+# Workspace crates are checked too: they are MIT.
 ignore = false
 
 [bans]
