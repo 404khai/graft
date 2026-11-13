@@ -232,12 +232,12 @@ Status: done (PR #27, ADR 0019). The server runs the `graft` binary for each too
 
 ## Phase 16 — Materialize, hardening and first release
 
-Status: in review (`chore/first-release`, ADR 0020). Chunk-level copy-up is not done: no measurement shows whole-file copy-up as a cost (it stays with the deferred performance work). Publishing 0.1.0 waits for the maintainer to choose a licence.
+Status: in review (`chore/first-release`, ADR 0020). Chunk-level copy-up is not done: no measurement shows whole-file copy-up as a cost (it stays with the deferred performance work). Licensed MIT OR Apache-2.0 (the maintainer chose MIT; the Apache-2.0 alternative adds a patent grant, as is usual for Rust).
 
 - [x] Materialize round-trips: materialize → edit → re-import produces the expected delta.
   - `materialize_edit_and_import_round_trips`: a graft materialized to a directory, edited as plain files (change, add, delete, `chmod +x`, symlink) and imported into a fresh graft and back into the original gives exactly the expected changes in both; a branch round-trips the same way; importing an unchanged export changes nothing. `graft import` is the re-import command.
-- [ ] 24 h of fuzzing with no crashes.
-  - Five cargo-fuzz targets (`fuzz/`): the FUSE/NFS request handlers (with an op-log-replay oracle), op log decoding, every `graft.toml` parser, templates, and tree-sitter analysis. The `Fuzz` workflow runs each for ~24.5 h; see the PR for its state.
+- [x] 24 h of fuzzing with no crashes.
+  - Five cargo-fuzz targets (`fuzz/`): the FUSE/NFS request handlers (with an op-log-replay oracle), op log decoding, every `graft.toml` parser, templates, and tree-sitter analysis. `Fuzz` run 43310054085: each target fuzzed 24.5 h (five rounds of 17,641 s, corpus carried over) with no crash: 3.8 M request sequences, 4.6 M op log row sets, 58.8 M `graft.toml` texts, 16.7 M source pairs and 658.6 M templates.
 - [x] README states measured results, not targets.
   - "Measured results" quotes the committed benchmark run (42113580319), including where grafts lose to worktrees.
 - [x] Release workflow produces signed binaries for both platforms.

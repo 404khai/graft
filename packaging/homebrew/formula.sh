@@ -16,6 +16,7 @@ cat <<RUBY
 class Graft < Formula
   desc "Copy-on-write workspaces for parallel coding agents"
   homepage "https://github.com/$repo"
+  license any_of: ["MIT", "Apache-2.0"]
   version "$version"
 
   on_macos do

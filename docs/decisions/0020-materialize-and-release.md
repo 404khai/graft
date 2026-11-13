@@ -73,4 +73,5 @@ maintainer reviews and publishes, and publishes the formula in a tap.
   `graft` until it is cleared (`xattr -d com.apple.quarantine`) or built
   from source. C can be added once the maintainer has the certificates.
 - No macOS x86_64 build (no supported hosted runner); build from source.
-- Publishing needs a licence, which the maintainer has not chosen yet.
+- Graft is licensed MIT OR Apache-2.0; release archives include both texts
+  and the Homebrew formula declares both.
