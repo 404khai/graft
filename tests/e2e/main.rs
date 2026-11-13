@@ -12,6 +12,7 @@ mod doctor;
 mod grafts;
 mod integrate;
 mod layers;
+mod materialize;
 mod mcp;
 mod plan;
 mod radar;

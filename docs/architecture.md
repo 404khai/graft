@@ -54,15 +54,27 @@ User-facing text never calls a graft a "worktree", "sandbox" or "clone".
 ## Components
 
 ```
-graft (CLI) ──┐                    ┌── graft-mcp (MCP server, for agents)
-              └── JSON-RPC over ───┤
-                  a Unix socket    └── graftd (daemon: owns mounts)
-                                            │
-        ┌───────────────┬───────────────┬───┴───────────┬──────────────┐
-    graft-fs       graft-store      graft-root     graft-radar   graft-integrate
-  (reflink, FUSE,  (SQLite, blobs,  (gix object    (overlaps)    (queue, merge,
-   NFS backends)    op log)          store, layers)                test gate)
+ agents (MCP clients) ──stdio──> graft mcp (graft-mcp) ──runs──┐
+ people and scripts ───────────────────────────────────────────┤
+                                                               v
+                                                     graft (graft-cli)
+           ┌──────────────┬───────────────┬──────────────┬─────┴──────────┬──────────────┐
+      graft-sched    graft-integrate   graft-radar   graft-blueprint  graft-sandbox   JSON-RPC over
+      (plans,        (queue, merge,    (overlaps)    (graft.toml,     (Landlock,      a Unix socket
+       claims)        test gate)                      runtimes)        Seatbelt)            │
+           └──────────────┴──────┬────────┴──────────────┘                                  v
+                                 │                                         graftd (graft-daemon):
+                  graft-fs (reflink, FUSE and NFS backends)  <─────────── virtual mounts, claims
+                  graft-store (SQLite metadata, blobs, op log)             admission
+                  graft-root (gix object store, layer cache)
+                  graft-core (IDs, errors, $GRAFT_HOME, config)
 ```
+
+A reflink graft is a real working tree; the CLI does everything for it. A
+virtual graft is served by graftd over FUSE (Linux) or NFS (macOS) from Root's
+object store plus the graft's delta, and every write is journaled in the op
+log. Each phase's design is an ADR in [decisions/](decisions/); the state of
+every acceptance criterion is in [STATUS.md](STATUS.md).
 
 ### Crates
 
@@ -76,13 +88,13 @@ never below.
 | `graft-store` | Per-Root SQLite metadata, delta blob store, op log |
 | `graft-fs` | `FsBackend` trait; reflink, FUSE and NFS backends; host probing |
 | `graft-sandbox` | Process confinement (Landlock + namespaces, Seatbelt) |
-| `graft-blueprint` | `graft.toml` parsing and environment provisioning |
-| `graft-radar` | Overlap index, symbol mapping, speculative merges |
-| `graft-integrate` | Integrate queue, rebase, structural merge, test gate |
-| `graft-sched` | Dependency graph, partitioning, claims |
-| `graft-daemon` | `graftd`: owns mounts, serves IPC |
-| `graft-mcp` | MCP server exposing Graft to agents |
-| `graft-cli` | The `graft` binary |
+| `graft-blueprint` | `graft.toml` parsing: layers, blueprints, sandbox, radar, integrate; templates |
+| `graft-radar` | Path and symbol overlaps (tree-sitter) |
+| `graft-integrate` | The file merge (line, then Mergiraf) used by integrate and rebase |
+| `graft-sched` | Dependency graph, partitioning, plans, claims admission |
+| `graft-daemon` | `graftd`: owns virtual mounts, serves IPC, admits writes against claims |
+| `graft-mcp` | MCP server: Graft's commands as tools, Radar as resources |
+| `graft-cli` | The `graft` binary: every command, including Radar's checks, the integrate queue and `graft mcp` |
 
 `unsafe` is allowed only in `graft-fs` and `graft-sandbox`, where it is denied
 at the crate root and allowed per module with a `SAFETY` comment on every

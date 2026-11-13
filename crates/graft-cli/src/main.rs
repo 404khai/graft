@@ -11,6 +11,7 @@ mod doctor;
 mod grafts;
 mod integrate;
 mod layers;
+mod materialize;
 mod plan;
 mod radar;
 mod rings;
@@ -62,6 +63,10 @@ enum Command {
     Log(grafts::LogArgs),
     /// Remove a graft. Refuses if work would be lost, unless --force.
     Prune(grafts::PruneArgs),
+    /// Write a graft's files out as a plain directory or a branch in Root.
+    Materialize(materialize::MaterializeArgs),
+    /// Make a graft's files match a directory or branch (after materialize).
+    Import(materialize::ImportArgs),
     /// Fork a graft in constant time: same base, a copy of its delta.
     Bud(rings::BudArgs),
     /// Checkpoint a graft's delta as a named ring, or list its rings.
@@ -189,6 +194,8 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Diff(args) => ok(grafts::diff(&args, &env))?,
         Command::Log(args) => ok(grafts::log(&args, &env))?,
         Command::Prune(args) => ok(grafts::prune(&args, &env))?,
+        Command::Materialize(args) => ok(materialize::materialize(&args, &env))?,
+        Command::Import(args) => ok(materialize::import(&args, &env))?,
         Command::Bud(args) => ok(rings::bud(&args, &env))?,
         Command::Ring(args) => ok(rings::ring(&args, &env))?,
         Command::Rewind(args) => ok(rings::rewind(&args, &env))?,

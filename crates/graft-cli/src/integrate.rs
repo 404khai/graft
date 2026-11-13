@@ -77,7 +77,7 @@ pub(crate) struct RebaseArgs {
 }
 
 /// Runs `git` in `dir` and returns its stdout, trimmed.
-fn git(dir: &Path, args: &[&str]) -> anyhow::Result<String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> anyhow::Result<String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -156,7 +156,11 @@ fn branch_head(ctx: &Ctx, branch: &str) -> anyhow::Result<CommitId> {
 }
 
 /// A graft's changes against its base, with contents.
-fn changes(ctx: &Ctx, record: &GraftRecord, out: &mut Output) -> anyhow::Result<Vec<FileDiff>> {
+pub(crate) fn changes(
+    ctx: &Ctx,
+    record: &GraftRecord,
+    out: &mut Output,
+) -> anyhow::Result<Vec<FileDiff>> {
     let path = ctx.backend.path(&record.name);
     if record.backend.is_virtual() {
         return crate::virtual_grafts::diffs(
@@ -172,7 +176,7 @@ fn changes(ctx: &Ctx, record: &GraftRecord, out: &mut Output) -> anyhow::Result<
 }
 
 /// The permission bits of `path` in the graft, if it is a file there.
-fn graft_mode(ctx: &Ctx, record: &GraftRecord, path: &Path) -> Option<u32> {
+pub(crate) fn graft_mode(ctx: &Ctx, record: &GraftRecord, path: &Path) -> Option<u32> {
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::symlink_metadata(ctx.backend.path(&record.name).join(path))
         .ok()
@@ -263,7 +267,7 @@ fn apply(
 
 /// The contents of `path` (a symlink's target), and whether it is a
 /// symlink; `None` if absent.
-fn read_entry(path: &Path) -> anyhow::Result<Option<(Vec<u8>, bool)>> {
+pub(crate) fn read_entry(path: &Path) -> anyhow::Result<Option<(Vec<u8>, bool)>> {
     use std::os::unix::ffi::OsStrExt as _;
     let meta = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
@@ -280,7 +284,7 @@ fn read_entry(path: &Path) -> anyhow::Result<Option<(Vec<u8>, bool)>> {
 
 /// Replaces `path` with a file or a symlink (`contents` is its target), or
 /// removes it if `contents` is `None`.
-fn write_entry(path: &Path, contents: Option<&[u8]>, link: bool) -> anyhow::Result<()> {
+pub(crate) fn write_entry(path: &Path, contents: Option<&[u8]>, link: bool) -> anyhow::Result<()> {
     use std::os::unix::ffi::OsStrExt as _;
     match std::fs::symlink_metadata(path) {
         Ok(m) if m.is_dir() => bail!("{} is a directory", path.display()),
@@ -304,7 +308,7 @@ fn write_entry(path: &Path, contents: Option<&[u8]>, link: bool) -> anyhow::Resu
 }
 
 /// Whether `path` is a symlink in the graft.
-fn graft_is_link(ctx: &Ctx, record: &GraftRecord, path: &Path) -> bool {
+pub(crate) fn graft_is_link(ctx: &Ctx, record: &GraftRecord, path: &Path) -> bool {
     std::fs::symlink_metadata(ctx.backend.path(&record.name).join(path))
         .is_ok_and(|m| m.file_type().is_symlink())
 }

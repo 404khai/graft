@@ -4,6 +4,7 @@ description = "Overlap index, symbol mapping and speculative merges"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 repository.workspace = true
 publish.workspace = true
 

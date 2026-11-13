@@ -221,7 +221,7 @@ Status: done (PR #26, ADR 0018). Partitioning is Louvain in a fixed order with L
 
 ## Phase 15 — MCP server
 
-Status: in review (`feat/mcp-server`, ADR 0019). The server runs the `graft` binary for each tool (one implementation, so the MCP tools keep every CLI safety check); graftd is reached through the CLI as before. Radar events are MCP resource subscriptions (`graft://radar`, `graft://radar/<graft>`), not logging notifications, which the SDK deprecates (SEP-2577).
+Status: done (PR #27, ADR 0019). The server runs the `graft` binary for each tool (one implementation, so the MCP tools keep every CLI safety check); graftd is reached through the CLI as before. Radar events are MCP resource subscriptions (`graft://radar`, `graft://radar/<graft>`), not logging notifications, which the SDK deprecates (SEP-2577).
 
 - [x] An MCP client test harness can run the full cycle: plan → new → run → radar → integrate → prune.
   - `an_agent_runs_the_whole_cycle_over_mcp` drives `graft mcp` with raw JSON-RPC over stdio: plan, two grafts, `graft_run` edits (and a refused write outside the graft), Radar as a tool, a resource and a subscription (`notifications/resources/updated` arrives), a dry-run and a real integrate, and prunes.
@@ -232,9 +232,13 @@ Status: in review (`feat/mcp-server`, ADR 0019). The server runs the `graft` bin
 
 ## Phase 16 — Materialize, hardening and first release
 
-Status: not started
+Status: in review (`chore/first-release`, ADR 0020). Chunk-level copy-up is not done: no measurement shows whole-file copy-up as a cost (it stays with the deferred performance work). Licensed MIT OR Apache-2.0 (the maintainer chose MIT; the Apache-2.0 alternative adds a patent grant, as is usual for Rust).
 
-- [ ] Materialize round-trips: materialize → edit → re-import produces the expected delta.
-- [ ] 24 h of fuzzing with no crashes.
-- [ ] README states measured results, not targets.
-- [ ] Release workflow produces signed binaries for both platforms.
+- [x] Materialize round-trips: materialize → edit → re-import produces the expected delta.
+  - `materialize_edit_and_import_round_trips`: a graft materialized to a directory, edited as plain files (change, add, delete, `chmod +x`, symlink) and imported into a fresh graft and back into the original gives exactly the expected changes in both; a branch round-trips the same way; importing an unchanged export changes nothing. `graft import` is the re-import command.
+- [x] 24 h of fuzzing with no crashes.
+  - Five cargo-fuzz targets (`fuzz/`): the FUSE/NFS request handlers (with an op-log-replay oracle), op log decoding, every `graft.toml` parser, templates, and tree-sitter analysis. `Fuzz` run 43310054085: each target fuzzed 24.5 h (five rounds of 17,641 s, corpus carried over) with no crash: 3.8 M request sequences, 4.6 M op log row sets, 58.8 M `graft.toml` texts, 16.7 M source pairs and 658.6 M templates.
+- [x] README states measured results, not targets.
+  - "Measured results" quotes the committed benchmark run (42113580319), including where grafts lose to worktrees.
+- [x] Release workflow produces signed binaries for both platforms.
+  - `.github/workflows/release.yml` builds Linux x86_64/aarch64 and macOS arm64 archives and signs them with GitHub artifact attestations (Sigstore); a tag creates a draft release with a Homebrew formula. Release run 43306915013 built all three; `gh attestation verify graft-0.1.0-aarch64-apple-darwin.tar.gz --repo 404khai/graft` succeeds (and fails for another repository), and the binary reports `graft 0.1.0`. Not notarised by Apple (needs the maintainer's Developer ID).

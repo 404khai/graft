@@ -1,0 +1,81 @@
+name: Release
+
+# Builds and signs release archives. On a v* tag it also creates a draft
+# GitHub release with the archives, their checksums and the Homebrew
+# formula; a maintainer reviews and publishes it. Label a pull request
+# `release` to build and sign without releasing.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    types: [labeled, synchronize]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'release')
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked -p graft-cli -p graft-daemon
+      - name: Package
+        id: package
+        shell: bash
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="graft-cli") | .version')
+          name="graft-$version-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp target/release/graft target/release/graftd README.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
+          ./target/release/graft --version
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
+          echo "archive=dist/$name.tar.gz" >> "$GITHUB_OUTPUT"
+      # Sigstore-signed build provenance: verify with
+      # `gh attestation verify <archive> --repo 404khai/graft`.
+      - uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: ${{ steps.package.outputs.archive }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: graft-${{ matrix.target }}
+          path: dist/*.tar.gz*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Homebrew formula
+        run: packaging/homebrew/formula.sh "${GITHUB_REF_NAME#v}" dist > dist/graft.rb
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --draft --verify-tag \
+            --title "Graft $GITHUB_REF_NAME" \
+            --notes "See README.md for measured results and docs/STATUS.md for what this release covers. Archives are signed with GitHub artifact attestations; verify one with: gh attestation verify ARCHIVE --repo ${{ github.repository }}"

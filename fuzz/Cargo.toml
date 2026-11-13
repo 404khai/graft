@@ -1,0 +1,58 @@
+[package]
+name = "graft-fuzz"
+description = "Fuzz targets for Graft (cargo fuzz; nightly)"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1.5.0", features = ["derive"] }
+graft-blueprint = { path = "../crates/graft-blueprint" }
+graft-core = { path = "../crates/graft-core" }
+graft-fs = { path = "../crates/graft-fs" }
+graft-radar = { path = "../crates/graft-radar" }
+graft-root = { path = "../crates/graft-root" }
+graft-sched = { path = "../crates/graft-sched" }
+graft-store = { path = "../crates/graft-store" }
+libfuzzer-sys = "0.4.13"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+tempfile = "3.27.0"
+
+[[bin]]
+name = "fs_requests"
+path = "fuzz_targets/fs_requests.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "oplog_rows"
+path = "fuzz_targets/oplog_rows.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "graft_toml"
+path = "fuzz_targets/graft_toml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "templates"
+path = "fuzz_targets/templates.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "source_analysis"
+path = "fuzz_targets/source_analysis.rs"
+test = false
+doc = false
+bench = false

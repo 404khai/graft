@@ -26,8 +26,8 @@ allow = [
 confidence-threshold = 0.9
 
 [licenses.private]
-# Workspace crates are `publish = false` and not yet licensed; see README.
-ignore = true
+# Workspace crates are checked too: they are MIT OR Apache-2.0.
+ignore = false
 
 [bans]
 multiple-versions = "warn"

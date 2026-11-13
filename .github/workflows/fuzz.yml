@@ -1,0 +1,221 @@
+name: Fuzz
+
+# Each fuzz target runs for ~24.5 hours: five rounds of ~4.9 h (hosted jobs
+# stop at 6 h), each round continuing from the previous round's corpus.
+# Targets run in parallel. A crash fails the run and uploads the input.
+# Start it with the `fuzz` label on a pull request, or by hand.
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds per target per round
+        default: "17640"
+
+permissions:
+  contents: read
+
+env:
+  SECONDS_PER_ROUND: ${{ inputs.seconds || '17640' }}
+
+jobs:
+  round-1:
+    if: github.event_name != 'pull_request' || github.event.label.name == 'fuzz'
+    name: fuzz round 1 (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fs_requests, oplog_rows, graft_toml, templates, source_analysis]
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install nightly --profile minimal
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - name: Fuzz
+        working-directory: fuzz
+        run: |
+          mkdir -p corpus/${{ matrix.target }}
+          # The prebuilt cargo-fuzz is a musl binary and would default to musl,
+          # which AddressSanitizer cannot instrument.
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} -- \
+            -max_total_time=$SECONDS_PER_ROUND -rss_limit_mb=4096 -print_final_stats=1
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: corpus-1-${{ matrix.target }}
+          path: fuzz/corpus/${{ matrix.target }}
+          if-no-files-found: ignore
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: crash-1-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+
+  round-2:
+    if: github.event_name != 'pull_request' || github.event.label.name == 'fuzz'
+    needs: round-1
+    name: fuzz round 2 (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fs_requests, oplog_rows, graft_toml, templates, source_analysis]
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install nightly --profile minimal
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: actions/download-artifact@v7
+        with:
+          name: corpus-1-${{ matrix.target }}
+          path: fuzz/corpus/${{ matrix.target }}
+      - name: Fuzz
+        working-directory: fuzz
+        run: |
+          mkdir -p corpus/${{ matrix.target }}
+          # The prebuilt cargo-fuzz is a musl binary and would default to musl,
+          # which AddressSanitizer cannot instrument.
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} -- \
+            -max_total_time=$SECONDS_PER_ROUND -rss_limit_mb=4096 -print_final_stats=1
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: corpus-2-${{ matrix.target }}
+          path: fuzz/corpus/${{ matrix.target }}
+          if-no-files-found: ignore
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: crash-2-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+
+  round-3:
+    if: github.event_name != 'pull_request' || github.event.label.name == 'fuzz'
+    needs: round-2
+    name: fuzz round 3 (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fs_requests, oplog_rows, graft_toml, templates, source_analysis]
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install nightly --profile minimal
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: actions/download-artifact@v7
+        with:
+          name: corpus-2-${{ matrix.target }}
+          path: fuzz/corpus/${{ matrix.target }}
+      - name: Fuzz
+        working-directory: fuzz
+        run: |
+          mkdir -p corpus/${{ matrix.target }}
+          # The prebuilt cargo-fuzz is a musl binary and would default to musl,
+          # which AddressSanitizer cannot instrument.
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} -- \
+            -max_total_time=$SECONDS_PER_ROUND -rss_limit_mb=4096 -print_final_stats=1
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: corpus-3-${{ matrix.target }}
+          path: fuzz/corpus/${{ matrix.target }}
+          if-no-files-found: ignore
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: crash-3-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+
+  round-4:
+    if: github.event_name != 'pull_request' || github.event.label.name == 'fuzz'
+    needs: round-3
+    name: fuzz round 4 (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fs_requests, oplog_rows, graft_toml, templates, source_analysis]
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install nightly --profile minimal
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: actions/download-artifact@v7
+        with:
+          name: corpus-3-${{ matrix.target }}
+          path: fuzz/corpus/${{ matrix.target }}
+      - name: Fuzz
+        working-directory: fuzz
+        run: |
+          mkdir -p corpus/${{ matrix.target }}
+          # The prebuilt cargo-fuzz is a musl binary and would default to musl,
+          # which AddressSanitizer cannot instrument.
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} -- \
+            -max_total_time=$SECONDS_PER_ROUND -rss_limit_mb=4096 -print_final_stats=1
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: corpus-4-${{ matrix.target }}
+          path: fuzz/corpus/${{ matrix.target }}
+          if-no-files-found: ignore
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: crash-4-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+
+  round-5:
+    if: github.event_name != 'pull_request' || github.event.label.name == 'fuzz'
+    needs: round-4
+    name: fuzz round 5 (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fs_requests, oplog_rows, graft_toml, templates, source_analysis]
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install nightly --profile minimal
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: actions/download-artifact@v7
+        with:
+          name: corpus-4-${{ matrix.target }}
+          path: fuzz/corpus/${{ matrix.target }}
+      - name: Fuzz
+        working-directory: fuzz
+        run: |
+          mkdir -p corpus/${{ matrix.target }}
+          # The prebuilt cargo-fuzz is a musl binary and would default to musl,
+          # which AddressSanitizer cannot instrument.
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} -- \
+            -max_total_time=$SECONDS_PER_ROUND -rss_limit_mb=4096 -print_final_stats=1
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: corpus-5-${{ matrix.target }}
+          path: fuzz/corpus/${{ matrix.target }}
+          if-no-files-found: ignore
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: crash-5-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
