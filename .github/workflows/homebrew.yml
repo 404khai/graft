@@ -26,16 +26,32 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release download "$TAG" --repo "${{ github.repository }}" --pattern graft.rb
-      - uses: actions/checkout@v7
-        with:
-          repository: 404khai/homebrew-graft
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          path: tap
+      # A plain clone, not actions/checkout: the tap may still be empty
+      # (no branch yet), which checkout cannot handle.
+      - name: Clone the tap
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${TOKEN}@github.com/404khai/homebrew-graft.git" tap
+          git -C tap checkout -B main
       - name: Commit it to the tap
         run: |
           mkdir -p tap/Formula
           cp graft.rb tap/Formula/graft.rb
           cd tap
+          if [ ! -f README.md ]; then
+            printf '%s\n' \
+              '# homebrew-graft' \
+              '' \
+              'Homebrew tap for [Graft](https://github.com/404khai/graft): copy-on-write workspaces for parallel coding agents.' \
+              '' \
+              '```sh' \
+              'brew install 404khai/graft/graft' \
+              '```' \
+              '' \
+              'The formula is updated automatically when a Graft release is published.' > README.md
+            git add README.md
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/graft.rb
@@ -44,4 +60,4 @@ jobs:
             exit 0
           fi
           git commit -m "graft ${TAG#v}"
-          git push
+          git push origin main
