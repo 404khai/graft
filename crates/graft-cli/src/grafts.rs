@@ -37,9 +37,21 @@ pub(crate) struct NewArgs {
     /// and setup commands (see docs/blueprint.md).
     #[arg(long, value_name = "NAME")]
     blueprint: Option<String>,
+    /// Show the full output of layer builds as they run (by default only
+    /// a failed build's output is shown).
+    #[arg(long, short)]
+    verbose: bool,
 }
 
 impl NewArgs {
+    fn build_output(&self) -> layers::BuildOutput {
+        if self.verbose {
+            layers::BuildOutput::Stream
+        } else {
+            layers::BuildOutput::Quiet
+        }
+    }
+
     /// `graft new <name> [--backend B]` at Root's HEAD, for commands that
     /// create grafts themselves (`graft plan --apply`).
     pub(crate) fn named(name: String, backend: Option<BackendKind>) -> Self {
@@ -48,6 +60,7 @@ impl NewArgs {
             from: None,
             backend,
             blueprint: None,
+            verbose: false,
         }
     }
 }
@@ -280,6 +293,7 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
                 name,
                 record.id,
                 true,
+                args.build_output(),
             )?;
             Ok((report, applied))
         });
@@ -307,21 +321,7 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
         "  {} files reflinked, {} copied, {} written from git objects",
         report.clone.reflinked, report.clone.copied, c.written
     );
-    for layer in &applied {
-        let how = if layer.built { "built" } else { "reused" };
-        let _ = writeln!(
-            out.stdout,
-            "  layer {}: {how} ({})",
-            layer.path.display(),
-            &layer.key.to_string()[..12]
-        );
-        if let Some(reason) = &layer.copied_reason {
-            out.warnings.push(format!(
-                "layer {} was copied instead of reflinked: {reason}",
-                layer.path.display()
-            ));
-        }
-    }
+    report_layers(&applied, &mut out);
     if let Some(reason) = &report.clone.fallback {
         out.warnings.push(format!(
             "copied {} files instead of reflinking them: {reason}. This graft uses its full size on disk.",
@@ -398,6 +398,7 @@ fn new_virtual(
                 name,
                 record.id,
                 false,
+                args.build_output(),
             );
             timing::time("remove scratch tree", || builder.prune(name, record.id))?;
             applied?
@@ -410,6 +411,7 @@ fn new_virtual(
                 name,
                 record.id,
                 false,
+                args.build_output(),
             )?
         };
         let path = timing::time("mount", || client.mount(&located.record.id, name))?;
@@ -433,7 +435,13 @@ fn new_virtual(
         path.display(),
         base.short(7)
     );
-    for layer in &applied {
+    report_layers(&applied, &mut out);
+    Ok(out)
+}
+
+/// One line per layer of a new graft, and a warning for each one copied.
+fn report_layers(applied: &[layers::Applied], out: &mut Output) {
+    for layer in applied {
         let how = if layer.built { "built" } else { "reused" };
         let _ = writeln!(
             out.stdout,
@@ -441,8 +449,13 @@ fn new_virtual(
             layer.path.display(),
             &layer.key.to_string()[..12]
         );
+        if let Some(reason) = &layer.copied_reason {
+            out.warnings.push(format!(
+                "layer {} was copied instead of reflinked: {reason}",
+                layer.path.display()
+            ));
+        }
     }
-    Ok(out)
 }
 
 /// Lists grafts.
