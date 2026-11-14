@@ -426,3 +426,149 @@ fn push_mode_pushes_a_branch_and_opens_a_pull_request() {
             .contains("opened https://example.invalid/pull/1")
     );
 }
+
+const LAYER: &str = "[[layer]]\npath = \"deps\"\ninputs = [\"deps.lock\"]\nbuild = 'mkdir deps && cat deps.lock > deps/lock'\n";
+
+/// How many times `graft integrate` ran each `graft::timing` step.
+fn steps(stderr: &[u8], step: &str) -> usize {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .filter(|l| l.contains(" timing ") && l.contains(&format!("step=\"{step}\"")))
+        .count()
+}
+
+impl Fixture {
+    /// `graft integrate` with step timings on; stdout and stderr.
+    fn integrate_timed(&self, args: &[&str]) -> (String, Vec<u8>) {
+        let o = self
+            .cmd()
+            .arg("integrate")
+            .args(args)
+            .env("GRAFT_LOG", "graft::timing=debug")
+            .env("NO_COLOR", "1")
+            .output()
+            .unwrap();
+        assert!(
+            o.status.success(),
+            "graft integrate {args:?}: {}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        );
+        (String::from_utf8(o.stdout).unwrap(), o.stderr)
+    }
+
+    fn scratch_dirs(&self) -> usize {
+        let roots = self.home.path().join("roots");
+        std::fs::read_dir(roots)
+            .unwrap()
+            .flatten()
+            .filter_map(|r| std::fs::read_dir(r.path().join("integrate")).ok())
+            .flat_map(std::iter::Iterator::flatten)
+            .count()
+    }
+}
+
+/// With no resolver or test gate, nothing runs in the scratch checkout:
+/// no layers are cloned into it, and one checkout serves the whole queue
+/// run (ADR 0021). The landed history is the same as with fresh ones.
+#[test]
+fn ungated_queue_runs_share_one_scratch_and_skip_layers() {
+    let f = Fixture::new(
+        LAYER,
+        &[
+            ("deps.lock", "v1\n"),
+            (".gitignore", "deps/\n"),
+            ("src/a.txt", "a\n"),
+            ("src/b.txt", "b\n"),
+            ("src/c.txt", "c\n"),
+        ],
+    );
+    let names = ["a", "b", "c"];
+    for n in names {
+        let p = f.new_graft(n);
+        assert!(p.join("deps/lock").is_file(), "graft {n} has its layer");
+        std::fs::write(p.join(format!("src/{n}.txt")), format!("{n} changed\n")).unwrap();
+        std::fs::write(p.join(format!("src/{n}-new.txt")), "new\n").unwrap();
+    }
+    let (report, stderr) = f.integrate_timed(&["a", "b", "c", "--onto", "land"]);
+    for n in names {
+        assert!(report.contains(&format!("landed   {n} → land")), "{report}");
+        assert_eq!(
+            out(f.repo.path(), &["show", &format!("land:src/{n}.txt")]),
+            format!("{n} changed\n")
+        );
+        assert_eq!(
+            out(f.repo.path(), &["show", &format!("land:src/{n}-new.txt")]),
+            "new\n"
+        );
+    }
+    // Three commits in order, each on top of the previous one.
+    let log = out(f.repo.path(), &["log", "--format=%s", "land", "-3"]);
+    assert_eq!(
+        log,
+        "chore: integrate graft c\nchore: integrate graft b\nchore: integrate graft a\n"
+    );
+    // The layer never reached a commit.
+    assert_eq!(
+        out(
+            f.repo.path(),
+            &["ls-tree", "-r", "--name-only", "land", "deps"]
+        ),
+        ""
+    );
+    assert_eq!(steps(&stderr, "integrate: check out scratch tree"), 1);
+    assert_eq!(steps(&stderr, "integrate: remove scratch tree"), 1);
+    assert_eq!(steps(&stderr, "integrate: link layers"), 0);
+    assert_eq!(f.scratch_dirs(), 0, "scratch checkout left behind");
+    assert!(
+        report.contains("note: no test gate ran: set [integrate] test in graft.toml"),
+        "{report}"
+    );
+    f.assert_root_clean();
+}
+
+/// A test gate still gets the layers and a fresh checkout per request, so
+/// nothing one gate run leaves behind is seen by the next.
+#[test]
+fn gated_requests_get_layers_and_a_fresh_scratch_each() {
+    // Fails if the layer is missing or a previous gate run's file is there.
+    let check = "#!/bin/sh\ntest -f deps/lock && test ! -e .gate-ran && touch .gate-ran\n";
+    let f = Fixture::new(
+        &format!("{LAYER}{GATE}"),
+        &[
+            ("check.sh", check),
+            ("deps.lock", "v1\n"),
+            (".gitignore", "deps/\n.gate-ran\n"),
+            ("src/a.txt", "a\n"),
+            ("src/b.txt", "b\n"),
+        ],
+    );
+    let a = f.new_graft("a");
+    let b = f.new_graft("b");
+    std::fs::write(a.join("src/a.txt"), "a changed\n").unwrap();
+    std::fs::write(b.join("src/b.txt"), "b changed\n").unwrap();
+    let (report, stderr) = f.integrate_timed(&["a", "b", "--onto", "land"]);
+    assert!(
+        report.contains("landed   a → land") && report.contains("landed   b → land"),
+        "{report}"
+    );
+    assert!(!report.contains("no test gate"), "{report}");
+    assert_eq!(steps(&stderr, "integrate: check out scratch tree"), 2);
+    assert_eq!(steps(&stderr, "integrate: link layers"), 2);
+    assert_eq!(f.scratch_dirs(), 0, "scratch checkout left behind");
+    f.assert_root_clean();
+}
+
+/// A dry run with no gate says so too, and leaves no scratch behind.
+#[test]
+fn a_dry_run_without_a_gate_says_none_ran() {
+    let f = Fixture::new("", &[("src/a.txt", "a\n")]);
+    let a = f.new_graft("a");
+    std::fs::write(a.join("src/a.txt"), "a changed\n").unwrap();
+    let before = f.rev("land");
+    let report = f.ok(&["integrate", "a", "--onto", "land", "--dry-run"]);
+    assert!(report.contains("checked  a → land"), "{report}");
+    assert!(report.contains("note: no test gate ran"), "{report}");
+    assert_eq!(f.rev("land"), before);
+    assert_eq!(f.scratch_dirs(), 0);
+}
