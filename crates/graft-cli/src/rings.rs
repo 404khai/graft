@@ -49,16 +49,24 @@ pub(crate) struct RewindArgs {
 /// a delta (ADR 0013).
 fn require_virtual(record: &GraftRecord, what: &str) -> anyhow::Result<()> {
     if !record.backend.is_virtual() {
-        bail!(
-            "graft {} uses the reflink backend, which cannot {what} yet; \
-             create a virtual graft with `graft new --backend {}` (ADR 0013)",
-            record.name,
-            if cfg!(target_os = "macos") {
-                "nfs"
-            } else {
-                "fuse"
-            }
-        );
+        let kind = if cfg!(target_os = "macos") {
+            "nfs"
+        } else {
+            "fuse"
+        };
+        let how = if crate::agent::is_mcp() {
+            format!("graft_new with backend: \"{kind}\"")
+        } else {
+            format!("`graft new --backend {kind}`")
+        };
+        return Err(crate::agent::coded(
+            "backend_unsupported",
+            format!(
+                "graft {} uses the reflink backend, which cannot {what} yet (ADR 0013)",
+                record.name
+            ),
+            Some(format!("create a virtual graft with {how}")),
+        ));
     }
     Ok(())
 }
@@ -174,7 +182,16 @@ pub(crate) fn rewind(args: &RewindArgs, env: &Environment) -> anyhow::Result<Out
     let record = find(&ctx.located.store, &name)?;
     require_virtual(&record, "be rewound")?;
     if ctx.located.store.ring_named(record.id, &label)?.is_none() {
-        bail!("graft {name} has no ring named {label}; see `graft ring {name} --list`");
+        let list = if crate::agent::is_mcp() {
+            format!("graft_ring with name: \"{name}\", list: true")
+        } else {
+            format!("`graft ring {name} --list`")
+        };
+        return Err(crate::agent::coded(
+            "not_found",
+            format!("graft {name} has no ring named {label}"),
+            Some(format!("see {list}")),
+        ));
     }
     let mut out = Output::default();
     let mut client = daemon(&ctx.home, &mut out)?;
@@ -203,10 +220,18 @@ pub(crate) fn rewind(args: &RewindArgs, env: &Environment) -> anyhow::Result<Out
     let remounted = client.mount(&root, &name);
     let rewound = rewound?;
     remounted.with_context(|| format!("remounting graft {name} after the rewind"))?;
+    let undo = if crate::agent::is_mcp() {
+        format!(
+            "graft_rewind with name: \"{name}\", ring: \"{}\"",
+            rewound.undo
+        )
+    } else {
+        format!("graft rewind {name} {}", rewound.undo)
+    };
     let _ = writeln!(
         out.stdout,
-        "Rewound graft {name} to ring {label} (op {}). To undo: graft rewind {name} {}",
-        rewound.seq, rewound.undo
+        "Rewound graft {name} to ring {label} (op {}). To undo: {undo}",
+        rewound.seq
     );
     Ok(out)
 }

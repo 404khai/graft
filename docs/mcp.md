@@ -4,8 +4,30 @@
 It runs for one Root: the directory it starts in, or `--root PATH`. Each
 tool call runs the `graft` command with the same name and the arguments
 below (never through a shell), so it behaves exactly as the CLI does:
-trust approvals, claims, prune safety and the sandbox all apply. A failed
-command is a tool error carrying its output.
+trust approvals, claims, prune safety and the sandbox all apply. Commands
+run with `GRAFT_MCP=1`, so hints name these tools rather than CLI commands.
+
+## Errors
+
+A failed call is a tool error (`isError: true`) whose text is one JSON
+object ([ADR 0025](decisions/0025-mcp-errors-for-agents.md)):
+
+```json
+{"code": "not_found", "message": "no graft named a", "hint": "see graft_list", "output": ""}
+```
+
+| `code` | Meaning |
+| --- | --- |
+| `invalid_arguments` | The arguments do not match the tool's schema. |
+| `confirm_required` | A destructive call without `confirm: true`. |
+| `invalid_name` | Not a valid graft name. |
+| `not_found` | No such graft (or ring). |
+| `layer_build_failed` | A `graft.toml` layer build failed; nothing was created. `message` ends with the build's output. |
+| `backend_unsupported` | The graft's backend cannot do this (bud, ring and rewind need a virtual graft). |
+| `failed` | Anything else, including a `graft_run` command that exited non-zero; see `output`. |
+
+`hint`, when not null, is the next step. `output` is what the command
+printed besides the error.
 
 Tools that change Root's history or discard work need `confirm: true`:
 `graft_integrate` (unless `dry_run: true`) and `graft_prune` with
@@ -30,24 +52,24 @@ test (`crates/graft-mcp/src/snapshots/`).
 
 ### `graft_new`
 
-Create a graft: a private copy-on-write workspace checked out from Root. Returns where it is.
+Create a graft: a private copy-on-write workspace checked out from Root. Returns its path. Layers declared in Root's graft.toml (e.g. node_modules) are built on the first create and shared after; if a build fails, nothing is created and the error (code layer_build_failed) shows the build's output.
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
-| `backend` | string (reflink \| fuse \| nfs) | no | Filesystem backend (default: the configured one). |
+| `backend` | string (reflink \| fuse \| nfs) | no | Filesystem backend: reflink (a real working tree; the default unless config.toml or $GRAFT_FS says otherwise), or a virtual graft served by graftd: fuse on Linux, nfs on macOS. Only virtual grafts support graft_bud, graft_ring and graft_rewind. |
 | `blueprint` | string | no | Blueprint of graft.toml to provision: ports, services, env files. |
 | `from` | string | no | Revision to start from (default: Root's HEAD). |
 | `name` | string | yes | Graft name: lowercase letters, digits and hyphens, at most 40 characters. |
 
 ### `graft_list`
 
-List grafts with their base, state, changed files and disk use. (read-only)
+List grafts as JSON: name, base, state, backend, path, changed (file count) and disk_bytes (null when unknown, with the reason in note). (read-only)
 
 No parameters.
 
 ### `graft_status`
 
-Show what changed in a graft since its base (or summarise every graft). (read-only)
+Show what changed in a graft since its base, as JSON: a list of grafts with their changes ({kind: A|M|D|..., path}). Without name, every graft. (read-only)
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -73,7 +95,7 @@ Run a command confined to a graft: it can only write inside the graft (and its p
 
 ### `graft_bud`
 
-Fork a virtual graft in constant time: a new graft with the same base and a copy of its changes.
+Fork a virtual graft (backend fuse or nfs) in constant time: a new graft with the same base and a copy of its changes. Reflink grafts are refused.
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -82,13 +104,22 @@ Fork a virtual graft in constant time: a new graft with the same base and a copy
 
 ### `graft_ring`
 
-Checkpoint a virtual graft's changes as a named ring (restore it later with `graft rewind`), or list its rings.
+Checkpoint a virtual graft's (fuse or nfs) changes as a named ring, to restore later with graft_rewind, or list its rings.
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `label` | string | no | The ring's label (default ring-<seq>). |
 | `list` | boolean | no | List the graft's rings instead. |
 | `name` | string | yes | Graft name: lowercase letters, digits and hyphens, at most 40 characters. |
+
+### `graft_rewind`
+
+Restore a virtual graft's changes to a ring made with graft_ring. The state it leaves is saved first as a ring named undo-<seq>, so a rewind can itself be undone.
+
+| Parameter | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `name` | string | yes | Graft name: lowercase letters, digits and hyphens, at most 40 characters. |
+| `ring` | string | yes | The ring's label, as graft_ring lists it. |
 
 ### `graft_radar`
 
@@ -101,7 +132,7 @@ Overlaps between live grafts, as JSON: same file (path), same symbol, merge conf
 
 ### `graft_integrate`
 
-Merge grafts onto a branch of Root through the integrate queue: structural merge, test gate, one commit each. Changes Root's history, so it needs confirm: true unless dry_run. (destructive)
+Merge grafts onto a branch of Root through the integrate queue: structural merge, the [integrate] test gate if graft.toml sets one (the result says when none ran), one commit each. Changes Root's history, so it needs confirm: true unless dry_run. (destructive)
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -109,7 +140,7 @@ Merge grafts onto a branch of Root through the integrate queue: structural merge
 | `dry_run` | boolean | no | Run every step except landing. |
 | `message` | string | no | Commit message. |
 | `names` | array of string | yes | Grafts, in order. |
-| `onto` | string | no | Branch to land on. |
+| `onto` | string | no | Branch to land on (default: [integrate] branch in graft.toml, else the branch Root has checked out, which also needs update_checkout). |
 | `prune` | boolean | no | Prune each graft once it has landed. |
 | `update_checkout` | boolean | no | Allow landing on the branch Root has checked out (fast-forwards Root's clean working tree). |
 

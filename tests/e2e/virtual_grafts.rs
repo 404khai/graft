@@ -709,6 +709,63 @@ mod fuse {
             .success();
     }
 
+    /// A virtual create whose layer build fails leaves nothing behind,
+    /// including the graftd it had to start (ADR 0025); a graftd serving
+    /// other grafts keeps running.
+    #[test]
+    fn a_failed_create_stops_the_graftd_it_started() {
+        require_fuse();
+        let home = tempfile::tempdir().unwrap();
+        let _daemon = Daemon(home.path());
+        let repo = crate::git_repo();
+        let r = repo.path();
+        std::fs::write(
+            r.join("graft.toml"),
+            "[[layer]]\npath = \"deps\"\ninputs = [\"deps.lock\"]\nbuild = 'exit 3'\n",
+        )
+        .unwrap();
+        std::fs::write(r.join("deps.lock"), "v1\n").unwrap();
+        git(r, &["add", "-A"]);
+        git(r, &["commit", "-qm", "layer"]);
+        init(home.path(), r);
+        graft_d(home.path())
+            .current_dir(r)
+            .arg("trust")
+            .assert()
+            .success();
+        let status = || {
+            let out = graft_d(home.path())
+                .args(["daemon", "status"])
+                .output()
+                .unwrap();
+            String::from_utf8(out.stdout).unwrap()
+        };
+        assert_eq!(status(), "graftd is not running\n");
+        graft_d(home.path())
+            .current_dir(r)
+            .args(["new", "x", "--backend", BACKEND])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("build `exit 3` failed"));
+        assert_eq!(status(), "graftd is not running\n");
+        // With another graft mounted, a failed create leaves graftd running.
+        let other = crate::git_repo();
+        init(home.path(), other.path());
+        new_fuse(home.path(), other.path(), "kept");
+        graft_d(home.path())
+            .current_dir(r)
+            .args(["new", "y", "--backend", BACKEND])
+            .assert()
+            .failure();
+        assert_ne!(status(), "graftd is not running\n");
+        graft_d(home.path())
+            .current_dir(other.path())
+            .args(["prune", "kept"])
+            .assert()
+            .success();
+        assert_ne!(status(), "graftd is not running\n");
+    }
+
     /// An overwrite of a base file (on NFS: a truncating SETATTR, then
     /// WRITEs, journaled together once the file goes idle; ADR 0023) that
     /// graftd is killed before journaling keeps its new contents.

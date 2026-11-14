@@ -54,13 +54,13 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_new",
             "Create a graft",
-            "Create a graft: a private copy-on-write workspace checked out from Root. Returns where it is.",
+            "Create a graft: a private copy-on-write workspace checked out from Root. Returns its path. Layers declared in Root's graft.toml (e.g. node_modules) are built on the first create and shared after; if a build fails, nothing is created and the error (code layer_build_failed) shows the build's output.",
             json!({
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": NAME},
                     "from": {"type": "string", "description": "Revision to start from (default: Root's HEAD)."},
-                    "backend": {"type": "string", "enum": ["reflink", "fuse", "nfs"], "description": "Filesystem backend (default: the configured one)."},
+                    "backend": {"type": "string", "enum": ["reflink", "fuse", "nfs"], "description": "Filesystem backend: reflink (a real working tree; the default unless config.toml or $GRAFT_FS says otherwise), or a virtual graft served by graftd: fuse on Linux, nfs on macOS. Only virtual grafts support graft_bud, graft_ring and graft_rewind."},
                     "blueprint": {"type": "string", "description": "Blueprint of graft.toml to provision: ports, services, env files."}
                 },
                 "required": ["name"],
@@ -71,14 +71,14 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_list",
             "List grafts",
-            "List grafts with their base, state, changed files and disk use.",
+            "List grafts as JSON: name, base, state, backend, path, changed (file count) and disk_bytes (null when unknown, with the reason in note).",
             json!({"type": "object", "properties": {}, "additionalProperties": false}),
             read_only(),
         ),
         tool(
             "graft_status",
             "Show a graft's changes",
-            "Show what changed in a graft since its base (or summarise every graft).",
+            "Show what changed in a graft since its base, as JSON: a list of grafts with their changes ({kind: A|M|D|..., path}). Without name, every graft.",
             json!({
                 "type": "object",
                 "properties": {"name": {"type": "string", "description": NAME}},
@@ -117,7 +117,7 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_bud",
             "Fork a graft",
-            "Fork a virtual graft in constant time: a new graft with the same base and a copy of its changes.",
+            "Fork a virtual graft (backend fuse or nfs) in constant time: a new graft with the same base and a copy of its changes. Reflink grafts are refused.",
             json!({
                 "type": "object",
                 "properties": {
@@ -132,7 +132,7 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_ring",
             "Checkpoint a graft",
-            "Checkpoint a virtual graft's changes as a named ring (restore it later with `graft rewind`), or list its rings.",
+            "Checkpoint a virtual graft's (fuse or nfs) changes as a named ring, to restore later with graft_rewind, or list its rings.",
             json!({
                 "type": "object",
                 "properties": {
@@ -141,6 +141,21 @@ pub fn tools() -> Vec<Tool> {
                     "list": {"type": "boolean", "description": "List the graft's rings instead."}
                 },
                 "required": ["name"],
+                "additionalProperties": false
+            }),
+            writes(),
+        ),
+        tool(
+            "graft_rewind",
+            "Rewind a graft to a ring",
+            "Restore a virtual graft's changes to a ring made with graft_ring. The state it leaves is saved first as a ring named undo-<seq>, so a rewind can itself be undone.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": NAME},
+                    "ring": {"type": "string", "description": "The ring's label, as graft_ring lists it."}
+                },
+                "required": ["name", "ring"],
                 "additionalProperties": false
             }),
             writes(),
@@ -162,12 +177,12 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_integrate",
             "Land grafts in Root",
-            "Merge grafts onto a branch of Root through the integrate queue: structural merge, test gate, one commit each. Changes Root's history, so it needs confirm: true unless dry_run.",
+            "Merge grafts onto a branch of Root through the integrate queue: structural merge, the [integrate] test gate if graft.toml sets one (the result says when none ran), one commit each. Changes Root's history, so it needs confirm: true unless dry_run.",
             json!({
                 "type": "object",
                 "properties": {
                     "names": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Grafts, in order."},
-                    "onto": {"type": "string", "description": "Branch to land on."},
+                    "onto": {"type": "string", "description": "Branch to land on (default: [integrate] branch in graft.toml, else the branch Root has checked out, which also needs update_checkout)."},
                     "message": {"type": "string", "description": "Commit message."},
                     "dry_run": {"type": "boolean", "description": "Run every step except landing."},
                     "prune": {"type": "boolean", "description": "Prune each graft once it has landed."},
@@ -352,9 +367,9 @@ pub fn invocation(name: &str, args: &JsonObject) -> Result<Invocation, String> {
             option(a, "--backend", word(args, "backend")?);
             option(a, "--blueprint", word(args, "blueprint")?);
         }
-        "graft_list" => a.push("ls".to_owned()),
+        "graft_list" => a.extend(["ls".to_owned(), "--json".to_owned()]),
         "graft_status" => {
-            a.push("status".to_owned());
+            a.extend(["status".to_owned(), "--json".to_owned()]);
             a.extend(word(args, "name")?);
         }
         "graft_diff" => a.extend(["diff".to_owned(), required(args, "name")?]),
@@ -382,6 +397,11 @@ pub fn invocation(name: &str, args: &JsonObject) -> Result<Invocation, String> {
                 a.extend(word(args, "label")?);
             }
         }
+        "graft_rewind" => a.extend([
+            "rewind".to_owned(),
+            required(args, "name")?,
+            required(args, "ring")?,
+        ]),
         "graft_radar" => {
             a.extend(["radar".to_owned(), "--json".to_owned()]);
             if flag(args, "check")? {
