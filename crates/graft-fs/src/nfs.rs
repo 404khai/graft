@@ -6,7 +6,10 @@
 //! becomes a [`GraftView`] call. NFS version 3 has no open or close, so the first
 //! write to a file opens a view handle for it, and the handle is released
 //! (journaling the file) once the file has been idle for [`IDLE`], or when
-//! [`Mounted::sync`] is called.
+//! [`Mounted::sync`] is called. A SETATTR that changes the size uses the
+//! same handle, so a truncate and the writes after it are journaled once
+//! (ADR 0023). `GRAFT_LOG=graft::nfs=debug` logs the time graftd spends in
+//! each procedure (`scripts/profile-nfs-ops.sh`).
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -116,9 +119,15 @@ fn name(n: &filename3) -> &OsStr {
     OsStr::from_bytes(&n.0)
 }
 
-/// Runs a blocking view call from an NFS handler.
-fn blocking<T>(f: impl FnOnce() -> T) -> T {
-    tokio::task::block_in_place(f)
+/// Runs a blocking view call from the NFS handler for procedure `op`,
+/// logging how long it took on the `graft::nfs` target at debug level
+/// (`GRAFT_LOG=graft::nfs=debug` for graftd).
+fn blocking<T>(op: &'static str, f: impl FnOnce() -> T) -> T {
+    let start = Instant::now();
+    let out = tokio::task::block_in_place(f);
+    let us = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+    tracing::debug!(target: "graft::nfs", op, us, "timing");
+    out
 }
 
 /// The NFS file system of one graft.
@@ -129,7 +138,10 @@ pub(crate) struct NfsFs {
 }
 
 impl NfsFs {
-    fn writer(&self, ino: Ino) -> Result<u64, Errno> {
+    /// The open write handle of `ino`, opening one if needed. `truncate`
+    /// opens a file that has none already empty, without copying its
+    /// contents up first (they are about to be discarded).
+    fn writer(&self, ino: Ino, truncate: bool) -> Result<u64, Errno> {
         let mut writers = self.writers.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some((fh, at)) = writers.get_mut(&ino) {
             *at = Instant::now();
@@ -139,7 +151,7 @@ impl NfsFs {
             ino,
             OpenMode {
                 write: true,
-                truncate: false,
+                truncate,
             },
         )?;
         writers.insert(ino, (fh, Instant::now()));
@@ -163,7 +175,11 @@ impl NfsFs {
         };
         let mut result = Ok(());
         for fh in due {
-            if let Err(e) = self.view.release(fh) {
+            let start = Instant::now();
+            let released = self.view.release(fh);
+            let us = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+            tracing::debug!(target: "graft::nfs", op = "journal", us, "timing");
+            if let Err(e) = released {
                 tracing::warn!(errno = e.0, "journaling a file written over NFS");
                 result = result.and(Err(e));
             }
@@ -191,7 +207,7 @@ impl NFSFileSystem for NfsFs {
     }
 
     async fn lookup(&self, dirid: fileid3, filename: &filename3) -> Result<fileid3, nfsstat3> {
-        blocking(|| match filename.0.as_slice() {
+        blocking("lookup", || match filename.0.as_slice() {
             b"." => Ok(dirid),
             b".." => self.view.parent(dirid),
             _ => self.view.lookup(dirid, name(filename)).map(|a| a.ino),
@@ -200,7 +216,7 @@ impl NFSFileSystem for NfsFs {
     }
 
     async fn getattr(&self, id: fileid3) -> Result<fattr3, nfsstat3> {
-        blocking(|| self.entry_attr(id))
+        blocking("getattr", || self.entry_attr(id))
     }
 
     async fn setattr(&self, id: fileid3, setattr: sattr3) -> Result<fattr3, nfsstat3> {
@@ -227,7 +243,17 @@ impl NFSFileSystem for NfsFs {
                 set_mtime::SET_TO_CLIENT_TIME(t) => Some(from_time(t)),
             },
         };
-        blocking(|| self.view.setattr(id, set).map(|a| fattr(&a))).map_err(status)
+        blocking("setattr", || {
+            // A size change goes through the file's write handle, as a
+            // write does: a truncate and the writes after it (how clients
+            // overwrite a file) are journaled once, when the file goes
+            // idle, like open(O_TRUNC), write and close on FUSE.
+            if set.size.is_some() && self.view.getattr(id)?.kind == NodeKind::File {
+                self.writer(id, set.size == Some(0))?;
+            }
+            self.view.setattr(id, set).map(|a| fattr(&a))
+        })
+        .map_err(status)
     }
 
     async fn read(
@@ -236,7 +262,7 @@ impl NFSFileSystem for NfsFs {
         offset: u64,
         count: u32,
     ) -> Result<(Vec<u8>, bool), nfsstat3> {
-        blocking(|| {
+        blocking("read", || {
             let data = self.view.read(id, offset, count)?;
             let size = self.view.getattr(id)?.size;
             let eof = offset + data.len() as u64 >= size;
@@ -246,8 +272,8 @@ impl NFSFileSystem for NfsFs {
     }
 
     async fn write(&self, id: fileid3, offset: u64, data: &[u8]) -> Result<fattr3, nfsstat3> {
-        blocking(|| {
-            let fh = self.writer(id)?;
+        blocking("write", || {
+            let fh = self.writer(id, false)?;
             self.view.write(fh, offset, data)?;
             self.view.getattr(id).map(|a| fattr(&a))
         })
@@ -262,15 +288,17 @@ impl NFSFileSystem for NfsFs {
     ) -> Result<(fileid3, fattr3), nfsstat3> {
         // macOS stores extended attributes in AppleDouble `._name` files on
         // servers without xattrs. Grafts do not support xattrs (as on FUSE),
-        // so these are refused rather than journaled as changes (ADR 0009).
+        // so these are refused rather than journaled as changes (ADR 0009),
+        // as "not supported": with `NFS3ERR_ACCES` the client retried once
+        // for every new file it gave its provenance xattr (ADR 0024).
         if is_appledouble(filename) {
-            return Err(nfsstat3::NFS3ERR_ACCES);
+            return Err(nfsstat3::NFS3ERR_NOTSUPP);
         }
         let mode = match attr.mode {
             set_mode3::mode(m) => m,
             set_mode3::Void => 0o644,
         };
-        blocking(|| {
+        blocking("create", || {
             let (a, fh) = self.view.create(dirid, name(filename), mode, 0)?;
             self.writers
                 .lock()
@@ -297,14 +325,14 @@ impl NFSFileSystem for NfsFs {
         dirname: &filename3,
     ) -> Result<(fileid3, fattr3), nfsstat3> {
         // nfsserve drops MKDIR's attributes (ADR 0009).
-        blocking(|| self.view.mkdir(dirid, name(dirname), 0o755, 0))
+        blocking("mkdir", || self.view.mkdir(dirid, name(dirname), 0o755, 0))
             .map(|a| (a.ino, fattr(&a)))
             .map_err(status)
     }
 
     async fn remove(&self, dirid: fileid3, filename: &filename3) -> Result<(), nfsstat3> {
         // nfsserve sends REMOVE and RMDIR here alike.
-        blocking(|| {
+        blocking("remove", || {
             let a = self.view.lookup(dirid, name(filename))?;
             if a.kind == NodeKind::Directory {
                 self.view.rmdir(dirid, name(filename))
@@ -322,7 +350,7 @@ impl NFSFileSystem for NfsFs {
         to_dirid: fileid3,
         to_filename: &filename3,
     ) -> Result<(), nfsstat3> {
-        blocking(|| {
+        blocking("rename", || {
             self.view.rename(
                 from_dirid,
                 name(from_filename),
@@ -340,7 +368,7 @@ impl NFSFileSystem for NfsFs {
         start_after: fileid3,
         max_entries: usize,
     ) -> Result<ReadDirResult, nfsstat3> {
-        blocking(|| {
+        blocking("readdir", || {
             // The cookie is the last file id returned. Entries are paged in
             // file-id order, so the next page starts after the cookie even
             // when that entry has since been removed: `rm -rf` deletes each
@@ -374,7 +402,7 @@ impl NFSFileSystem for NfsFs {
         symlink: &nfspath3,
         _attr: &sattr3,
     ) -> Result<(fileid3, fattr3), nfsstat3> {
-        blocking(|| {
+        blocking("symlink", || {
             self.view.symlink(
                 dirid,
                 name(linkname),
@@ -386,7 +414,7 @@ impl NFSFileSystem for NfsFs {
     }
 
     async fn readlink(&self, id: fileid3) -> Result<nfspath3, nfsstat3> {
-        blocking(|| self.view.readlink(id))
+        blocking("readlink", || self.view.readlink(id))
             .map(nfsstring)
             .map_err(status)
     }
