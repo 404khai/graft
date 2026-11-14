@@ -49,9 +49,10 @@ export const PAGES: DocPage[] = [
             <p>
               Prebuilt binaries cover Linux x86_64 and aarch64, and macOS arm64. Download an archive
               from the <a href={`${GH}/releases`}>releases</a>, verify it, and put <code>graft</code>{" "}
-              and <code>graftd</code> on your <code>PATH</code>. Each release also carries a Homebrew
-              formula.
+              and <code>graftd</code> on your <code>PATH</code>. Or install both with Homebrew:
             </p>
+            <Code>{`brew install 404khai/graft/graft`}</Code>
+            <p>To verify a downloaded archive:</p>
             <Code>{`gh attestation verify <archive> --repo 404khai/graft`}</Code>
             <p>Or build from source:</p>
             <Code>{`cargo install --locked --git https://github.com/404khai/graft graft-cli graft-daemon`}</Code>

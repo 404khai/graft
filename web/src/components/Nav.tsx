@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { BREW_INSTALL, CopyCommand } from "./CopyCommand";
 import { GraftLogo } from "./GraftLogo";
 
 const links = [
@@ -32,7 +33,7 @@ export function Nav({ current }: { current?: "Docs" | "Changelog" }) {
       </nav>
       <div className="nav-actions">
         <a className="muted-link" href="https://github.com/404khai/graft">GitHub</a>
-        <a className="btn btn-dark btn-sm" href="/#install">brew install graft</a>
+        <CopyCommand command={BREW_INSTALL} className="btn btn-dark btn-sm" prompt={false} />
       </div>
       <button
         className="nav-toggle"

@@ -62,6 +62,10 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 }
 .btn:hover { transform: translateY(-1px); }
 .btn-sm { padding: 10px 16px; }
+button.btn { border: 0; cursor: pointer; }
+.copy-cmd { position: relative; }
+.copy-cmd .copy-state:empty { display: none; }
+.copy-cmd .copy-state { color: var(--sprout); font-size: 12px; }
 .btn-green { background: var(--green); color: var(--on-green); }
 .btn-dark { background: var(--ink); color: var(--ground); }
 .btn-ghost-dark { background: #1b211d; color: var(--night-text); }
@@ -252,7 +256,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .footer-author { color: var(--sprout); text-decoration: underline; text-underline-offset: 3px; }
 .footer-author:hover { color: #fff; }
 .badge-git { display: inline-flex; align-items: center; gap: 10px; }
-.badge-git i { display: grid; place-items: center; width: 20px; height: 20px; background: #2ea050; color: #0c0f0d; font-weight: 700; letter-spacing: 0; text-transform: none; }
+.badge-git img { width: 20px; height: 20px; display: block; }
 
 /* ================= responsive ================= */
 @media (max-width: 1100px) {

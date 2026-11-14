@@ -23,7 +23,7 @@ history.
   from the [releases](https://github.com/404khai/graft/releases), check it
   with `gh attestation verify <archive> --repo 404khai/graft`, and put `graft`
   and `graftd` on your `PATH`.
-- **Homebrew**: each release carries a `graft.rb` formula for a tap.
+- **Homebrew**: `brew install 404khai/graft/graft` (the `404khai/homebrew-graft` tap, updated on each release).
 - **From source** (Rust 1.99): `cargo install --locked --git
   https://github.com/404khai/graft graft-cli graft-daemon`, or from a
   checkout, `cargo install --locked --path crates/graft-cli` and
