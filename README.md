@@ -44,6 +44,10 @@ graft diff auth           # as a unified diff
 graft prune auth          # refuses if work would be lost; --force to discard
 ```
 
+On macOS graft paths live under `~/Library/Application Support/graft`,
+which has a space: always quote them (`cd "$(graft path auth)"`), or set
+`GRAFT_HOME` to a path without one before creating grafts.
+
 Virtual grafts (`graft new --backend fuse` on Linux, `--backend nfs` on
 macOS) can also be forked and checkpointed, as metadata operations:
 
@@ -115,8 +119,13 @@ point your client at it:
 Dependency trees are built once and shared: declare them as layers in
 `graft.toml` ([reference](docs/blueprint.md)), approve the build command once
 with `graft trust`, and every graft after the first gets `node_modules` (or
-`target/`) as a reflink in milliseconds. `graft gc` removes layers no graft
-uses.
+`target/`) as a reflink in milliseconds. The first build prints one line;
+its output is kept in `logs/` under the Root's directory (`graft new
+--verbose` streams it instead, and a failed build shows it). `graft gc`
+removes layers no graft uses.
+
+`graft integrate` lands grafts as ordinary commits. Without an
+`[integrate] test` in `graft.toml` no test gate runs, and it says so.
 
 `graft doctor` reports the platform, the filesystem the repository is on,
 whether it supports reflinks (tested by cloning a scratch file), where

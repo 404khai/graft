@@ -216,6 +216,15 @@ fn report_home(out: &mut String, home: &GraftHome, repo: Option<&Path>) {
         "graft home",
         format_args!("{} ({source}, {exists})", home.path().display()),
     );
+    if home.path().to_string_lossy().contains(char::is_whitespace) {
+        // ADR 0022: the macOS default has a space; scripts must quote.
+        row(
+            out,
+            "  spaces",
+            "graft paths contain a space: quote them in scripts (cd \"$(graft path NAME)\"), \
+             or set GRAFT_HOME to a path without one",
+        );
+    }
 
     // Graft never creates $GRAFT_HOME just to inspect it; measure the
     // filesystem it will be created on instead.
