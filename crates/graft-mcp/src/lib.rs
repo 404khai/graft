@@ -34,6 +34,10 @@ use tokio::sync::Mutex;
 
 pub use tools::{Invocation, invocation, tools};
 
+/// Set for every `graft` command the server runs: hints then name MCP
+/// tools, and failures end with a JSON error line (ADR 0025).
+pub const AGENT_ENV: &str = "GRAFT_MCP";
+
 /// The Radar resource for all grafts.
 pub const RADAR_URI: &str = "graft://radar";
 
@@ -125,6 +129,7 @@ impl GraftServer {
             .collect();
         let child = Command::new(&self.bin)
             .args(&args)
+            .env(AGENT_ENV, "1")
             .current_dir(&self.cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -181,6 +186,7 @@ async fn forward_radar(
 ) -> Result<(), String> {
     let mut child = Command::new(bin)
         .args(["radar", "--watch", "--json"])
+        .env(AGENT_ENV, "1")
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -251,6 +257,55 @@ fn text_result(text: String, error: bool) -> CallToolResponse {
     })
 }
 
+/// The error a failed call returns, as JSON text:
+/// `{"code", "message", "hint", "output"}`. `graft` reports `code`,
+/// `message` and `hint` in its last stderr line; anything else it printed
+/// is `output`. A command that ends without that line (a `graft_run`
+/// command, or a queue entry that failed its gate) is `failed`.
+fn error_result(stdout: &str, stderr: &str) -> CallToolResponse {
+    let mut reported: Option<Value> = None;
+    let mut rest: Vec<&str> = Vec::new();
+    for line in stderr.lines() {
+        match serde_json::from_str::<Value>(line) {
+            Ok(v) if v.get("error").is_some_and(Value::is_object) => {
+                reported = Some(v["error"].clone());
+            }
+            _ => rest.push(line),
+        }
+    }
+    let mut output = stdout.to_owned();
+    // The human copy of the reported error, printed just before the JSON
+    // line (and possibly several lines long), is already its message.
+    if reported.is_some()
+        && let Some(start) = rest
+            .iter()
+            .rposition(|l| l.starts_with("graft: ") && !l.starts_with("graft: warning:"))
+    {
+        rest.truncate(start);
+    }
+    if !rest.is_empty() {
+        output.push_str(&rest.join("\n"));
+    }
+    let mut err = reported.unwrap_or_else(
+        || serde_json::json!({"code": "failed", "message": "the command failed", "hint": null}),
+    );
+    err["output"] = Value::String(output.trim_end().to_owned());
+    text_result(err.to_string(), true)
+}
+
+/// The error for a call refused before anything ran.
+fn refused(why: &str) -> CallToolResponse {
+    let code = if why.contains("pass confirm: true") {
+        "confirm_required"
+    } else {
+        "invalid_arguments"
+    };
+    text_result(
+        serde_json::json!({"code": code, "message": why, "hint": null, "output": ""}).to_string(),
+        true,
+    )
+}
+
 fn not_found(uri: &str) -> McpError {
     McpError::resource_not_found(format!("no resource {uri}"), None)
 }
@@ -271,7 +326,10 @@ impl ServerHandler for GraftServer {
             "Graft gives each agent its own copy-on-write workspace (a graft) of this repository. \
              Create one with graft_new, work in it with graft_run (confined to the graft), check \
              overlaps with other agents with graft_radar or by subscribing to graft://radar/<graft>, \
-             and land it with graft_integrate.",
+             and land it with graft_integrate. Failed calls return JSON \
+             {code, message, hint, output}; codes include not_found, invalid_name, \
+             invalid_arguments, confirm_required, layer_build_failed, backend_unsupported \
+             and failed.",
         )
     }
 
@@ -291,7 +349,7 @@ impl ServerHandler for GraftServer {
         let args = request.arguments.unwrap_or_default();
         let inv = match invocation(&request.name, &args) {
             Ok(i) => i,
-            Err(why) => return Ok(text_result(why, true)),
+            Err(why) => return Ok(refused(&why)),
         };
         Ok(match self.run(&inv).await {
             Ok(ran) if ran.ok => {
@@ -306,8 +364,12 @@ impl ServerHandler for GraftServer {
                 };
                 text_result(text, false)
             }
-            Ok(ran) => text_result(format!("{}{}", ran.stdout, ran.stderr), true),
-            Err(why) => text_result(why, true),
+            Ok(ran) => error_result(&ran.stdout, &ran.stderr),
+            Err(why) => text_result(
+                serde_json::json!({"code": "failed", "message": why, "hint": null, "output": ""})
+                    .to_string(),
+                true,
+            ),
         })
     }
 

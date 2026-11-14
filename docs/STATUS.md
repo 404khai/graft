@@ -230,6 +230,8 @@ Status: done (PR #26, ADR 0018). Partitioning is Louvain in a fixed order with L
 
 Status: done (PR #27, ADR 0019). The server runs the `graft` binary for each tool (one implementation, so the MCP tools keep every CLI safety check); graftd is reached through the CLI as before. Radar events are MCP resource subscriptions (`graft://radar`, `graft://radar/<graft>`), not logging notifications, which the SDK deprecates (SEP-2577).
 
+Follow-up from the first agent session over MCP (`reports/graft-mcp-report.md`, ADR 0025, `feat/mcp-agent-ergonomics`): failed calls return JSON `{code, message, hint, output}`; hints name MCP tools; `graft_list` and `graft_status` return JSON; `graft_rewind` added; a failed virtual create no longer leaves graftd running. Still open from that report: `graft_plan` ignores directory spans and new files and makes no symbol claims; there is no way to create a graft without its layers; the session itself was blocked by a broken Homebrew node and must be rerun.
+
 - [x] An MCP client test harness can run the full cycle: plan → new → run → radar → integrate → prune.
   - `an_agent_runs_the_whole_cycle_over_mcp` drives `graft mcp` with raw JSON-RPC over stdio: plan, two grafts, `graft_run` edits (and a refused write outside the graft), Radar as a tool, a resource and a subscription (`notifications/resources/updated` arrives), a dry-run and a real integrate, and prunes.
 - [x] Tool schemas are documented and covered by snapshot tests.

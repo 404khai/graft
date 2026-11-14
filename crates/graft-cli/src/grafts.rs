@@ -93,6 +93,18 @@ pub(crate) struct StatusArgs {
     /// The graft's name. Defaults to the graft containing the current
     /// directory; outside a graft, summarises every graft.
     name: Option<String>,
+    /// Print JSON: a list of grafts, each with its changes.
+    #[arg(long)]
+    json: bool,
+}
+
+/// Arguments for `graft ls`.
+#[derive(Debug, clap::Args)]
+pub(crate) struct LsArgs {
+    /// Print JSON: one object per graft (`changed` and `disk_bytes` are
+    /// null when unknown, with the reason in `note`).
+    #[arg(long)]
+    json: bool,
 }
 
 /// Arguments for `graft prune`.
@@ -145,9 +157,16 @@ pub(crate) fn parse_name(name: &str) -> anyhow::Result<GraftName> {
 }
 
 pub(crate) fn find(store: &Store, name: &GraftName) -> anyhow::Result<GraftRecord> {
-    store
-        .graft(name)?
-        .with_context(|| format!("no graft named {name}; see `graft ls`"))
+    store.graft(name)?.ok_or_else(|| {
+        crate::agent::coded(
+            "not_found",
+            format!("no graft named {name}"),
+            Some(format!(
+                "see {}",
+                crate::agent::suggest("`graft ls`", "graft_list")
+            )),
+        )
+    })
 }
 
 fn short(record: &GraftRecord) -> &str {
@@ -374,6 +393,7 @@ fn new_virtual(
     let mut out = Output::default();
     // Reach graftd before recording anything, so an unsupported platform
     // leaves nothing behind.
+    let was_running = Client::connect(&home).is_ok();
     let mut client = timing::time("reach graftd", || daemon(&home, &mut out))?;
     let record = located.store.create_graft(name, &base, kind)?;
     // Layers that are not cached yet are built in a throwaway reflink
@@ -425,6 +445,10 @@ fn new_virtual(
             let _ = builder.prune(name, record.id);
             let _ = located.repo.unpin(record.id);
             let _ = located.store.delete_graft(record.id);
+            // A graftd this command started for nothing is stopped again.
+            if !was_running && client.mounts().is_ok_and(|m| m.is_empty()) {
+                let _ = client.shutdown();
+            }
             return Err(e.context(format!("creating graft {name}")));
         }
     };
@@ -458,8 +482,52 @@ fn report_layers(applied: &[layers::Applied], out: &mut Output) {
     }
 }
 
+/// What `graft ls` shows for one graft: changed files and unshared disk
+/// bytes, or why either is unknown.
+fn measure(
+    ctx: &Ctx,
+    g: &GraftRecord,
+    path: &std::path::Path,
+    mounted: Option<&[GraftName]>,
+    warnings: &mut Vec<String>,
+) -> (Option<usize>, Option<u64>, Option<String>) {
+    let Ctx {
+        home,
+        located,
+        backend,
+        ..
+    } = ctx;
+    if g.backend.is_virtual() {
+        let up = mounted.is_some_and(|m| m.contains(&g.name));
+        if up {
+            let root_dir = ctx.root_dir();
+            let changed = crate::virtual_grafts::diffs(home, located, &root_dir, path, g, warnings)
+                .map(|d| d.len())
+                .map_err(|e| format!("error: {e:#}"));
+            let disk = crate::virtual_grafts::disk(located, &root_dir, g)
+                .map_err(|e| format!("error: {e:#}"));
+            let note = changed.as_ref().err().or(disk.as_ref().err()).cloned();
+            (changed.ok(), disk.ok(), note)
+        } else {
+            (None, None, Some("unmounted".to_owned()))
+        }
+    } else if path.is_dir() {
+        let changed = backend
+            .diff(&g.name, &g.base_commit)
+            .map(|c| c.len())
+            .map_err(|e| format!("error: {e}"));
+        let disk = backend
+            .disk_usage(&g.name)
+            .map_err(|e| format!("error: {e}"));
+        let note = changed.as_ref().err().or(disk.as_ref().err()).cloned();
+        (changed.ok(), disk.ok(), note)
+    } else {
+        (None, None, Some("missing".to_owned()))
+    }
+}
+
 /// Lists grafts.
-pub(crate) fn ls(env: &Environment) -> anyhow::Result<Output> {
+pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
     let ctx = open(env)?;
     let Ctx {
         home,
@@ -486,11 +554,15 @@ pub(crate) fn ls(env: &Environment) -> anyhow::Result<Output> {
     } else {
         None
     };
-    if grafts.is_empty() {
-        out.stdout
-            .push_str("No grafts. Create one with `graft new <name>`.\n");
+    if grafts.is_empty() && !args.json {
+        let _ = writeln!(
+            out.stdout,
+            "No grafts. Create one with {}.",
+            crate::agent::suggest("`graft new <name>`", "graft_new")
+        );
         return Ok(out);
     }
+    let mut listed = Vec::new();
     let mut rows = vec![[
         "NAME".to_owned(),
         "BASE".to_owned(),
@@ -500,43 +572,29 @@ pub(crate) fn ls(env: &Environment) -> anyhow::Result<Output> {
     ]];
     for g in &grafts {
         let path = backend.path(&g.name);
-        let (changed, disk) = if g.backend.is_virtual() {
-            let up = mounted.as_ref().is_some_and(|m| m.contains(&g.name));
-            if up {
-                let root_dir = ctx.root_dir();
-                let changed = crate::virtual_grafts::diffs(
-                    home,
-                    located,
-                    &root_dir,
-                    &path,
-                    g,
-                    &mut out.warnings,
-                )
-                .map_or_else(|e| format!("error: {e:#}"), |d| d.len().to_string());
-                let disk = crate::virtual_grafts::disk(located, &root_dir, g)
-                    .map_or_else(|e| format!("error: {e:#}"), human_bytes);
-                (changed, disk)
-            } else {
-                ("-".to_owned(), "unmounted".to_owned())
-            }
-        } else if path.is_dir() {
-            let changed = backend
-                .diff(&g.name, &g.base_commit)
-                .map_or_else(|e| format!("error: {e}"), |c| c.len().to_string());
-            let disk = backend
-                .disk_usage(&g.name)
-                .map_or_else(|e| format!("error: {e}"), human_bytes);
-            (changed, disk)
-        } else {
-            ("-".to_owned(), "missing".to_owned())
-        };
+        let (changed, disk, note) = measure(&ctx, g, &path, mounted.as_deref(), &mut out.warnings);
+        let shown = |v: Option<String>| v.or_else(|| note.clone()).unwrap_or_default();
         rows.push([
             g.name.to_string(),
             short(g).to_owned(),
             g.state.to_string(),
-            changed,
-            disk,
+            changed.map_or_else(|| "-".to_owned(), |c| c.to_string()),
+            shown(disk.map(human_bytes)),
         ]);
+        listed.push(serde_json::json!({
+            "name": g.name.as_str(),
+            "base": g.base_commit.as_str(),
+            "state": g.state.to_string(),
+            "backend": g.backend.to_string(),
+            "path": path,
+            "changed": changed,
+            "disk_bytes": disk,
+            "note": note,
+        }));
+    }
+    if args.json {
+        out.stdout = serde_json::Value::Array(listed).to_string() + "\n";
+        return Ok(out);
     }
     let widths: Vec<usize> = (0..5)
         .map(|i| rows.iter().map(|r| r[i].len()).max().unwrap_or(0))
@@ -574,19 +632,68 @@ pub(crate) fn path(args: &NameArgs, env: &Environment) -> anyhow::Result<Output>
     )))
 }
 
+/// What `graft status` reports for one graft.
+struct StatusView {
+    name: String,
+    state: String,
+    path: std::path::PathBuf,
+    base: String,
+    /// `(code, path)`, e.g. `("M", "src/lib.rs")`.
+    changes: Vec<(char, String)>,
+    /// Why the changes could not be listed.
+    note: Option<&'static str>,
+}
+
+impl StatusView {
+    fn text(&self) -> String {
+        let mut out = format!(
+            "graft {} ({}) at {}, base {}\n",
+            self.name,
+            self.state,
+            self.path.display(),
+            &self.base[..7.min(self.base.len())]
+        );
+        if let Some(note) = self.note {
+            let _ = writeln!(out, "  {note}");
+        } else if self.changes.is_empty() {
+            out.push_str("  nothing changed since base\n");
+        }
+        for (code, path) in &self.changes {
+            let _ = writeln!(out, "  {code} {path}");
+        }
+        out
+    }
+
+    fn json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "name": self.name,
+            "state": self.state,
+            "path": self.path,
+            "base": self.base,
+            "changes": self
+                .changes
+                .iter()
+                .map(|(code, path)| serde_json::json!({"kind": code.to_string(), "path": path}))
+                .collect::<Vec<_>>(),
+            "note": self.note,
+        })
+    }
+}
+
 fn status_one(
     ctx: &Ctx,
     record: &GraftRecord,
     warnings: &mut Vec<String>,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<StatusView> {
     let path = ctx.backend.path(&record.name);
-    let mut out = format!(
-        "graft {} ({}) at {}, base {}\n",
-        record.name,
-        record.state,
-        path.display(),
-        short(record)
-    );
+    let mut view = StatusView {
+        name: record.name.to_string(),
+        state: record.state.to_string(),
+        path: path.clone(),
+        base: record.base_commit.to_string(),
+        changes: Vec::new(),
+        note: None,
+    };
     if record.backend.is_virtual() {
         let diffs = crate::virtual_grafts::diffs(
             &ctx.home,
@@ -596,31 +703,23 @@ fn status_one(
             record,
             warnings,
         )?;
-        if diffs.is_empty() {
-            out.push_str("  nothing changed since base\n");
-        }
-        for d in diffs {
-            let _ = writeln!(
-                out,
-                "  {} {}",
-                d.change.kind.code(),
-                d.change.path.display()
-            );
-        }
-        return Ok(out);
+        view.changes = diffs
+            .into_iter()
+            .map(|d| (d.change.kind.code(), d.change.path.display().to_string()))
+            .collect();
+        return Ok(view);
     }
     if !path.is_dir() {
-        out.push_str("  working tree is missing; `graft prune --force` removes the record\n");
-        return Ok(out);
+        view.note = Some("working tree is missing; `graft prune --force` removes the record");
+        return Ok(view);
     }
-    let changes = ctx.backend.diff(&record.name, &record.base_commit)?;
-    if changes.is_empty() {
-        out.push_str("  nothing changed since base\n");
-    }
-    for c in changes {
-        let _ = writeln!(out, "  {} {}", c.kind.code(), c.path.display());
-    }
-    Ok(out)
+    view.changes = ctx
+        .backend
+        .diff(&record.name, &record.base_commit)?
+        .into_iter()
+        .map(|c| (c.kind.code(), c.path.display().to_string()))
+        .collect();
+    Ok(view)
 }
 
 /// Shows what changed in one graft, or summarises all of them.
@@ -636,16 +735,22 @@ pub(crate) fn status(args: &StatusArgs, env: &Environment) -> anyhow::Result<Out
         None => ctx.located.store.grafts()?,
     };
     if grafts.is_empty() {
-        return Ok(Output::stdout("No grafts.\n".to_owned()));
+        let text = if args.json { "[]\n" } else { "No grafts.\n" };
+        return Ok(Output::stdout(text.to_owned()));
     }
     // Reaching graftd remounts virtual grafts after a crash.
     if grafts.iter().any(|g| g.backend.is_virtual()) {
         daemon(&ctx.home, &mut out)?;
     }
+    let mut views = Vec::new();
     for g in grafts {
-        let text = status_one(&ctx, &g, &mut out.warnings)?;
-        out.stdout.push_str(&text);
+        views.push(status_one(&ctx, &g, &mut out.warnings)?);
     }
+    out.stdout = if args.json {
+        serde_json::Value::Array(views.iter().map(StatusView::json).collect()).to_string() + "\n"
+    } else {
+        views.iter().map(StatusView::text).collect()
+    };
     Ok(out)
 }
 

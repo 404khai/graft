@@ -187,6 +187,7 @@ fn an_agent_runs_the_whole_cycle_over_mcp() {
             "graft_run",
             "graft_bud",
             "graft_ring",
+            "graft_rewind",
             "graft_radar",
             "graft_integrate",
             "graft_plan",
@@ -291,7 +292,8 @@ fn an_agent_runs_the_whole_cycle_over_mcp() {
         json!({"name": "b", "force": true, "confirm": true}),
     );
     c.ok("graft_prune", json!({"name": "a"}));
-    assert!(c.ok("graft_list", json!({})).contains("No grafts"));
+    let left: Value = serde_json::from_str(&c.ok("graft_list", json!({}))).unwrap();
+    assert_eq!(left, json!([]), "grafts left behind");
 }
 
 #[test]
@@ -384,4 +386,214 @@ fn mcp_refuses_to_start_outside_a_root() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// The error object of a failed call (ADR 0025).
+fn error_of(c: &mut Client, tool: &str, args: Value) -> Value {
+    let (text, err) = c.call(tool, args);
+    assert!(err, "{tool} succeeded: {text}");
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{tool}: not JSON ({e}): {text}"))
+}
+
+/// Failed calls carry a stable code and a hint that names MCP tools, not
+/// CLI commands; list and status answer in JSON (ADR 0025).
+#[test]
+#[allow(clippy::too_many_lines)] // one check per code, read top to bottom
+fn failures_have_codes_and_mcp_hints() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = git_repo();
+    let r = repo.path();
+    git(r, &["config", "user.name", "Graft Test"]);
+    git(r, &["config", "user.email", "test@graft.invalid"]);
+    let init = Command::new(env!("CARGO_BIN_EXE_graft"))
+        .arg("init")
+        .current_dir(r)
+        .env("GRAFT_HOME", home.path())
+        .status()
+        .unwrap();
+    assert!(init.success());
+    let mut c = Client::start(home.path(), r);
+
+    // Empty lists are JSON too.
+    assert_eq!(
+        serde_json::from_str::<Value>(&c.ok("graft_list", json!({}))).unwrap(),
+        json!([])
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&c.ok("graft_status", json!({}))).unwrap(),
+        json!([])
+    );
+
+    let e = error_of(&mut c, "graft_status", json!({"name": "nosuch"}));
+    assert_eq!(e["code"], "not_found", "{e}");
+    assert!(
+        e["message"]
+            .as_str()
+            .unwrap()
+            .contains("no graft named nosuch"),
+        "{e}"
+    );
+    assert_eq!(e["hint"], "see graft_list", "{e}");
+    assert!(!e.to_string().contains("graft ls"), "{e}");
+
+    let e = error_of(&mut c, "graft_new", json!({"name": "Bad_Name"}));
+    assert_eq!(e["code"], "invalid_name", "{e}");
+
+    let e = error_of(&mut c, "graft_integrate", json!({"names": ["a"]}));
+    assert_eq!(e["code"], "confirm_required", "{e}");
+    let e = error_of(&mut c, "graft_list", json!({"all": true}));
+    assert_eq!(e["code"], "invalid_arguments", "{e}");
+
+    // A command that fails inside graft_run is `failed`, with its output.
+    assert!(
+        c.ok("graft_new", json!({"name": "a", "backend": "reflink"}))
+            .contains("Created graft a")
+    );
+    let e = error_of(
+        &mut c,
+        "graft_run",
+        json!({"name": "a", "command": ["sh", "-c", "echo out; echo err >&2; exit 3"]}),
+    );
+    assert_eq!(e["code"], "failed", "{e}");
+    let output = e["output"].as_str().unwrap();
+    assert!(output.contains("out") && output.contains("err"), "{e}");
+
+    // list and status describe the graft.
+    let list: Value = serde_json::from_str(&c.ok("graft_list", json!({}))).unwrap();
+    assert_eq!(list[0]["name"], "a", "{list}");
+    assert_eq!(list[0]["backend"], "reflink", "{list}");
+    assert_eq!(list[0]["changed"], 0, "{list}");
+    assert!(list[0]["disk_bytes"].is_u64(), "{list}");
+    assert!(
+        list[0]["path"].as_str().unwrap().ends_with("/mounts/a"),
+        "{list}"
+    );
+    c.ok(
+        "graft_run",
+        json!({"name": "a", "command": ["sh", "-c", "echo hi > new.txt"]}),
+    );
+    let status: Value = serde_json::from_str(&c.ok("graft_status", json!({"name": "a"}))).unwrap();
+    assert_eq!(
+        status[0]["changes"],
+        json!([{"kind": "A", "path": "new.txt"}]),
+        "{status}"
+    );
+
+    // Reflink grafts cannot be budded, ringed or rewound; the hint says how.
+    for (tool, args) in [
+        ("graft_bud", json!({"src": "a", "dst": "b"})),
+        ("graft_ring", json!({"name": "a"})),
+        ("graft_rewind", json!({"name": "a", "ring": "r"})),
+    ] {
+        let e = error_of(&mut c, tool, args);
+        assert_eq!(e["code"], "backend_unsupported", "{tool}: {e}");
+        assert!(
+            e["hint"]
+                .as_str()
+                .unwrap()
+                .contains("graft_new with backend"),
+            "{tool}: {e}"
+        );
+    }
+    c.ok(
+        "graft_prune",
+        json!({"name": "a", "force": true, "confirm": true}),
+    );
+
+    // A failing layer build: nothing created, the output and a next step.
+    std::fs::write(
+        r.join("graft.toml"),
+        "[[layer]]\npath = \"deps\"\ninputs = [\"deps.lock\"]\nbuild = 'echo resolving; echo broken toolchain >&2; exit 3'\n",
+    )
+    .unwrap();
+    std::fs::write(r.join("deps.lock"), "v1\n").unwrap();
+    git(r, &["add", "-A"]);
+    git(r, &["commit", "-qm", "layer"]);
+    let trust = Command::new(env!("CARGO_BIN_EXE_graft"))
+        .arg("trust")
+        .current_dir(r)
+        .env("GRAFT_HOME", home.path())
+        .status()
+        .unwrap();
+    assert!(trust.success());
+    let e = error_of(
+        &mut c,
+        "graft_new",
+        json!({"name": "b", "backend": "reflink"}),
+    );
+    assert_eq!(e["code"], "layer_build_failed", "{e}");
+    assert!(
+        e["message"].as_str().unwrap().contains("broken toolchain"),
+        "{e}"
+    );
+    assert!(
+        e["hint"].as_str().unwrap().contains("call graft_new again"),
+        "{e}"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&c.ok("graft_list", json!({}))).unwrap(),
+        json!([])
+    );
+}
+
+/// `graft_ring` then `graft_rewind` over MCP on a virtual graft, and the undo
+/// hint names the tool (ADR 0025).
+#[cfg(any(
+    all(feature = "fuse-tests", target_os = "linux"),
+    all(feature = "nfs-tests", target_os = "macos")
+))]
+#[test]
+fn rings_rewind_over_mcp() {
+    let (var, backend) = if cfg!(target_os = "linux") {
+        ("GRAFT_TEST_FUSE", "fuse")
+    } else {
+        ("GRAFT_TEST_NFS", "nfs")
+    };
+    assert_eq!(std::env::var(var).as_deref(), Ok("1"), "needs {var}=1");
+    let home = tempfile::tempdir().unwrap();
+    let repo = git_repo();
+    let r = repo.path();
+    let init = Command::new(env!("CARGO_BIN_EXE_graft"))
+        .arg("init")
+        .current_dir(r)
+        .env("GRAFT_HOME", home.path())
+        .status()
+        .unwrap();
+    assert!(init.success());
+    let mut c = Client::start(home.path(), r);
+    c.ok("graft_new", json!({"name": "v", "backend": backend}));
+    c.ok(
+        "graft_run",
+        json!({"name": "v", "command": ["sh", "-c", "echo one > a.txt"]}),
+    );
+    c.ok("graft_ring", json!({"name": "v", "label": "one"}));
+    c.ok(
+        "graft_run",
+        json!({"name": "v", "command": ["sh", "-c", "echo two > b.txt"]}),
+    );
+    let done = c.ok("graft_rewind", json!({"name": "v", "ring": "one"}));
+    assert!(
+        done.contains("To undo: graft_rewind with name: \"v\""),
+        "{done}"
+    );
+    let status: Value = serde_json::from_str(&c.ok("graft_status", json!({"name": "v"}))).unwrap();
+    assert_eq!(
+        status[0]["changes"],
+        json!([{"kind": "A", "path": "a.txt"}]),
+        "{status}"
+    );
+    let e = error_of(&mut c, "graft_rewind", json!({"name": "v", "ring": "nope"}));
+    assert_eq!(e["code"], "not_found", "{e}");
+    assert!(e["hint"].as_str().unwrap().contains("graft_ring"), "{e}");
+    c.ok(
+        "graft_prune",
+        json!({"name": "v", "force": true, "confirm": true}),
+    );
+    let stop = Command::new(env!("CARGO_BIN_EXE_graft"))
+        .args(["daemon", "stop"])
+        .current_dir(r)
+        .env("GRAFT_HOME", home.path())
+        .status()
+        .unwrap();
+    assert!(stop.success());
 }

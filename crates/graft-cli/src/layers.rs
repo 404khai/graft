@@ -252,11 +252,19 @@ fn build(
                 tail.trim_end()
             )
         });
-        bail!(
-            "layer {}: build `{}` failed ({status}){shown}",
-            spec.path.display(),
-            spec.build
-        );
+        let retry = crate::agent::suggest("rerun `graft new`", "call graft_new again");
+        return Err(crate::agent::coded(
+            "layer_build_failed",
+            format!(
+                "layer {}: build `{}` failed ({status}){shown}",
+                spec.path.display(),
+                spec.build
+            ),
+            Some(format!(
+                "nothing was created; fix the build command or its toolchain \
+                 ([[layer]] in graft.toml), then {retry}"
+            )),
+        ));
     }
     match std::fs::symlink_metadata(&target) {
         Ok(m) if m.is_dir() => Ok(()),

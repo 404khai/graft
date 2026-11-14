@@ -9,12 +9,12 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": false,
       "title": "Create a graft"
     },
-    "description": "Create a graft: a private copy-on-write workspace checked out from Root. Returns where it is.",
+    "description": "Create a graft: a private copy-on-write workspace checked out from Root. Returns its path. Layers declared in Root's graft.toml (e.g. node_modules) are built on the first create and shared after; if a build fails, nothing is created and the error (code layer_build_failed) shows the build's output.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
         "backend": {
-          "description": "Filesystem backend (default: the configured one).",
+          "description": "Filesystem backend: reflink (a real working tree; the default unless config.toml or $GRAFT_FS says otherwise), or a virtual graft served by graftd: fuse on Linux, nfs on macOS. Only virtual grafts support graft_bud, graft_ring and graft_rewind.",
           "enum": [
             "reflink",
             "fuse",
@@ -47,7 +47,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": true,
       "title": "List grafts"
     },
-    "description": "List grafts with their base, state, changed files and disk use.",
+    "description": "List grafts as JSON: name, base, state, backend, path, changed (file count) and disk_bytes (null when unknown, with the reason in note).",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},
@@ -60,7 +60,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": true,
       "title": "Show a graft's changes"
     },
-    "description": "Show what changed in a graft since its base (or summarise every graft).",
+    "description": "Show what changed in a graft since its base, as JSON: a list of grafts with their changes ({kind: A|M|D|..., path}). Without name, every graft.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -137,7 +137,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": false,
       "title": "Fork a graft"
     },
-    "description": "Fork a virtual graft in constant time: a new graft with the same base and a copy of its changes.",
+    "description": "Fork a virtual graft (backend fuse or nfs) in constant time: a new graft with the same base and a copy of its changes. Reflink grafts are refused.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -164,7 +164,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": false,
       "title": "Checkpoint a graft"
     },
-    "description": "Checkpoint a virtual graft's changes as a named ring (restore it later with `graft rewind`), or list its rings.",
+    "description": "Checkpoint a virtual graft's (fuse or nfs) changes as a named ring, to restore later with graft_rewind, or list its rings.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -187,6 +187,33 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "type": "object"
     },
     "name": "graft_ring"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "readOnlyHint": false,
+      "title": "Rewind a graft to a ring"
+    },
+    "description": "Restore a virtual graft's changes to a ring made with graft_ring. The state it leaves is saved first as a ring named undo-<seq>, so a rewind can itself be undone.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Graft name: lowercase letters, digits and hyphens, at most 40 characters.",
+          "type": "string"
+        },
+        "ring": {
+          "description": "The ring's label, as graft_ring lists it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "ring"
+      ],
+      "type": "object"
+    },
+    "name": "graft_rewind"
   },
   {
     "annotations": {
@@ -216,7 +243,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": false,
       "title": "Land grafts in Root"
     },
-    "description": "Merge grafts onto a branch of Root through the integrate queue: structural merge, test gate, one commit each. Changes Root's history, so it needs confirm: true unless dry_run.",
+    "description": "Merge grafts onto a branch of Root through the integrate queue: structural merge, the [integrate] test gate if graft.toml sets one (the result says when none ran), one commit each. Changes Root's history, so it needs confirm: true unless dry_run.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -241,7 +268,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
           "type": "array"
         },
         "onto": {
-          "description": "Branch to land on.",
+          "description": "Branch to land on (default: [integrate] branch in graft.toml, else the branch Root has checked out, which also needs update_checkout).",
           "type": "string"
         },
         "prune": {

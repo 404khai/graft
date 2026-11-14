@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod agent;
 mod blueprints;
 mod daemon;
 mod doctor;
@@ -50,7 +51,7 @@ enum Command {
     /// Create a graft: a workspace of its own, checked out from Root.
     New(grafts::NewArgs),
     /// List grafts with their state, changes and disk use.
-    Ls,
+    Ls(grafts::LsArgs),
     /// Print a graft's working-tree path, e.g. `cd "$(graft path auth)"`.
     Path(grafts::NameArgs),
     /// Print a graft's blueprint environment (secrets redacted).
@@ -187,7 +188,7 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Init(args) => ok(root::init(&args, &env).map(Output::stdout))?,
         Command::Root(args) => ok(root::show(&args, &env).map(Output::stdout))?,
         Command::New(args) => ok(grafts::new(&args, &env))?,
-        Command::Ls => ok(grafts::ls(&env))?,
+        Command::Ls(args) => ok(grafts::ls(&args, &env))?,
         Command::Path(args) => ok(grafts::path(&args, &env))?,
         Command::Status(args) => ok(grafts::status(&args, &env))?,
         Command::Env(args) => ok(blueprints::env(&args, &env))?,
@@ -251,6 +252,10 @@ fn main() -> ExitCode {
             #[allow(clippy::print_stderr)]
             {
                 eprintln!("graft: {e:#}");
+                // For graft mcp: the same failure, with a code (ADR 0025).
+                if agent::is_mcp() {
+                    eprintln!("{}", agent::error_json(&e));
+                }
             }
             ExitCode::FAILURE
         }
