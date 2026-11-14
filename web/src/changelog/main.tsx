@@ -21,6 +21,20 @@ type Entry = {
 // From the merged PRs on main.
 const ENTRIES: Entry[] = [
   {
+    date: "2026-11-15",
+    title: "Clearer answers for agents over MCP",
+    tag: "Feature",
+    lede: "From the first agent session driving Graft over MCP: failures an agent can act on, and every tool answering in JSON.",
+    items: [
+      { title: "Coded errors", body: "A failed call returns {code, message, hint, output}, with codes like not_found, layer_build_failed and confirm_required, so agents don't parse English.", pr: 34 },
+      { title: "Hints in MCP terms", body: "Next steps name MCP tools (graft_list, graft_new), not CLI commands an agent can't run.", pr: 34 },
+      { title: "graft_rewind", body: "Rings made with graft_ring can now be restored over MCP, and every rewind can itself be undone.", pr: 34 },
+      { title: "JSON everywhere", body: "graft_list and graft_status return JSON, like plan and radar; graft ls --json and graft status --json do the same on the CLI.", pr: 34 },
+      { title: "No stray daemon", body: "A virtual graft that fails to create no longer leaves graftd running.", pr: 34 },
+    ],
+    art: "graft",
+  },
+  {
     date: "2026-11-14",
     title: "Faster landing and NFS builds on macOS",
     tag: "Performance",
