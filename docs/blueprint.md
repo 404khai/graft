@@ -27,7 +27,7 @@ toolchain = "node --version"
 | --- | --- | --- |
 | `path` | yes | Directory the build produces, relative to the top level. Must not be tracked in git, inside `.git`, or overlap another layer. |
 | `inputs` | yes | Files whose contents (at the graft's base commit) determine the layer. At least one; none inside `path`. |
-| `build` | yes | Shell command (`sh -c`) run in the graft's top level, with `GRAFT_NAME`, `GRAFT_ID` and `GRAFT_LAYER` set. Must create `path`. Its output goes to stderr. |
+| `build` | yes | Shell command (`sh -c`) run in the graft's top level, with `GRAFT_NAME`, `GRAFT_ID` and `GRAFT_LAYER` set. Must create `path`. Its output goes to `logs/layer-<key>.log` under the Root's directory (one line on stderr names it); a failed build shows its tail, and `graft new --verbose` streams it to stderr. |
 | `toolchain` | no | Shell command run in Root's top level whose stdout is part of the key, so a new compiler or runtime gets a new layer. |
 
 The key also includes the OS and architecture.
@@ -195,7 +195,7 @@ branch = "main"               # the target, if not Root's current branch
 
 | Key | Meaning |
 | --- | --- |
-| `test` | Shell command run confined in the merged scratch checkout. Exit 0 lets the graft land; anything else stops it with the output in `graft queue`. Without it there is no gate (and `graft queue` says so). |
+| `test` | Shell command run confined in the merged scratch checkout. Exit 0 lets the graft land; anything else stops it with the output in `graft queue`. Without it there is no gate, and `graft integrate` says so (`note: no test gate ran`). |
 | `resolver` | Shell command run when files still conflict after the line and structural merges, with `GRAFT_CONFLICTS` (newline-separated paths, each holding git conflict markers), `GRAFT_INTEGRATE_INFO` (a directory with `graft.diff`, `root.diff`, `graft.oplog`, and `task.md` from `--task`) and `GRAFT_NAME`. It must leave no conflict markers. |
 | `timeout_secs` | Limit for the gate and the resolver (default 300). |
 | `mode` | `commit` (default), `branch` (land on `refs/heads/graft/<name>` in Root), or `push`: as `branch`, then push it to `remote`, and with `pr = true` open a pull request into the target with `gh`. `push` is the only mode that uses the network. |
