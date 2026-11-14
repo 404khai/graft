@@ -346,3 +346,51 @@ fn removes_large_directories_page_by_page() {
     assert_eq!(backend.diff(&g.name, &fixture.base).unwrap(), Vec::new());
     backend.prune(&g.name, g.id).unwrap();
 }
+
+/// Overwriting a file over NFS (the client truncates with SETATTR, then
+/// WRITEs) is journaled once, when the file goes idle, with the final
+/// contents: the truncate shares the write's handle instead of being
+/// copied up and journaled on its own (Phase 8, ADR 0023).
+#[test]
+fn an_overwrite_is_journaled_once() {
+    require_nfs();
+    let tmp = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new_in(tmp.path());
+    let backend = backend_in(tmp.path());
+    let g = create(&backend, &fixture, "overwrite");
+    let target = g.path.join("README.md");
+    let status = Command::new("sh")
+        .args(["-c", "printf 'new\\n' > README.md"])
+        .current_dir(&g.path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    // Readers see the new contents at once, before journaling.
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "new\n");
+    let ops = || {
+        graft_store::Store::open(tmp.path())
+            .unwrap()
+            .op_log(g.id)
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.op.path() == b"README.md")
+            .collect::<Vec<_>>()
+    };
+    let deadline = Instant::now() + std::time::Duration::from_secs(10);
+    while ops().is_empty() && Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    // Two idle periods more, so a second op would have been journaled.
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let ops = ops();
+    assert_eq!(ops.len(), 1, "{ops:#?}");
+    let blobs = graft_store::blobs::BlobStore::new(tmp.path().join("blobs"));
+    match &ops[0].op {
+        graft_store::delta::Op::Write { blob, .. } => {
+            assert_eq!(std::fs::read(blobs.path(blob)).unwrap(), b"new\n");
+        }
+        other => panic!("expected a write, got {other:?}"),
+    }
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "new\n");
+    backend.prune(&g.name, g.id).unwrap();
+}

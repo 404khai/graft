@@ -21,6 +21,20 @@ type Entry = {
 // From the merged PRs on main.
 const ENTRIES: Entry[] = [
   {
+    date: "2026-11-14",
+    title: "Faster landing and NFS builds on macOS",
+    tag: "Performance",
+    lede: "Fixes from a real benchmark against git worktrees on an Apple M3, with every correctness suite unchanged.",
+    items: [
+      { title: "graft integrate ≈2.6× faster", body: "One scratch checkout serves the whole queue when no test gate or resolver runs, and layers are cloned only when one does: 4 grafts land in 1.6 s instead of 4.3 s.", pr: 33 },
+      { title: "tsc in NFS grafts ≈30% faster", body: "Overwrites are journaled once with no copy-up, and macOS no longer retries AppleDouble files: 18.8 s instead of 27.4 s, measured side by side.", pr: 33 },
+      { title: "Quieter graft new", body: "A layer build prints one line and keeps its output in a log; --verbose streams it, and a failed build shows it.", pr: 33 },
+      { title: "Clearer integrate and doctor", body: "graft integrate says when no test gate ran, and graft doctor explains how to quote graft paths that contain a space.", pr: 33 },
+      { title: "Reflink grafts match worktrees", body: "The reported 5–10× gap inside reflink grafts on macOS did not reproduce in interleaved runs: git, rg, find and tsc are within noise of a worktree.", pr: 33 },
+    ],
+    art: "leaf2",
+  },
+  {
     date: "2026-11-12",
     title: "Agents drive Graft over MCP",
     tag: "Feature",

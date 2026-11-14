@@ -1,3 +1,4 @@
+import { BREW_INSTALL, CopyCommand } from "./CopyCommand";
 import { Flora } from "./Flora";
 
 export function Hero() {
@@ -20,7 +21,7 @@ export function Hero() {
       </p>
       <div className="actions">
         <a className="btn btn-green" href="/docs.html#quickstart">Get started →</a>
-        <a className="btn btn-dark" href="#install"><span className="prompt">$</span> brew install graft</a>
+        <CopyCommand command={BREW_INSTALL} />
       </div>
     </section>
   );

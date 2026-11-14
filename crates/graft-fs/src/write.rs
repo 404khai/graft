@@ -946,7 +946,9 @@ impl GraftView {
 
     fn truncate(&self, w: &mut Writer, ino: Ino, path: &[u8], size: u64) -> Result<(), Errno> {
         let was_open = lock(&self.staged).contains_key(&ino);
-        let s = self.open_staged(w, ino, path, false)?;
+        // Truncating to empty discards the contents, so they are not
+        // copied up first.
+        let s = self.open_staged(w, ino, path, size == 0)?;
         let result = (|| {
             s.file.set_len(size)?;
             s.dirty.store(true, Ordering::Release);

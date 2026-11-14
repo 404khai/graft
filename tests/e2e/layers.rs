@@ -549,3 +549,81 @@ fn graft_new_reports_step_timings_when_asked() {
     let quiet = f.cmd(&["new", "quiet"]).assert().success();
     assert!(!String::from_utf8_lossy(&quiet.get_output().stderr).contains("timing"));
 }
+
+/// The build log of every layer in the cache, as `logs/layer-<key>.log`.
+fn build_logs(f: &Fixture) -> Vec<PathBuf> {
+    let root = graft_store::registry::list_roots(&f.home())
+        .unwrap()
+        .pop()
+        .unwrap()
+        .0;
+    let dir = f.home().root_dir(&root.id).join("logs");
+    let mut logs: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|r| r.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    logs.sort();
+    logs
+}
+
+/// Prints "npm-style progress" and "6 vulnerabilities" without either
+/// appearing in the command itself (which the build notice names).
+const NOISY: &str = r#"mkdir deps && printf "%s-%s %s\n" npm style progress && printf "%s vulnerabilities\n" 6 >&2"#;
+
+/// A layer build's output does not flood `graft new`: one line says it is
+/// building and where its output goes, and the output is kept there.
+#[test]
+fn a_layer_build_is_quiet_and_its_output_is_kept() {
+    let f = Fixture::with_toml(&graft_toml(NOISY, None));
+    f.stdout(&["trust"]);
+    let o = f.run(&["new", "a"]).success();
+    let out = String::from_utf8_lossy(&o.get_output().stdout).into_owned();
+    let err = String::from_utf8_lossy(&o.get_output().stderr).into_owned();
+    assert!(out.contains("layer deps: built"), "{out}");
+    assert!(err.contains("Building layer deps (`"), "{err}");
+    for noise in ["npm-style progress", "6 vulnerabilities"] {
+        assert!(!out.contains(noise) && !err.contains(noise), "{out}{err}");
+    }
+    let logs = build_logs(&f);
+    assert_eq!(logs.len(), 1, "{logs:?}");
+    let log = std::fs::read_to_string(&logs[0]).unwrap();
+    assert!(
+        log.contains("npm-style progress") && log.contains("6 vulnerabilities"),
+        "{log}"
+    );
+    assert!(err.contains(&logs[0].display().to_string()), "{err}");
+    // gc removes the log with its layer.
+    f.stdout(&["prune", "a", "--force"]);
+    f.stdout(&["gc"]);
+    assert_eq!(f.cache_dirs().len(), 0);
+    assert_eq!(build_logs(&f), Vec::<PathBuf>::new());
+}
+
+/// `graft new --verbose` streams the build's output instead (on stderr;
+/// stdout stays the result).
+#[test]
+fn verbose_streams_the_layer_build() {
+    let f = Fixture::with_toml(&graft_toml(NOISY, None));
+    f.stdout(&["trust"]);
+    let o = f.run(&["new", "a", "--verbose"]).success();
+    let out = String::from_utf8_lossy(&o.get_output().stdout).into_owned();
+    let err = String::from_utf8_lossy(&o.get_output().stderr).into_owned();
+    assert!(err.contains("npm-style progress"), "{err}");
+    assert!(err.contains("6 vulnerabilities"), "{err}");
+    assert!(!out.contains("npm-style progress"), "{out}");
+}
+
+/// A failed build's output is shown with the error, and no log is left.
+#[test]
+fn a_failed_build_shows_its_output_and_keeps_no_log() {
+    let f = Fixture::with_toml(&graft_toml(
+        "echo first line; echo npm ERR! missing thing >&2; exit 3",
+        None,
+    ));
+    f.stdout(&["trust"]);
+    f.run(&["new", "broken"])
+        .failure()
+        .stderr(predicate::str::contains("first line"))
+        .stderr(predicate::str::contains("npm ERR! missing thing"))
+        .stderr(predicate::str::contains("rerun with --verbose"));
+    assert_eq!(build_logs(&f), Vec::<PathBuf>::new());
+}

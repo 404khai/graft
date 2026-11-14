@@ -7,6 +7,7 @@
 //! `graft trust`.
 
 use std::fmt::Write as _;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -175,7 +176,28 @@ pub(crate) fn plan(
     Ok(planned)
 }
 
-fn build(spec: &LayerSpec, graft_dir: &Path, name: &GraftName, id: GraftId) -> anyhow::Result<()> {
+/// How much of a layer build's output reaches the terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BuildOutput {
+    /// A one-line notice; the output goes to the layer's build log
+    /// (`layers/<key>.log`) and its tail is shown only if the build fails.
+    Quiet,
+    /// The build's output as it runs (`graft new --verbose`).
+    Stream,
+}
+
+/// The last bytes of a failed build's output that are shown.
+const FAILED_TAIL: usize = 8000;
+
+fn build(
+    spec: &LayerSpec,
+    key: &LayerKey,
+    cache: &LayerCache,
+    graft_dir: &Path,
+    name: &GraftName,
+    id: GraftId,
+    output: BuildOutput,
+) -> anyhow::Result<()> {
     let target = graft_dir.join(&spec.path);
     if std::fs::symlink_metadata(&target).is_ok() {
         bail!(
@@ -184,33 +206,69 @@ fn build(spec: &LayerSpec, graft_dir: &Path, name: &GraftName, id: GraftId) -> a
             target.display()
         );
     }
-    let status = Command::new("sh")
-        .args(["-c", &spec.build])
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", &spec.build])
         .current_dir(graft_dir)
         .env("GRAFT_NAME", name.as_str())
         .env("GRAFT_ID", id.to_string())
         .env("GRAFT_LAYER", &spec.path)
-        .stdin(Stdio::null())
-        // Build output is progress, not graft's result: keep stdout clean.
-        .stdout(Stdio::from(std::io::stderr()))
-        .stderr(Stdio::inherit())
-        .status()
-        .with_context(|| format!("layer {}: running `{}`", spec.path.display(), spec.build))?;
+        .stdin(Stdio::null());
+    let log_path = cache.log_path(key);
+    let running = || format!("layer {}: running `{}`", spec.path.display(), spec.build);
+    let (status, log) = match output {
+        BuildOutput::Stream => {
+            // Build output is progress, not graft's result: keep stdout clean.
+            cmd.stdout(Stdio::from(std::io::stderr()))
+                .stderr(Stdio::inherit());
+            (cmd.status().with_context(running)?, None)
+        }
+        BuildOutput::Quiet => {
+            // Shown now, before the wait, not with graft new's result.
+            let _ = writeln!(
+                std::io::stderr(),
+                "Building layer {} (`{}`); its output goes to {}",
+                spec.path.display(),
+                spec.build,
+                log_path.display()
+            );
+            // One file for both streams keeps their interleaving.
+            let mut log = cache.create_log(key)?;
+            cmd.stdout(log.try_clone()?).stderr(log.try_clone()?);
+            let status = cmd.status().with_context(running)?;
+            let mut text = Vec::new();
+            std::io::Seek::rewind(&mut log)?;
+            std::io::Read::read_to_end(&mut log, &mut text)?;
+            (status, Some(text))
+        }
+    };
     if !status.success() {
+        // A failed build leaves nothing behind; its output is in the error.
+        let _ = std::fs::remove_file(&log_path);
+        let shown = log.map_or_else(String::new, |text| {
+            let tail = String::from_utf8_lossy(&text[text.len().saturating_sub(FAILED_TAIL)..])
+                .into_owned();
+            format!(
+                " (rerun with --verbose for its full output):\n{}",
+                tail.trim_end()
+            )
+        });
         bail!(
-            "layer {}: build `{}` failed ({status})",
+            "layer {}: build `{}` failed ({status}){shown}",
             spec.path.display(),
             spec.build
         );
     }
     match std::fs::symlink_metadata(&target) {
         Ok(m) if m.is_dir() => Ok(()),
-        _ => bail!(
-            "layer {}: build `{}` succeeded but did not create the directory {}",
-            spec.path.display(),
-            spec.build,
-            spec.path.display()
-        ),
+        _ => {
+            let _ = std::fs::remove_file(&log_path);
+            bail!(
+                "layer {}: build `{}` succeeded but did not create the directory {}",
+                spec.path.display(),
+                spec.build,
+                spec.path.display()
+            )
+        }
     }
 }
 
@@ -220,6 +278,7 @@ fn build(spec: &LayerSpec, graft_dir: &Path, name: &GraftName, id: GraftId) -> a
 /// `graft_dir` is only used to build missing layers. Holds each layer's lock from the readiness
 /// check until its reference is recorded, so `graft gc` cannot remove it in
 /// between.
+#[allow(clippy::too_many_arguments)] // the graft's identity and two modes, from three call sites
 pub(crate) fn apply(
     planned: &[Planned],
     cache: &LayerCache,
@@ -228,6 +287,7 @@ pub(crate) fn apply(
     name: &GraftName,
     id: GraftId,
     materialize: bool,
+    output: BuildOutput,
 ) -> anyhow::Result<Vec<Applied>> {
     let mut applied = Vec::with_capacity(planned.len());
     for p in planned {
@@ -235,7 +295,9 @@ pub(crate) fn apply(
         let lock = time_layer("lock layer", layer, || cache.lock(&p.key))?;
         let mut built = false;
         if !cache.is_ready(&p.key) {
-            time_layer("build layer", layer, || build(&p.spec, graft_dir, name, id))?;
+            time_layer("build layer", layer, || {
+                build(&p.spec, &p.key, cache, graft_dir, name, id, output)
+            })?;
             time_layer("install layer", layer, || {
                 cache.install(&p.key, &graft_dir.join(&p.spec.path), &lock)
             })?;

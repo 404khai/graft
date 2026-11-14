@@ -144,6 +144,36 @@ impl LayerCache {
         self.dir.join(key.to_string())
     }
 
+    /// Where the output of the build that produced `key` is kept, until
+    /// the layer is removed: `logs/layer-<key>.log` next to the cache.
+    #[must_use]
+    pub fn log_path(&self, key: &LayerKey) -> PathBuf {
+        self.dir
+            .with_file_name("logs")
+            .join(format!("layer-{key}.log"))
+    }
+
+    /// Creates (truncating) the build log of `key`, mode `0600`.
+    ///
+    /// # Errors
+    ///
+    /// If the cache directory or the file cannot be created.
+    pub fn create_log(&self, key: &LayerKey) -> Result<File> {
+        let path = self.log_path(key);
+        if let Some(logs) = path.parent() {
+            let mut builder = std::fs::DirBuilder::new();
+            builder.recursive(true);
+            #[cfg(unix)]
+            std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+            builder.create(logs).map_err(io_err(logs))?;
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).truncate(true).read(true).write(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        options.open(&path).map_err(io_err(&path))
+    }
+
     /// Whether the layer `key` is complete in the cache.
     #[must_use]
     pub fn is_ready(&self, key: &LayerKey) -> bool {
@@ -274,6 +304,15 @@ impl LayerCache {
             Ok(_) => std::fs::remove_file(&path).map_err(io_err(&path))?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(io_err(&path)(e)),
+        }
+        if let CacheEntry::Ready(key) = entry {
+            let log = self.log_path(key);
+            match std::fs::remove_file(&log) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(io_err(&log)(e));
+                }
+                _ => {}
+            }
         }
         Ok(())
     }

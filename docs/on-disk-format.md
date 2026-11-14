@@ -1,6 +1,6 @@
 # On-disk format
 
-**Format version: 12** (metadata schema v10)
+**Format version: 13** (metadata schema v10)
 
 This file describes everything Graft persists. Any change to a structure
 below bumps the format version, adds a migration, and updates this file in
@@ -36,13 +36,19 @@ $GRAFT_HOME/
         │       ├── work/<n>    staging files of files open for writing
         │       └── git/        the graft's .git, created on first use
         ├── integrate/          mode 0700, Integrate's scratch checkouts
-        │                       (ADR 0017), removed after each request
+        │                       (ADR 0017); one may serve several requests
+        │                       of a queue run (ADR 0021), all removed
+        │                       when the run ends
         ├── integrate.lock      OS file lock held while the queue is worked
         ├── radar/              mode 0700, Radar's scratch checkouts (ADR 0016);
         │                       each is removed when its check ends
         ├── tmp/                mode 0700, created by `graft run` (ADR 0014)
         │   └── <graft-id>/     a graft's private TMPDIR, mode 0700;
         │                       removed when the graft is pruned
+        ├── logs/               mode 0700, created by the first layer build
+        │   └── layer-<layer-key>.log  mode 0600, output of the build that
+        │                       made the layer; removed with the layer by
+        │                       `graft gc`, and never kept for a failed build
         ├── layers/             mode 0700, the layer cache (ADR 0004)
         │   ├── <layer-key>/    a complete layer (directory tree)
         │   ├── <layer-key>.lock  OS file lock held by builders and gc
@@ -72,6 +78,7 @@ Entries in `roots/` whose name is not a valid Root ID, or that contain no
 | 10 | Adds `radar/` (scratch checkouts of Radar's behaviour checks) and schema v8 (`radar_checks`; ADR 0016) | Schema v7 → v8 runs automatically on open; a table only added |
 | 11 | Adds `integrate/` (scratch checkouts), `integrate.lock`, schema v9 (`integrations`) and transient `refs/graft/integrating/<graft-id>` refs in Root (ADR 0017) | Schema v8 → v9 runs automatically on open; a table only added |
 | 12 | Schema v10: `claims` and `admissions` (ADR 0018) | Schema v9 → v10 runs automatically on open; tables only added |
+| 13 | Adds `logs/layer-<layer-key>.log` (layer build output); an `integrate/` scratch checkout may outlive one request within a queue run (ADR 0021) | None: additive; layers built before v13 simply have no log, and Graft never reads the logs |
 
 ## `config.toml`
 

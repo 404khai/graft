@@ -156,3 +156,19 @@ fn fails_on_a_missing_path() {
         .failure()
         .stdout(predicate::str::contains("cannot inspect"));
 }
+
+/// A graft home with a space (the macOS default) makes doctor say how to
+/// quote graft paths; one without says nothing (ADR 0022).
+#[test]
+fn warns_when_graft_paths_contain_a_space() {
+    let base = tempfile::tempdir().unwrap();
+    let repo = fake_repo();
+    let spaced = base.path().join("Application Support").join("graft");
+    let stdout = doctor_stdout(&spaced, repo.path());
+    assert!(
+        line(&stdout, "spaces").contains("cd \"$(graft path NAME)\""),
+        "{stdout}"
+    );
+    let plain = doctor_stdout(&base.path().join("graft"), repo.path());
+    assert!(!plain.contains("spaces"), "{plain}");
+}

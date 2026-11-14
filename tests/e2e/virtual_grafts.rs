@@ -709,6 +709,38 @@ mod fuse {
             .success();
     }
 
+    /// An overwrite of a base file (on NFS: a truncating SETATTR, then
+    /// WRITEs, journaled together once the file goes idle; ADR 0023) that
+    /// graftd is killed before journaling keeps its new contents.
+    #[test]
+    fn a_crash_before_an_overwrite_is_journaled_keeps_it() {
+        require_fuse();
+        let home = tempfile::tempdir().unwrap();
+        let _daemon = Daemon(home.path());
+        let repo = crate::git_repo();
+        init(home.path(), repo.path());
+        let path = new_fuse(home.path(), repo.path(), "overwrite");
+        // Truncates the existing file, writes, and closes (which sends the
+        // writes to graftd), well inside the idle period.
+        std::fs::write(path.join("README.md"), "rewritten\n").unwrap();
+        kill9(&daemon_pid(home.path()));
+        graft_d(home.path())
+            .current_dir(repo.path())
+            .args(["status", "overwrite"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("M README.md"));
+        assert_eq!(
+            std::fs::read_to_string(path.join("README.md")).unwrap(),
+            "rewritten\n"
+        );
+        graft_d(home.path())
+            .current_dir(repo.path())
+            .args(["prune", "overwrite", "--force"])
+            .assert()
+            .success();
+    }
+
     #[test]
     fn a_restarted_daemon_remounts_grafts() {
         require_fuse();

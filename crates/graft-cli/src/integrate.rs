@@ -22,6 +22,7 @@ use graft_root::graft::{FileDiff, GraftRepo};
 use graft_store::{GraftRecord, Integration, IntegrationState};
 
 use crate::grafts::{Ctx, find, open, parse_name};
+use crate::timing::time;
 use crate::{Environment, Output};
 
 /// Arguments for `graft integrate`.
@@ -378,6 +379,8 @@ struct Outcome {
     state: IntegrationState,
     output: String,
     commit: Option<String>,
+    /// It passed with no test gate configured.
+    ungated: bool,
 }
 
 impl Outcome {
@@ -386,6 +389,21 @@ impl Outcome {
             state,
             output: output.into(),
             commit: None,
+            ungated: false,
+        }
+    }
+
+    fn passed(
+        state: IntegrationState,
+        output: String,
+        commit: Option<String>,
+        spec: &IntegrateSpec,
+    ) -> Self {
+        Self {
+            state,
+            output,
+            commit,
+            ungated: spec.test.is_none(),
         }
     }
 }
@@ -544,13 +562,121 @@ fn preflight(
     Ok(Ok(diffs))
 }
 
-/// Runs one request in a scratch checkout of the target's head.
+/// A scratch checkout of a target's head under `integrate/`.
+///
+/// One checkout serves a whole queue run while nothing runs in it: after
+/// a request lands without a resolver or test gate, the checkout is at
+/// the commit it just landed, so the next request on the same target
+/// reuses it instead of checking out a fresh tree (ADR 0021). Anything
+/// that ran in it, or any doubt about its state, gets a fresh one.
+struct Scratch {
+    backend: ReflinkBackend,
+    name: GraftName,
+    id: GraftId,
+    dir: PathBuf,
+    /// The commit the checkout is at, with a clean tree.
+    head: CommitId,
+}
+
+impl Scratch {
+    fn create(ctx: &Ctx, head: &CommitId) -> anyhow::Result<Self> {
+        let backend = ReflinkBackend::new(ctx.root_dir().join("integrate"));
+        let id = GraftId::random()?;
+        let name: GraftName = format!("land-{}", &id.to_string()[..12]).parse()?;
+        let created = time("integrate: check out scratch tree", || {
+            backend.create(
+                &ctx.located.repo,
+                &GraftSpec {
+                    id,
+                    name: &name,
+                    base: head,
+                },
+            )
+        })?;
+        Ok(Self {
+            backend,
+            name,
+            id,
+            dir: created.path,
+            head: head.clone(),
+        })
+    }
+
+    /// Whether the checkout is exactly `head`: HEAD matches and nothing
+    /// is modified, untracked or ignored.
+    fn is_exactly(&self, head: &CommitId) -> bool {
+        self.head == *head
+            && git(&self.dir, &["rev-parse", "HEAD"]).is_ok_and(|h| h == head.as_str())
+            && git(
+                &self.dir,
+                &[
+                    "status",
+                    "--porcelain",
+                    "--ignored=matching",
+                    "--untracked-files=all",
+                ],
+            )
+            .is_ok_and(|s| s.is_empty())
+    }
+
+    /// The kept checkout if it is exactly `head`, else a fresh one.
+    fn for_head(ctx: &Ctx, kept: Option<Self>, head: &CommitId) -> anyhow::Result<Self> {
+        match kept {
+            Some(s) if s.is_exactly(head) => Ok(s),
+            Some(s) => {
+                s.remove()?;
+                Self::create(ctx, head)
+            }
+            None => Self::create(ctx, head),
+        }
+    }
+
+    fn remove(self) -> anyhow::Result<()> {
+        let this = std::mem::ManuallyDrop::new(self);
+        time("integrate: remove scratch tree", || {
+            this.backend.prune(&this.name, this.id)
+        })?;
+        Ok(())
+    }
+}
+
+impl Drop for Scratch {
+    /// A scratch checkout left by an error is removed on the way out.
+    fn drop(&mut self) {
+        if let Err(e) = self.backend.prune(&self.name, self.id) {
+            tracing::warn!(dir = %self.dir.display(), "could not remove scratch checkout: {e}");
+        }
+    }
+}
+
+/// Clones Root's cached layers into a scratch checkout, for a resolver or
+/// test gate to use. Missing layers are not built.
+fn link_layers(ctx: &Ctx, head: &CommitId, dir: &Path) -> anyhow::Result<()> {
+    if let Ok(planned) = crate::layers::plan(
+        &ctx.located.repo,
+        &ctx.located.store,
+        &ctx.layers,
+        head,
+        None,
+        None,
+    ) {
+        time("integrate: link layers", || {
+            crate::layers::link_ready(&planned, &ctx.layers, dir)
+        })?;
+    }
+    Ok(())
+}
+
+/// Runs one request in a scratch checkout of the target's head. `kept`
+/// is the checkout a previous request left for reuse, and receives this
+/// one's if it can be reused.
 fn attempt(
     ctx: &mut Ctx,
     entry: &Integration,
     record: &GraftRecord,
     args: &IntegrateArgs,
     out: &mut Output,
+    kept: &mut Option<Scratch>,
 ) -> anyhow::Result<Outcome> {
     let head = branch_head(ctx, &entry.target)?;
     let spec = spec_at(&ctx.located.repo, &head)?;
@@ -558,31 +684,16 @@ fn attempt(
         Ok(d) => d,
         Err(stop) => return Ok(stop),
     };
-    let backend = ReflinkBackend::new(ctx.root_dir().join("integrate"));
-    let id = GraftId::random()?;
-    let name: GraftName = format!("land-{}", &id.to_string()[..12]).parse()?;
-    let created = backend.create(
-        &ctx.located.repo,
-        &GraftSpec {
-            id,
-            name: &name,
-            base: &head,
-        },
-    )?;
+    let mut scratch = Scratch::for_head(ctx, kept.take(), &head)?;
+    // Whether a resolver or test gate ran in the checkout: then it is
+    // never reused.
+    let mut ran = false;
     let result = (|| -> anyhow::Result<Outcome> {
-        let dir = created.path.clone();
-        if let Ok(planned) = crate::layers::plan(
-            &ctx.located.repo,
-            &ctx.located.store,
-            &ctx.layers,
-            &head,
-            None,
-            None,
-        ) {
-            crate::layers::link_ready(&planned, &ctx.layers, &dir)?;
-        }
+        let dir = scratch.dir.clone();
         let merger = Merger::detect();
-        let applied = apply(ctx, record, &dir, &diffs, &merger)?;
+        let applied = time("integrate: apply changes", || {
+            apply(ctx, record, &dir, &diffs, &merger)
+        })?;
         let mut log = String::new();
         if !applied.structural.is_empty() {
             let list: Vec<String> = applied
@@ -592,20 +703,30 @@ fn attempt(
                 .collect();
             let _ = writeln!(log, "structural merge (Mergiraf): {}", list.join(", "));
         }
-        if !applied.conflicts.is_empty()
-            && let Some(stop) = resolve(
+        if !applied.conflicts.is_empty() {
+            if spec.resolver.is_some() {
+                ran = true;
+                link_layers(ctx, &head, &dir)?;
+            }
+            if let Some(stop) = resolve(
                 ctx, record, &dir, &head, &diffs, &applied, &spec, args, &mut log,
-            )?
-        {
-            return Ok(stop);
+            )? {
+                return Ok(stop);
+            }
+        }
+        if spec.test.is_some() {
+            if !ran {
+                link_layers(ctx, &head, &dir)?;
+            }
+            ran = true;
         }
         if let Some(stop) = gate(&dir, &spec, &mut log)? {
             return Ok(stop);
         }
         if entry.dry_run {
-            return Ok(Outcome::stop(IntegrationState::Checked, log));
+            return Ok(Outcome::passed(IntegrationState::Checked, log, None, &spec));
         }
-        git(&dir, &["add", "-A"])?;
+        time("integrate: commit", || git(&dir, &["add", "-A"]))?;
         let msg_path = dir.join(".git").join("GRAFT_INTEGRATE_MSG");
         std::fs::write(
             &msg_path,
@@ -622,7 +743,9 @@ fn attempt(
             ],
         )?;
         let new = git(&dir, &["rev-parse", "HEAD"])?;
-        land(ctx, &dir, &head, &new, &entry.target, record, &spec, args)?;
+        time("integrate: land", || {
+            land(ctx, &dir, &head, &new, &entry.target, record, &spec, args)
+        })?;
         let _ = writeln!(
             log,
             "landed {} on {}",
@@ -632,13 +755,28 @@ fn attempt(
         if spec.mode == IntegrateMode::Push {
             publish(ctx, &spec, &entry.target, record, &msg_path, &mut log)?;
         }
-        Ok(Outcome {
-            state: IntegrationState::Landed,
-            output: log,
-            commit: Some(new),
-        })
+        Ok(Outcome::passed(
+            IntegrationState::Landed,
+            log,
+            Some(new),
+            &spec,
+        ))
     })();
-    backend.prune(&name, id)?;
+    // Reuse only a checkout that holds exactly what just landed on the
+    // target, and only in commit mode, where that is the target's head.
+    let reusable = !ran
+        && spec.mode == IntegrateMode::Commit
+        && matches!(&result, Ok(o) if o.state == IntegrationState::Landed);
+    if reusable
+        && let Ok(Outcome {
+            commit: Some(c), ..
+        }) = &result
+    {
+        scratch.head = c.parse()?;
+        *kept = Some(scratch);
+    } else {
+        scratch.remove()?;
+    }
     result
 }
 
@@ -778,6 +916,8 @@ fn process(ctx: &mut Ctx, args: &IntegrateArgs, out: &mut Output) -> anyhow::Res
         .with_context(|| format!("locking {}", lock_path.display()))?;
     ctx.located.store.requeue_running()?;
     let mut all_ok = true;
+    let mut ungated = false;
+    let mut kept: Option<Scratch> = None;
     while let Some(entry) = ctx.located.store.next_queued()? {
         ctx.located
             .store
@@ -785,10 +925,10 @@ fn process(ctx: &mut Ctx, args: &IntegrateArgs, out: &mut Output) -> anyhow::Res
         let record = ctx.located.store.graft_by_id(entry.graft_id)?;
         let outcome = match record {
             Some(r) if r.state == GraftState::Live => {
-                let mut o = attempt(ctx, &entry, &r, args, out);
+                let mut o = attempt(ctx, &entry, &r, args, out, &mut kept);
                 // The target moved under us: retry once from its new head.
                 if matches!(&o, Err(e) if format!("{e:#}").contains("update-ref")) {
-                    o = attempt(ctx, &entry, &r, args, out);
+                    o = attempt(ctx, &entry, &r, args, out, &mut kept);
                 }
                 o.unwrap_or_else(|e| Outcome::stop(IntegrationState::Failed, format!("{e:#}")))
             }
@@ -804,6 +944,7 @@ fn process(ctx: &mut Ctx, args: &IntegrateArgs, out: &mut Output) -> anyhow::Res
             &outcome.output,
             outcome.commit.as_deref(),
         )?;
+        ungated |= outcome.ungated;
         let short = outcome.commit.as_deref().map_or("", |c| &c[..12]);
         let _ = writeln!(
             out.stdout,
@@ -835,6 +976,14 @@ fn process(ctx: &mut Ctx, args: &IntegrateArgs, out: &mut Output) -> anyhow::Res
                 let _ = writeln!(out.stdout, "    {line}");
             }
         }
+    }
+    if let Some(s) = kept {
+        s.remove()?;
+    }
+    if ungated {
+        out.stdout.push_str(
+            "note: no test gate ran: set [integrate] test in graft.toml to test before landing\n",
+        );
     }
     drop(lock);
     Ok(all_ok)
