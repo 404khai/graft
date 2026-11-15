@@ -256,6 +256,8 @@ fn logged_denials(tag: &str, took: std::time::Duration) -> Vec<String> {
 /// Denied paths from `log show --style ndjson` lines such as
 /// `Sandbox: touch(42) deny(1) file-write-create /a b/c\n<tag>`, unique,
 /// in order.
+// Only macOS has the log; the parser is unit-tested everywhere.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn parse_denials(ndjson: &str) -> Vec<String> {
     let mut paths: Vec<String> = Vec::new();
     for line in ndjson.lines() {
