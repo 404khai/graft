@@ -174,14 +174,17 @@ fn an_agent_runs_the_whole_cycle_over_mcp() {
     git(r, &["add", "lib.py"]);
     git(r, &["commit", "-qm", "lib"]);
     git(r, &["branch", "land"]);
-    let init = Command::new(env!("CARGO_BIN_EXE_graft"))
-        .arg("init")
-        .current_dir(r)
-        .env("GRAFT_HOME", home.path())
-        .status()
-        .unwrap();
-    assert!(init.success());
     let mut c = Client::start(home.path(), r);
+
+    // init: an unregistered repository says how to register it.
+    let e = error_of(&mut c, "graft_list", json!({}));
+    assert_eq!(e["code"], "not_registered", "{e}");
+    assert_eq!(e["hint"], "call graft_init", "{e}");
+    let init: Value = serde_json::from_str(&c.ok("graft_init", json!({}))).unwrap();
+    assert_eq!(init["registered"], true, "{init}");
+    let again: Value = serde_json::from_str(&c.ok("graft_init", json!({}))).unwrap();
+    assert_eq!(again["registered"], false, "{again}");
+    assert_eq!(again["root"], init["root"]);
 
     let tools = c.request("tools/list", json!({}));
     let names: Vec<&str> = tools["tools"]
@@ -193,8 +196,10 @@ fn an_agent_runs_the_whole_cycle_over_mcp() {
     assert_eq!(
         names,
         [
+            "graft_init",
             "graft_new",
             "graft_list",
+            "graft_path",
             "graft_status",
             "graft_diff",
             "graft_run",
@@ -390,7 +395,7 @@ fn root_can_be_given_explicitly() {
 }
 
 #[test]
-fn mcp_refuses_to_start_outside_a_root() {
+fn mcp_refuses_to_start_outside_a_git_repository() {
     let home = tempfile::tempdir().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_graft"))

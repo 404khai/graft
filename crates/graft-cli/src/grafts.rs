@@ -92,6 +92,16 @@ pub(crate) struct NameArgs {
     name: String,
 }
 
+/// Arguments for `graft path`.
+#[derive(Debug, clap::Args)]
+pub(crate) struct PathArgs {
+    /// The graft's name.
+    name: String,
+    /// Print JSON: `{name, path}`.
+    #[arg(long)]
+    json: bool,
+}
+
 /// Arguments for `graft status`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct StatusArgs {
@@ -664,16 +674,17 @@ pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
 }
 
 /// Prints a graft's working-tree path.
-pub(crate) fn path(args: &NameArgs, env: &Environment) -> anyhow::Result<Output> {
+pub(crate) fn path(args: &PathArgs, env: &Environment) -> anyhow::Result<Output> {
     let name = parse_name(&args.name)?;
     let Ctx {
         located, backend, ..
     } = open(env)?;
     find(&located.store, &name)?;
-    Ok(Output::stdout(format!(
-        "{}\n",
-        backend.path(&name).display()
-    )))
+    let path = backend.path(&name);
+    Ok(Output::stdout(format!("{}\n", path.display())).json_if(
+        args.json,
+        || serde_json::json!({"name": name.to_string(), "path": path}),
+    ))
 }
 
 /// What `graft status` reports for one graft.

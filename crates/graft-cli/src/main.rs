@@ -53,7 +53,7 @@ enum Command {
     /// List grafts with their state, changes and disk use.
     Ls(grafts::LsArgs),
     /// Print a graft's working-tree path, e.g. `cd "$(graft path auth)"`.
-    Path(grafts::NameArgs),
+    Path(grafts::PathArgs),
     /// Print a graft's blueprint environment (secrets redacted).
     Env(blueprints::EnvArgs),
     /// Show what changed in a graft since its base.
@@ -195,7 +195,7 @@ fn run() -> anyhow::Result<ExitCode> {
 
     let ok = |r: anyhow::Result<Output>| r.map(|o| (o, ExitCode::SUCCESS));
     let (output, code) = match cli.command {
-        Command::Init(args) => ok(root::init(&args, &env).map(Output::stdout))?,
+        Command::Init(args) => ok(root::init(&args, &env))?,
         Command::Root(args) => ok(root::show(&args, &env).map(Output::stdout))?,
         Command::New(args) => ok(grafts::new(&args, &env))?,
         Command::Ls(args) => ok(grafts::ls(&args, &env))?,
@@ -227,9 +227,11 @@ fn run() -> anyhow::Result<ExitCode> {
                 std::env::set_current_dir(root)
                     .with_context(|| format!("entering {}", root.display()))?;
             }
-            // Fail early, with a message the client shows, outside a Root.
-            let home = env.require_home()?;
-            graft_store::registry::locate(home, std::path::Path::new("."))?;
+            // Fail early, with a message the client shows, outside a git
+            // repository. An unregistered one is fine: graft_init
+            // registers it.
+            env.require_home()?;
+            graft_root::Repo::discover(std::path::Path::new("."))?;
             let bin = std::env::current_exe().context("finding the graft binary")?;
             let cwd = std::env::current_dir().context("reading the current directory")?;
             graft_mcp::serve_stdio(bin, cwd).map_err(|e| anyhow::anyhow!("MCP server: {e}"))?;

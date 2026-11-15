@@ -52,6 +52,16 @@ pub fn tools() -> Vec<Tool> {
     let writes = || ToolAnnotations::new().read_only(false).destructive(false);
     vec![
         tool(
+            "graft_init",
+            "Register Root",
+            "Register the repository this server runs in as a Root, so the other tools can use it. Safe to repeat. Returns JSON {root, path, registered}; registered is false when it already was a Root.",
+            json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            ToolAnnotations::new()
+                .read_only(false)
+                .destructive(false)
+                .idempotent(true),
+        ),
+        tool(
             "graft_new",
             "Create a graft",
             "Create a graft: a private copy-on-write workspace checked out from Root. Returns JSON {name, path, base, backend, layers: [{path, status: built|reused, key}]}. Layers declared in Root's graft.toml (e.g. node_modules) are built on the first create and shared after; if a build fails, nothing is created and the error (code layer_build_failed) shows the build's output.",
@@ -73,6 +83,18 @@ pub fn tools() -> Vec<Tool> {
             "List grafts",
             "List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes (blocks not shared with Root or the layer cache, so build outputs count; null when unknown, with the reason in note).",
             json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            read_only(),
+        ),
+        tool(
+            "graft_path",
+            "Locate a graft",
+            "The absolute path of a graft's working tree, as JSON {name, path}. Run shell commands there (it may contain spaces, so quote it).",
+            json!({
+                "type": "object",
+                "properties": {"name": {"type": "string", "description": NAME}},
+                "required": ["name"],
+                "additionalProperties": false
+            }),
             read_only(),
         ),
         tool(
@@ -340,6 +362,7 @@ fn plan(
 /// # Errors
 ///
 /// A message for the caller.
+#[allow(clippy::too_many_lines)] // one arm per tool, read top to bottom
 pub fn invocation(name: &str, args: &JsonObject) -> Result<Invocation, String> {
     let known: Vec<String> = tools()
         .iter()
@@ -361,6 +384,12 @@ pub fn invocation(name: &str, args: &JsonObject) -> Result<Invocation, String> {
     };
     let a = &mut inv.args;
     match name {
+        "graft_init" => a.extend(["init".to_owned(), "--json".to_owned()]),
+        "graft_path" => a.extend([
+            "path".to_owned(),
+            "--json".to_owned(),
+            required(args, "name")?,
+        ]),
         "graft_new" => {
             a.extend(["new".to_owned(), required(args, "name")?]);
             option(a, "--from", word(args, "from")?);
@@ -473,6 +502,11 @@ mod tests {
             .unwrap(),
             ["run", "a", "--", "sh", "-c", "echo $HOME"]
         );
+        assert_eq!(call("graft_init", json!({})).unwrap(), ["init", "--json"]);
+        assert_eq!(
+            call("graft_path", json!({"name": "a"})).unwrap(),
+            ["path", "--json", "a"]
+        );
         assert_eq!(
             call("graft_radar", json!({"check": true})).unwrap(),
             ["radar", "--json", "--check"]
@@ -528,6 +562,8 @@ mod tests {
                 "must not start with '-'",
             ),
             ("graft_diff", json!({"name": 3}), "must be a string"),
+            ("graft_path", json!({}), "name is required"),
+            ("graft_init", json!({"path": "/"}), "takes no argument path"),
             (
                 "graft_run",
                 json!({"name": "a", "command": []}),

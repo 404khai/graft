@@ -1,7 +1,8 @@
 # MCP reference
 
 `graft mcp` serves Graft to MCP clients over stdio ([ADR 0019](decisions/0019-mcp-server.md)).
-It runs for one Root: the directory it starts in, or `--root PATH`. Each
+It runs for one Root: the git repository it starts in, or `--root PATH`.
+If that repository is not registered yet, `graft_init` registers it. Each
 tool call runs the `graft` command with the same name and the arguments
 below (never through a shell), so it behaves exactly as the CLI does:
 trust approvals, claims, prune safety and the sandbox all apply. Commands
@@ -20,6 +21,7 @@ object ([ADR 0025](decisions/0025-mcp-errors-for-agents.md)):
 | --- | --- |
 | `invalid_arguments` | The arguments do not match the tool's schema. |
 | `confirm_required` | A destructive call without `confirm: true`. |
+| `not_registered` | The repository is not a Root yet; call `graft_init`. |
 | `invalid_name` | Not a valid graft name. |
 | `not_found` | No such graft (or ring). |
 | `layer_build_failed` | A `graft.toml` layer build failed; nothing was created. `message` ends with the build's output. |
@@ -61,6 +63,12 @@ resource again to see what changed.
 The schemas below are generated from the server and pinned by a snapshot
 test (`crates/graft-mcp/src/snapshots/`).
 
+### `graft_init`
+
+Register the repository this server runs in as a Root, so the other tools can use it. Safe to repeat. Returns JSON {root, path, registered}; registered is false when it already was a Root. (idempotent)
+
+No parameters.
+
 ### `graft_new`
 
 Create a graft: a private copy-on-write workspace checked out from Root. Returns JSON {name, path, base, backend, layers: [{path, status: built|reused, key}]}. Layers declared in Root's graft.toml (e.g. node_modules) are built on the first create and shared after; if a build fails, nothing is created and the error (code layer_build_failed) shows the build's output.
@@ -77,6 +85,14 @@ Create a graft: a private copy-on-write workspace checked out from Root. Returns
 List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes (blocks not shared with Root or the layer cache, so build outputs count; null when unknown, with the reason in note). (read-only)
 
 No parameters.
+
+### `graft_path`
+
+The absolute path of a graft's working tree, as JSON {name, path}. Run shell commands there (it may contain spaces, so quote it). (read-only)
+
+| Parameter | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `name` | string | yes | Graft name: lowercase letters, digits and hyphens, at most 40 characters. |
 
 ### `graft_status`
 

@@ -232,10 +232,12 @@ Status: done (PR #27, ADR 0019). The server runs the `graft` binary for each too
 
 Follow-up from the first agent session over MCP (`reports/graft-mcp-report.md`, ADR 0025, `feat/mcp-agent-ergonomics`): failed calls return JSON `{code, message, hint, output}`; hints name MCP tools; `graft_list` and `graft_status` return JSON; `graft_rewind` added; a failed virtual create no longer leaves graftd running. The first complete agent session (`reports/graft-mcp-report3.md`: every step, every safety check held, no blockers) led to ADR 0026 (`feat/mcp-structured-results`): `graft_run` returns `{exit_code, signal, stdout, stderr, duration_ms, timed_out}`; refusals have their own codes (`work_would_be_lost`, `checkout_would_fall_behind`, per-request integrate codes) with MCP wording; a dry run applies the checked-out-branch rule; every tool but `graft_diff` returns JSON; list, status and the server instructions name the Root and version; layer-build failures name their `PATH`; `graft_plan` expands directories and reports what it could not place. Still open: there is no way to create a graft without its layers (owner's call), per-graft integrate commit messages, radar `detail` for path overlaps.
 
+Follow-up from the Astrid field report (`reports/graft_report_astrid.md`, two features landed over MCP on a Rust + Swift repo): `graft_init` registers Root over MCP, and `graft mcp` now starts in any git repository (an unregistered one fails with code `not_registered` and hint `call graft_init`); `graft_path` returns a graft's path as JSON.
+
 - [x] An MCP client test harness can run the full cycle: plan → new → run → radar → integrate → prune.
   - `an_agent_runs_the_whole_cycle_over_mcp` drives `graft mcp` with raw JSON-RPC over stdio: plan, two grafts, `graft_run` edits (and a refused write outside the graft), Radar as a tool, a resource and a subscription (`notifications/resources/updated` arrives), a dry-run and a real integrate, and prunes.
 - [x] Tool schemas are documented and covered by snapshot tests.
-  - `tool_schemas_are_stable` (insta) pins all eleven schemas; `docs/mcp.md` is generated from them.
+  - `tool_schemas_are_stable` (insta) pins all fourteen schemas; `docs/mcp.md` is generated from them.
 - [x] Destructive tools refuse without confirmation.
   - `graft_integrate` (unless `dry_run`) and `graft_prune` with `force` return a tool error asking for `confirm: true`; unit tests and the end-to-end cycle check both.
 
