@@ -1225,7 +1225,7 @@ dependencies = [
 
 [[package]]
 name = "graft-blueprint"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "thiserror",
@@ -1234,7 +1234,7 @@ dependencies = [
 
 [[package]]
 name = "graft-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "getrandom",
  "serde",
@@ -1244,7 +1244,7 @@ dependencies = [
 
 [[package]]
 name = "graft-fs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "fuser",
@@ -1278,7 +1278,7 @@ dependencies = [
 
 [[package]]
 name = "graft-radar"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "tree-sitter",
@@ -1290,7 +1290,7 @@ dependencies = [
 
 [[package]]
 name = "graft-root"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "gix",
@@ -1302,7 +1302,7 @@ dependencies = [
 
 [[package]]
 name = "graft-sched"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "graft-radar",
  "serde",
@@ -1311,7 +1311,7 @@ dependencies = [
 
 [[package]]
 name = "graft-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "getrandom",
