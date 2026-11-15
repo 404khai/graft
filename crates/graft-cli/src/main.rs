@@ -86,6 +86,9 @@ enum Command {
     Radar(radar::RadarArgs),
     /// Run a command confined to a graft: it can only write inside it.
     Run(run::RunArgs),
+    /// Internal: delete working trees `graft prune` moved aside.
+    #[command(name = "__empty-trash", hide = true)]
+    EmptyTrash,
     /// Internal: confine this process, then run the command (Linux).
     #[command(name = "__confine", hide = true)]
     Confine(run::ConfineArgs),
@@ -221,6 +224,7 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Rebase(args) => ok(integrate::rebase(&args, &env))?,
         Command::Trust(args) => ok(layers::trust(&args, &env))?,
         Command::Gc(args) => ok(layers::gc(&args, &env))?,
+        Command::EmptyTrash => ok(grafts::empty_trash(&env))?,
         Command::Daemon(args) => ok(daemon::run(&args, &env))?,
         Command::Mcp(args) => {
             if let Some(root) = &args.root {

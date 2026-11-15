@@ -114,8 +114,10 @@ impl Method for GraftMethod {
     }
 
     fn prune(&mut self, i: usize, _path: &Path) -> anyhow::Result<()> {
+        // --wait: time the whole delete, as `git worktree remove` does,
+        // not just the rename a background prune returns after.
         run(
-            &mut self.cmd(&["prune", &format!("agent{i}"), "--force"]),
+            &mut self.cmd(&["prune", &format!("agent{i}"), "--force", "--wait"]),
             "graft prune",
         )?;
         Ok(())

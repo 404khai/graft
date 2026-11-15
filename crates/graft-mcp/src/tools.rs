@@ -81,8 +81,12 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_list",
             "List grafts",
-            "List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes (blocks not shared with Root or the layer cache, so build outputs count; null when unknown, with the reason in note).",
-            json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            "List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes. disk_bytes (blocks not shared with Root or the layer cache, so build outputs count) is measured only with disk: true, which walks every file and can take seconds for a large build tree; otherwise, or when unknown, it is null with the reason in note.",
+            json!({
+                "type": "object",
+                "properties": {"disk": {"type": "boolean", "description": "Measure disk_bytes (slow for large build trees such as target/)."}},
+                "additionalProperties": false
+            }),
             read_only(),
         ),
         tool(
@@ -237,7 +241,7 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_prune",
             "Remove a graft",
-            "Remove a graft. Refuses if work would be lost (code work_would_be_lost); force discards it and needs confirm: true. Returns JSON {name, pruned}.",
+            "Remove a graft. Refuses if work would be lost (code work_would_be_lost); force discards it and needs confirm: true. Its working tree is moved aside at once and deleted in the background, so the name is free again immediately. Returns JSON {name, pruned}.",
             json!({
                 "type": "object",
                 "properties": {
@@ -407,7 +411,12 @@ pub fn invocation(name: &str, args: &JsonObject) -> Result<Invocation, String> {
             option(a, "--backend", word(args, "backend")?);
             option(a, "--blueprint", word(args, "blueprint")?);
         }
-        "graft_list" => a.extend(["ls".to_owned(), "--json".to_owned()]),
+        "graft_list" => {
+            a.extend(["ls".to_owned(), "--json".to_owned()]);
+            if !flag(args, "disk")? {
+                a.push("--no-disk".to_owned());
+            }
+        }
         "graft_status" => {
             a.extend(["status".to_owned(), "--json".to_owned()]);
             a.extend(word(args, "name")?);
@@ -519,6 +528,14 @@ mod tests {
             ["path", "--json", "a"]
         );
         assert_eq!(
+            call("graft_list", json!({})).unwrap(),
+            ["ls", "--json", "--no-disk"]
+        );
+        assert_eq!(
+            call("graft_list", json!({"disk": true})).unwrap(),
+            ["ls", "--json"]
+        );
+        assert_eq!(
             call("graft_radar", json!({"check": true})).unwrap(),
             ["radar", "--json", "--check"]
         );
@@ -599,6 +616,7 @@ mod tests {
                 "timeout_secs",
             ),
             ("graft_list", json!({"all": true}), "takes no argument all"),
+            ("graft_list", json!({"disk": "yes"}), "disk"),
             ("graft_plan", json!({}), "exactly one of task and task_file"),
             ("graft_shell", json!({}), "no tool graft_shell"),
         ] {

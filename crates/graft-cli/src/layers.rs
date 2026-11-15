@@ -560,6 +560,12 @@ pub(crate) fn gc(args: &GcArgs, env: &Environment) -> anyhow::Result<Output> {
     } else {
         Some(sweep_blobs(home, &located)?)
     };
+    // Working trees a background prune did not get to finish.
+    let trash = if args.dry_run {
+        0
+    } else {
+        crate::grafts::sweep_trash(&crate::grafts::open(env)?, true)?
+    };
 
     let verb = if args.dry_run {
         "Would remove"
@@ -578,6 +584,9 @@ pub(crate) fn gc(args: &GcArgs, env: &Environment) -> anyhow::Result<Output> {
             "Removed {count} unreferenced blob(s), freeing {}.",
             human_bytes(bytes)
         );
+    }
+    if trash > 0 {
+        let _ = writeln!(out, "Removed {trash} pruned working tree(s).");
     }
     Ok(Output::stdout(out))
 }

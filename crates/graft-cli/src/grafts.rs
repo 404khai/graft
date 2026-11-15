@@ -120,6 +120,10 @@ pub(crate) struct LsArgs {
     /// null when unknown, with the reason in `note`).
     #[arg(long)]
     json: bool,
+    /// Skip measuring disk use, which walks every file (slow for a large
+    /// build tree such as `target/`). `disk_bytes` is then null.
+    #[arg(long)]
+    no_disk: bool,
 }
 
 /// Arguments for `graft prune`.
@@ -134,6 +138,11 @@ pub(crate) struct PruneArgs {
     /// Print JSON: `{name, pruned}`.
     #[arg(long)]
     json: bool,
+    /// Delete the working tree before returning. By default it is moved
+    /// aside at once and deleted in the background (`graft gc` finishes
+    /// the job if that is interrupted).
+    #[arg(long)]
+    wait: bool,
 }
 
 impl PruneArgs {
@@ -144,6 +153,7 @@ impl PruneArgs {
             name,
             force: true,
             json: false,
+            wait: false,
         }
     }
 }
@@ -533,6 +543,7 @@ fn measure(
     g: &GraftRecord,
     path: &std::path::Path,
     mounted: Option<&[GraftName]>,
+    want_disk: bool,
     warnings: &mut Vec<String>,
 ) -> (Option<usize>, Option<u64>, Option<String>) {
     let Ctx {
@@ -548,10 +559,14 @@ fn measure(
             let changed = crate::virtual_grafts::diffs(home, located, &root_dir, path, g, warnings)
                 .map(|d| d.len())
                 .map_err(|e| format!("error: {e:#}"));
-            let disk = crate::virtual_grafts::disk(located, &root_dir, g)
-                .map_err(|e| format!("error: {e:#}"));
+            let disk = if want_disk {
+                crate::virtual_grafts::disk(located, &root_dir, g).map(Some)
+            } else {
+                Ok(None)
+            }
+            .map_err(|e| format!("error: {e:#}"));
             let note = changed.as_ref().err().or(disk.as_ref().err()).cloned();
-            (changed.ok(), disk.ok(), note)
+            (changed.ok(), disk.ok().flatten(), note)
         } else {
             (None, None, Some("unmounted".to_owned()))
         }
@@ -560,11 +575,14 @@ fn measure(
             .diff(&g.name, &g.base_commit)
             .map(|c| c.len())
             .map_err(|e| format!("error: {e}"));
-        let disk = backend
-            .disk_usage(&g.name)
-            .map_err(|e| format!("error: {e}"));
+        let disk = if want_disk {
+            backend.disk_usage(&g.name).map(Some)
+        } else {
+            Ok(None)
+        }
+        .map_err(|e| format!("error: {e}"));
         let note = changed.as_ref().err().or(disk.as_ref().err()).cloned();
-        (changed.ok(), disk.ok(), note)
+        (changed.ok(), disk.ok().flatten(), note)
     } else {
         (None, None, Some("missing".to_owned()))
     }
@@ -626,14 +644,25 @@ pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
     ]];
     for g in &grafts {
         let path = backend.path(&g.name);
-        let (changed, disk, note) = measure(&ctx, g, &path, mounted.as_deref(), &mut out.warnings);
+        let (changed, disk, note) = measure(
+            &ctx,
+            g,
+            &path,
+            mounted.as_deref(),
+            !args.no_disk,
+            &mut out.warnings,
+        );
         let shown = |v: Option<String>| v.or_else(|| note.clone()).unwrap_or_default();
         rows.push([
             g.name.to_string(),
             short(g).to_owned(),
             g.state.to_string(),
             changed.map_or_else(|| "-".to_owned(), |c| c.to_string()),
-            shown(disk.map(human_bytes)),
+            if args.no_disk {
+                "-".to_owned()
+            } else {
+                shown(disk.map(human_bytes))
+            },
         ]);
         listed.push(serde_json::json!({
             "name": g.name.as_str(),
@@ -643,7 +672,7 @@ pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
             "path": path,
             "changed": changed,
             "disk_bytes": disk,
-            "note": note,
+            "note": note.clone().or_else(|| args.no_disk.then(|| "disk not measured".to_owned())),
         }));
     }
     if args.json {
@@ -925,7 +954,12 @@ pub(crate) fn prune(args: &PruneArgs, env: &Environment) -> anyhow::Result<Outpu
     }
     let mut out = Output::default();
     crate::blueprints::release(&mut ctx, &record, &mut out)?;
-    ctx.backend.prune(&name, record.id)?;
+    // Deleting a large build tree takes seconds: move it aside, then
+    // delete it after returning.
+    let retired = ctx.backend.retire(&name, record.id)?;
+    if retired && (args.wait || !spawn_trash_sweeper(&ctx)) {
+        sweep_trash(&ctx, true)?;
+    }
     remove_tmp(&ctx, record.id)?;
     ctx.located.repo.unpin(record.id)?;
     ctx.located.store.delete_graft(record.id)?;
@@ -934,6 +968,57 @@ pub(crate) fn prune(args: &PruneArgs, env: &Environment) -> anyhow::Result<Outpu
         args.json,
         || serde_json::json!({"name": name.as_str(), "pruned": true}),
     ))
+}
+
+/// Starts `graft __empty-trash` for this Root, detached, with no stdio
+/// (so `graft mcp` does not wait for it). `false` if it could not start.
+fn spawn_trash_sweeper(ctx: &Ctx) -> bool {
+    use std::process::{Command, Stdio};
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let mut cmd = Command::new(exe);
+    cmd.arg("__empty-trash")
+        .current_dir(&ctx.located.record.path)
+        .env("GRAFT_HOME", ctx.home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    match cmd.spawn() {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, "starting the background delete");
+            false
+        }
+    }
+}
+
+/// `graft __empty-trash`: deletes the working trees prune moved aside,
+/// unless another sweeper already is.
+pub(crate) fn empty_trash(env: &Environment) -> anyhow::Result<Output> {
+    sweep_trash(&open(env)?, false)?;
+    Ok(Output::default())
+}
+
+/// Empties the trash under `trash.lock`, waiting for it if `wait`, else
+/// leaving it to the sweeper that holds it. How many trees went.
+pub(crate) fn sweep_trash(ctx: &Ctx, wait: bool) -> anyhow::Result<usize> {
+    let path = ctx.root_dir().join("trash.lock");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    if wait {
+        lock.lock()
+            .with_context(|| format!("locking {}", path.display()))?;
+    } else if lock.try_lock().is_err() {
+        return Ok(0);
+    }
+    Ok(ctx.backend.empty_trash()?)
 }
 
 /// Removes the graft's `graft run` temp dir, `$GRAFT_HOME/roots/<root-id>/tmp/<graft-id>/`.

@@ -82,9 +82,11 @@ Create a graft: a private copy-on-write workspace checked out from Root. Returns
 
 ### `graft_list`
 
-List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes (blocks not shared with Root or the layer cache, so build outputs count; null when unknown, with the reason in note). (read-only)
+List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes. disk_bytes (blocks not shared with Root or the layer cache, so build outputs count) is measured only with disk: true, which walks every file and can take seconds for a large build tree; otherwise, or when unknown, it is null with the reason in note. (read-only)
 
-No parameters.
+| Parameter | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `disk` | boolean | no | Measure disk_bytes (slow for large build trees such as target/). |
 
 ### `graft_path`
 
@@ -186,7 +188,7 @@ Split a task into an ordered DAG of grafts along the code's dependency graph, as
 
 ### `graft_prune`
 
-Remove a graft. Refuses if work would be lost (code work_would_be_lost); force discards it and needs confirm: true. Returns JSON {name, pruned}. (destructive)
+Remove a graft. Refuses if work would be lost (code work_would_be_lost); force discards it and needs confirm: true. Its working tree is moved aside at once and deleted in the background, so the name is free again immediately. Returns JSON {name, pruned}. (destructive)
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |

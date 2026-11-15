@@ -517,7 +517,12 @@ fn failures_have_codes_and_mcp_hints() {
     assert_eq!(list[0]["name"], "a", "{list}");
     assert_eq!(list[0]["backend"], "reflink", "{list}");
     assert_eq!(list[0]["changed"], 0, "{list}");
-    assert!(list[0]["disk_bytes"].is_u64(), "{list}");
+    // Disk use is opt-in: walking a large build tree takes seconds.
+    assert!(list[0]["disk_bytes"].is_null(), "{list}");
+    assert_eq!(list[0]["note"], "disk not measured", "{list}");
+    let measured: Value = serde_json::from_str(&c.ok("graft_list", json!({"disk": true}))).unwrap();
+    assert!(measured["grafts"][0]["disk_bytes"].is_u64(), "{measured}");
+    assert!(measured["grafts"][0]["note"].is_null(), "{measured}");
     assert!(
         list[0]["path"].as_str().unwrap().ends_with("/mounts/a"),
         "{list}"
