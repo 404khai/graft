@@ -166,6 +166,10 @@ pub struct Journal {
     /// instead of making the first caller wait (for NFS, whose client
     /// times out on slow calls).
     pub git_in_background: bool,
+    /// Serve `.git` as a file (`dir/dotgit`) naming the graft's git
+    /// worktree registration in Root (ADR 0027), instead of a directory.
+    /// `git_init` then prepares that file and the registration's index.
+    pub git_link: bool,
     /// Decides whether a finished write may be journaled (claims, ADR
     /// 0018). `None` admits everything.
     pub admission: Option<Arc<dyn Admission>>,
@@ -350,9 +354,12 @@ impl std::fmt::Debug for WriteLock<'_> {
     }
 }
 
-/// The `.git` of a writable view: a real directory, created on first use.
+/// The `.git` of a writable view: a real directory, or a real file naming
+/// a git worktree registration (ADR 0027), created on first use.
 pub(crate) struct GitDir {
     pub(crate) dir: PathBuf,
+    /// `.git` is a file (`gitdir: ...`), read-only through the mount.
+    pub(crate) link: bool,
     inner: Arc<GitBuild>,
     /// Build in the background and answer `EAGAIN` until done (NFS, whose
     /// client would time out waiting); otherwise build while the caller
@@ -363,12 +370,17 @@ pub(crate) struct GitDir {
 struct GitBuild {
     dir: PathBuf,
     init: GitInit,
+    link: bool,
     ready: OnceLock<Result<(), String>>,
     started: AtomicBool,
 }
 
 impl GitBuild {
     fn build(&self) -> Result<(), String> {
+        if self.link {
+            // `init` keeps what is there and adds what is missing.
+            return (self.init)(&self.dir);
+        }
         // The index is written last, so a directory without one is a build
         // a crash interrupted: rebuild it. A finished one, with any commits
         // made in it, is never touched.
@@ -383,15 +395,17 @@ impl GitBuild {
 }
 
 impl GitDir {
-    fn new(dir: PathBuf, init: GitInit, background: bool) -> Self {
+    fn new(dir: PathBuf, init: GitInit, background: bool, link: bool) -> Self {
         Self {
             inner: Arc::new(GitBuild {
                 dir: dir.clone(),
                 init,
+                link,
                 ready: OnceLock::new(),
                 started: AtomicBool::new(false),
             }),
             dir,
+            link,
             background,
         }
     }
@@ -566,9 +580,14 @@ impl GraftView {
         })?;
         *view.delta.get_mut().unwrap_or_else(PoisonError::into_inner) =
             journal.store.delta(journal.graft)?;
+        let (git_path, link) = if journal.git_link {
+            (journal.dir.join("dotgit"), true)
+        } else {
+            (journal.dir.join("git"), false)
+        };
         view.git = journal
             .git_init
-            .map(|init| GitDir::new(journal.dir.join("git"), init, journal.git_in_background));
+            .map(|init| GitDir::new(git_path, init, journal.git_in_background, link));
         view.blobs = Some(journal.blobs);
         view.admission = journal.admission;
         view.writer = Some(Mutex::new(Writer {
@@ -648,6 +667,11 @@ impl GraftView {
         } else {
             path.strip_prefix(b".git/")
         }
+    }
+
+    /// Whether `.git` is a read-only file naming a worktree registration.
+    pub(crate) fn git_is_link(&self) -> bool {
+        self.git.as_ref().is_some_and(|g| g.link)
     }
 
     /// The real path under `.git` for `rel`, creating `.git` if needed.
@@ -834,11 +858,17 @@ impl GraftView {
             delta.children(&dir, &self.lower)
         };
         let mut out = Vec::with_capacity(names.len() + 1);
-        if dir.is_empty() && self.git.is_some() {
+        if dir.is_empty()
+            && let Some(git) = &self.git
+        {
             let ino = lock(&self.inodes).ino_for(b".git");
             out.push(DirEntry {
                 ino,
-                kind: NodeKind::Directory,
+                kind: if git.link {
+                    NodeKind::File
+                } else {
+                    NodeKind::Directory
+                },
                 name: OsString::from(".git"),
             });
         }

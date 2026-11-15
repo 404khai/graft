@@ -223,12 +223,24 @@ impl VirtualBackend {
             use std::os::unix::fs::MetadataExt;
             self.ensure_record(root, spec)?;
             let objects = ObjectStore::open(root);
+            let dir = self.graft_dir(spec.id);
+            // A graft made before ADR 0027, or without `[git] worktrees`,
+            // keeps its private `.git`; a registered one is served as a file.
+            let registered = if dir.join("git").exists() {
+                None
+            } else {
+                root.registration(spec.name, &target)
+            };
             let journal = Journal {
                 store: Store::open(&self.root_dir)?,
                 blobs: self.blobs(),
                 graft: spec.id,
-                dir: self.graft_dir(spec.id),
-                git_init: Some(git_init(&objects, spec, &layers)),
+                git_init: Some(match &registered {
+                    Some(admin) => git_link_init(&objects, admin, spec),
+                    None => git_init(&objects, spec, &layers),
+                }),
+                git_link: registered.is_some(),
+                dir,
                 git_in_background: cfg!(target_os = "macos"),
                 admission: self.admission.as_ref().map(|a| Arc::clone(&a.0)),
             };
@@ -310,6 +322,18 @@ fn git_init(objects: &ObjectStore, spec: &GraftSpec<'_>, layers: &[LayerMount]) 
     Box::new(move |dir: &Path| {
         let paths: Vec<&Path> = layer_paths.iter().map(PathBuf::as_path).collect();
         graft_root::graft::init_virtual_git(&objects.root(), dir, &branch, &base, &paths)
+            .map_err(|e| e.to_string())
+    })
+}
+
+/// Prepares a registered virtual graft's `.git` file and index on first
+/// use (ADR 0027).
+fn git_link_init(objects: &ObjectStore, admin: &Path, spec: &GraftSpec<'_>) -> GitInit {
+    let objects = objects.clone();
+    let admin = admin.to_owned();
+    let base = spec.base.clone();
+    Box::new(move |link: &Path| {
+        graft_root::worktree::prepare_virtual_git(&objects.root(), &admin, link, &base)
             .map_err(|e| e.to_string())
     })
 }

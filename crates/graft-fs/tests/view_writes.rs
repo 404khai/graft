@@ -80,6 +80,32 @@ impl Env {
                     .map_err(|e| e.to_string())
             }) as graft_fs::view::GitInit
         });
+        self.view_from(objects, git_init, git_in_background, false)
+    }
+
+    /// A view whose `.git` is a file naming the worktree registration at
+    /// `admin` (ADR 0027).
+    fn view_linked(&self, admin: &Path, git_in_background: bool) -> GraftView {
+        let objects = ObjectStore::open(&self.fixture.root());
+        let base = self.fixture.base.clone();
+        let init = {
+            let objects = objects.clone();
+            let admin = admin.to_owned();
+            Box::new(move |link: &Path| {
+                graft_root::worktree::prepare_virtual_git(&objects.root(), &admin, link, &base)
+                    .map_err(|e| e.to_string())
+            }) as graft_fs::view::GitInit
+        };
+        self.view_from(objects, Some(init), git_in_background, true)
+    }
+
+    fn view_from(
+        &self,
+        objects: ObjectStore,
+        git_init: Option<graft_fs::view::GitInit>,
+        git_in_background: bool,
+        git_link: bool,
+    ) -> GraftView {
         GraftView::writable(
             objects,
             &self.fixture.base,
@@ -93,6 +119,7 @@ impl Env {
                 dir: self.root_dir.join("grafts").join(self.graft.to_string()),
                 git_init,
                 git_in_background,
+                git_link,
                 admission: None,
             },
         )
@@ -667,4 +694,102 @@ fn a_half_built_git_is_rebuilt_and_a_finished_one_kept() {
     std::fs::write(git_dir.join("graft-kept"), "mine").unwrap();
     let v = env.view_with_git(true);
     assert_eq!(cat(&v, ".git/graft-kept"), b"mine");
+}
+
+/// A registered virtual graft serves `.git` as a read-only file naming its
+/// worktree registration in Root (ADR 0027), built on first use, in the
+/// foreground (FUSE) and in the background (NFS).
+#[test]
+fn a_registered_graft_serves_git_as_a_read_only_link() {
+    for background in [false, true] {
+        let env = Env::new();
+        let root = env.fixture.root();
+        let mounts = env.tmp.path().join("mounts");
+        std::fs::create_dir_all(&mounts).unwrap();
+        let admin = root
+            .register(
+                &"w".parse().unwrap(),
+                &mounts.join("w"),
+                &env.fixture.base,
+                graft_root::worktree::Layout::Virtual,
+                &[],
+            )
+            .unwrap();
+        let link = env
+            .root_dir
+            .join("grafts")
+            .join(env.graft.to_string())
+            .join("dotgit");
+        let v = env.view_linked(&admin, background);
+        assert!(!link.exists(), "creating a view does not build .git");
+        assert!(!admin.join("index").exists());
+        let entry = v
+            .readdir(ROOT_INO)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.name == ".git")
+            .unwrap();
+        assert_eq!(entry.kind, NodeKind::File);
+
+        let started = std::time::Instant::now();
+        let attr = loop {
+            match v.lookup(ROOT_INO, OsStr::new(".git")) {
+                Ok(a) => break a,
+                Err(Errno::EAGAIN) if background => {
+                    assert!(started.elapsed().as_secs() < 30, "never became ready");
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(e) => panic!("{e:?}"),
+            }
+        };
+        assert_eq!(attr.kind, NodeKind::File);
+        assert_eq!(attr.perm & 0o222, 0, "read-only: {:o}", attr.perm);
+        let want = format!("gitdir: {}\n", admin.canonicalize().unwrap().display());
+        assert_eq!(attr.size, want.len() as u64);
+        assert_eq!(cat(&v, ".git"), want.as_bytes());
+        assert!(admin.join("index").is_file(), "built with the link");
+
+        // Nothing replaces, removes, or writes through it.
+        let i = ino(&v, ".git");
+        let w = OpenMode {
+            write: true,
+            truncate: true,
+        };
+        assert_eq!(v.open(i, W).unwrap_err(), Errno::EACCES);
+        assert_eq!(v.open(i, w).unwrap_err(), Errno::EACCES);
+        let chmod = SetAttr {
+            mode: Some(0o644),
+            ..SetAttr::default()
+        };
+        assert_eq!(v.setattr(i, chmod).unwrap_err(), Errno::EPERM);
+        assert_eq!(
+            v.unlink(ROOT_INO, OsStr::new(".git")).unwrap_err(),
+            Errno::EPERM
+        );
+        assert_eq!(
+            v.rename(
+                ROOT_INO,
+                OsStr::new(".git"),
+                ROOT_INO,
+                OsStr::new("moved"),
+                false
+            )
+            .unwrap_err(),
+            Errno::EXDEV
+        );
+        assert!(
+            v.create(ROOT_INO, OsStr::new(".git"), 0o644, 0).is_err(),
+            "cannot be created over"
+        );
+        assert_eq!(cat(&v, ".git"), want.as_bytes());
+        assert!(v.delta().is_empty());
+        assert_eq!(env.kinds(), Vec::<&str>::new());
+
+        // The registration's index describes the base tree.
+        let files = git(
+            env.fixture.dir.path(),
+            &["--git-dir", admin.to_str().unwrap(), "ls-files"],
+        );
+        assert!(files.contains("README.md"), "{files}");
+    }
 }
