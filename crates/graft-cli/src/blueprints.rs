@@ -247,7 +247,7 @@ pub(crate) fn provision(
     }
     for cmd in &spec.setup {
         let command = ["sh", "-c", cmd.as_str()].map(std::ffi::OsString::from);
-        let status = crate::run::run_in(ctx, record, &[], &command, out)?;
+        let status = crate::run::run_in(ctx, record, &[], &command, out)?.status;
         if !status.success() {
             bail!("setup command `{cmd}` failed ({status})");
         }

@@ -240,6 +240,8 @@ Follow-up from the Astrid field report (`reports/graft_report_astrid.md`, ADR 00
 
 Follow-up from the Astrid field report (`reports/graft_report_astrid.md`): `graft new --clone-ignored target,web/node_modules` (`clone_ignored` on `graft_new`) reflinks git-ignored directories from Root's working tree into a new reflink graft, with no build and no `graft.toml`. 17 GB / 173k files on APFS: 14.5 s, against 36.8 s for `cp -c -R`.
 
+Follow-up from the Astrid field report (`reports/graft_report_astrid.md`, ADR 0029): a failed `graft run` on macOS names the writes the sandbox refused (`sandbox: {denied, hint}` in `graft_run`), read from Seatbelt's log by a per-run tag; `--dev-caches` (`dev_caches`) makes toolchain caches writable; `graft_run` takes `write`; a failed SwiftPM run explains that SwiftPM's own sandbox cannot nest and suggests `--disable-sandbox`. A Swift package's `swift test` now passes inside `graft run`.
+
 - [x] An MCP client test harness can run the full cycle: plan → new → run → radar → integrate → prune.
   - `an_agent_runs_the_whole_cycle_over_mcp` drives `graft mcp` with raw JSON-RPC over stdio: plan, two grafts, `graft_run` edits (and a refused write outside the graft), Radar as a tool, a resource and a subscription (`notifications/resources/updated` arrives), a dry-run and a real integrate, and prunes.
 - [x] Tool schemas are documented and covered by snapshot tests.

@@ -360,7 +360,8 @@ fn run_result(ran: &Ran) -> CallToolResponse {
     };
     result["code"] = Value::String("command_failed".to_owned());
     result["message"] = Value::String(format!("the command {how}"));
-    result["hint"] = Value::Null;
+    // Set when the sandbox refused writes, or for SwiftPM on macOS.
+    result["hint"] = result["sandbox"]["hint"].clone();
     text_result(result.to_string(), true)
 }
 

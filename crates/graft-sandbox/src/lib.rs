@@ -72,6 +72,7 @@ pub type Result<T, E = SandboxError> = std::result::Result<T, E>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
     writable: Vec<PathBuf>,
+    tag: Option<String>,
 }
 
 impl Policy {
@@ -97,7 +98,31 @@ impl Policy {
                 writable.push(canonical);
             }
         }
-        Ok(Self { writable })
+        Ok(Self {
+            writable,
+            tag: None,
+        })
+    }
+
+    /// Marks every denial under this policy with `tag` where the platform
+    /// can (Seatbelt logs it with each denied write), so a run's own
+    /// denials can be told apart from other processes'. `tag` should be
+    /// unique per run; characters other than ASCII letters, digits, `-`
+    /// and `_` are dropped.
+    #[must_use]
+    pub fn tagged(mut self, tag: &str) -> Self {
+        let clean: String = tag
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        self.tag = (!clean.is_empty()).then_some(clean);
+        self
+    }
+
+    /// The tag set by [`Self::tagged`].
+    #[must_use]
+    pub fn tag(&self) -> Option<&str> {
+        self.tag.as_deref()
     }
 
     /// The canonical writable paths, in the order given.
@@ -234,8 +259,16 @@ fn sbpl_string(path: &Path) -> String {
 #[must_use]
 pub fn seatbelt_profile(policy: &Policy) -> String {
     use std::fmt::Write as _;
-    let mut p =
-        String::from("(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write*\n");
+    let mut p = String::from("(version 1)\n(allow default)\n");
+    match policy.tag() {
+        // The message is logged with each denial (`log show`), which is how
+        // `graft run` finds its own.
+        Some(tag) => {
+            let _ = writeln!(p, "(deny file-write* (with message \"{tag}\"))");
+        }
+        None => p.push_str("(deny file-write*)\n"),
+    }
+    p.push_str("(allow file-write*\n");
     for w in policy.writable() {
         let kind = if w.is_dir() { "subpath" } else { "literal" };
         let _ = writeln!(p, "  ({kind} {})", sbpl_string(w));
@@ -293,6 +326,21 @@ mod tests {
         assert!(profile.starts_with("(version 1)\n(allow default)\n(deny file-write*)\n"));
         assert!(profile.contains(r#"a \"b\\c")"#), "{profile}");
         assert!(profile.contains("(subpath "));
+    }
+
+    #[test]
+    fn tagged_profiles_name_the_tag_in_each_denial() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = Policy::new([dir.path()])
+            .unwrap()
+            .tagged("graft-run-ab\"c)12");
+        assert_eq!(policy.tag(), Some("graft-run-abc12"));
+        let profile = seatbelt_profile(&policy);
+        assert!(
+            profile.contains("(deny file-write* (with message \"graft-run-abc12\"))\n"),
+            "{profile}"
+        );
+        assert_eq!(Policy::new([dir.path()]).unwrap().tagged("()").tag(), None);
     }
 
     #[test]

@@ -108,6 +108,73 @@ fn writes_outside_the_graft_are_denied() {
     assert!(!b.join("moved").exists());
 }
 
+/// A failed run names the writes the sandbox refused (macOS logs them),
+/// so a failure it caused is not mistaken for a bug; an ordinary failure
+/// says nothing about the sandbox.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_failed_run_names_the_writes_the_sandbox_refused() {
+    let f = Fixture::new();
+    f.new_graft("a");
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    let escape = home.join(format!("graft-run-denied-{}", std::process::id()));
+    let _cleanup = Cleanup(escape.clone());
+    let out = f
+        .run("a", &format!("echo x > {}", sh_quote(&escape)))
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8_lossy(&out);
+    assert!(
+        stderr.contains("the sandbox refused 1 write(s)"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&escape.display().to_string()), "{stderr}");
+    assert!(stderr.contains("--write PATH"), "{stderr}");
+    assert!(!escape.exists());
+
+    f.run("a", "exit 3")
+        .code(3)
+        .stderr(predicate::str::contains("sandbox").not());
+}
+
+/// `--write` and `--dev-caches` widen one run only; `$HOME` stays read-only.
+#[test]
+fn write_and_dev_caches_widen_one_run() {
+    let f = Fixture::new();
+    f.new_graft("a");
+    if !sandbox_usable() {
+        return;
+    }
+    let extra = tempfile::tempdir().unwrap();
+    let target = extra.path().join("ok");
+    f.graft()
+        .args(["run", "a", "--write"])
+        .arg(extra.path())
+        .args(["--", "sh", "-c", &format!("echo y > {}", sh_quote(&target))])
+        .assert()
+        .success();
+    assert!(target.exists());
+    f.run(
+        "a",
+        &format!(
+            "! (echo z > {} 2>/dev/null)",
+            sh_quote(&extra.path().join("no"))
+        ),
+    )
+    .success();
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    let escape = home.join(format!("graft-run-devcache-{}", std::process::id()));
+    let _cleanup = Cleanup(escape.clone());
+    f.graft()
+        .args(["run", "a", "--dev-caches", "--", "sh", "-c"])
+        .arg(format!("! (echo x > {} 2>/dev/null)", sh_quote(&escape)))
+        .assert()
+        .success();
+    assert!(!escape.exists(), "--dev-caches made $HOME writable");
+}
+
 #[test]
 fn the_command_sees_its_graft_and_keeps_its_exit_code() {
     let f = Fixture::new();
