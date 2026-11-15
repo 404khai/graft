@@ -287,6 +287,10 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
           "description": "Required (true) to land anything.",
           "type": "boolean"
         },
+        "create_branch": {
+          "description": "Create onto at Root's HEAD if it does not exist (else a missing branch is an error).",
+          "type": "boolean"
+        },
         "dry_run": {
           "description": "Run every step and check except landing, including the checked-out-branch rule, so a passing dry run predicts the real one.",
           "type": "boolean"
@@ -310,6 +314,10 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
         "prune": {
           "description": "Prune each graft once it has landed.",
           "type": "boolean"
+        },
+        "test": {
+          "description": "Shell command to use as this call's test gate instead of graft.toml's [integrate] test, e.g. \"cargo test\". Runs confined to the scratch checkout; needs no graft trust.",
+          "type": "string"
         },
         "update_checkout": {
           "description": "Allow landing on the branch Root has checked out: Root's working tree is fast-forwarded, which needs no changes to tracked files (untracked files are left alone).",

@@ -36,6 +36,13 @@ pub(crate) struct IntegrateArgs {
     /// graft.toml, then the branch Root has checked out.
     #[arg(long, value_name = "BRANCH")]
     onto: Option<String>,
+    /// Create the target branch at Root's HEAD if it does not exist.
+    #[arg(long)]
+    create_branch: bool,
+    /// A test gate for this call, run like `[integrate] test` (which it
+    /// replaces). Given on the command line, it needs no `graft trust`.
+    #[arg(long, value_name = "COMMAND")]
+    test: Option<String>,
     /// The commit message (else the graft's first commit subject, else a
     /// generated one).
     #[arg(long, short)]
@@ -159,6 +166,29 @@ fn branch_head(ctx: &Ctx, branch: &str) -> anyhow::Result<CommitId> {
         .repo
         .resolve_commit(&format!("refs/heads/{branch}"))
         .with_context(|| format!("no branch {branch} in Root"))
+}
+
+/// Where a request starts.
+struct Start {
+    /// The target's head, or Root's HEAD for a branch to create.
+    head: CommitId,
+    /// The target does not exist yet; landing creates it.
+    new_branch: bool,
+}
+
+/// The [`Start`] on `branch`; a missing one is an error unless `create`.
+fn start_of(ctx: &Ctx, branch: &str, create: bool) -> anyhow::Result<Start> {
+    match branch_head(ctx, branch) {
+        Ok(head) => Ok(Start {
+            head,
+            new_branch: false,
+        }),
+        Err(_) if create => Ok(Start {
+            head: ctx.located.repo.head_commit()?,
+            new_branch: true,
+        }),
+        Err(e) => Err(e.context("pass --create-branch to create it")),
+    }
 }
 
 /// A graft's changes against its base, with contents.
@@ -564,15 +594,21 @@ fn resolve(
     Ok(None)
 }
 
-/// Checks before merging: approvals, something to integrate, claims.
-/// The graft's changes, or the outcome that stops the entry.
+/// Checks before merging: approvals (not of the gate when the caller
+/// gave it), something to integrate, claims. The graft's changes, or the
+/// outcome that stops the entry.
 fn preflight(
     ctx: &mut Ctx,
     record: &GraftRecord,
     spec: &IntegrateSpec,
+    caller_gate: bool,
     out: &mut Output,
 ) -> anyhow::Result<Result<Vec<FileDiff>, Outcome>> {
-    for (hash, what) in approvals(spec) {
+    let checked = IntegrateSpec {
+        test: if caller_gate { None } else { spec.test.clone() },
+        ..spec.clone()
+    };
+    for (hash, what) in approvals(&checked) {
         if !ctx.located.store.is_trusted(&hash)? {
             return Ok(Err(Outcome::stop(
                 IntegrationState::Failed,
@@ -702,6 +738,27 @@ fn link_layers(ctx: &Ctx, head: &CommitId, dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The `[integrate]` table at `head`, with this call's `--test` in place
+/// of its gate for the grafts it names (then `true`). The replaced gate
+/// never runs and needs no approval: a command the operator typed is not
+/// repository input. The resolver still needs its approval.
+fn call_spec(
+    ctx: &Ctx,
+    head: &CommitId,
+    entry: &Integration,
+    args: &IntegrateArgs,
+) -> anyhow::Result<(IntegrateSpec, bool)> {
+    let mut spec = spec_at(&ctx.located.repo, head)?;
+    let caller = match &args.test {
+        Some(test) if args.names.contains(&entry.graft_name) => {
+            spec.test = Some(test.clone());
+            true
+        }
+        _ => false,
+    };
+    Ok((spec, caller))
+}
+
 /// Runs one request in a scratch checkout of the target's head. `kept`
 /// is the checkout a previous request left for reuse, and receives this
 /// one's if it can be reused.
@@ -713,16 +770,17 @@ fn attempt(
     out: &mut Output,
     kept: &mut Option<Scratch>,
 ) -> anyhow::Result<Outcome> {
-    let head = branch_head(ctx, &entry.target)?;
-    let spec = spec_at(&ctx.located.repo, &head)?;
-    let diffs = match preflight(ctx, record, &spec, out)? {
+    let start = start_of(ctx, &entry.target, args.create_branch)?;
+    let head = &start.head;
+    let (spec, caller_gate) = call_spec(ctx, head, entry, args)?;
+    let diffs = match preflight(ctx, record, &spec, caller_gate, out)? {
         Ok(d) => d,
         Err(stop) => return Ok(stop),
     };
     if let Some(stop) = target_refusal(ctx, entry, record, &spec, args)? {
         return Ok(stop);
     }
-    let mut scratch = Scratch::for_head(ctx, kept.take(), &head)?;
+    let mut scratch = Scratch::for_head(ctx, kept.take(), head)?;
     // Whether a resolver or test gate ran in the checkout: then it is
     // never reused.
     let mut ran = false;
@@ -744,17 +802,17 @@ fn attempt(
         if !applied.conflicts.is_empty() {
             if spec.resolver.is_some() {
                 ran = true;
-                link_layers(ctx, &head, &dir)?;
+                link_layers(ctx, head, &dir)?;
             }
             if let Some(stop) = resolve(
-                ctx, record, &dir, &head, &diffs, &applied, &spec, args, &mut log,
+                ctx, record, &dir, head, &diffs, &applied, &spec, args, &mut log,
             )? {
                 return Ok(stop);
             }
         }
         if spec.test.is_some() {
             if !ran {
-                link_layers(ctx, &head, &dir)?;
+                link_layers(ctx, head, &dir)?;
             }
             ran = true;
         }
@@ -782,7 +840,7 @@ fn attempt(
         )?;
         let new = git(&dir, &["rev-parse", "HEAD"])?;
         time("integrate: land", || {
-            land(ctx, &dir, &head, &new, &entry.target, record, &spec, args)
+            land(ctx, &dir, &start, &new, &entry.target, record, &spec, args)
         })?;
         let _ = writeln!(
             log,
@@ -946,18 +1004,20 @@ fn target_refusal(
     checkout_refusal(&ctx.located.record.path, &entry.target, args)
 }
 
-/// Copies commit `new` into Root and moves the ref from `head` to it.
+/// Copies commit `new` into Root and moves the ref from `head` to it, or
+/// creates it for a new branch (if it still does not exist).
 #[allow(clippy::too_many_arguments)] // one call site
 fn land(
     ctx: &Ctx,
     scratch: &Path,
-    head: &CommitId,
+    start: &Start,
     new: &str,
     target: &str,
     record: &GraftRecord,
     spec: &IntegrateSpec,
     args: &IntegrateArgs,
 ) -> anyhow::Result<()> {
+    let (head, new_branch) = (&start.head, start.new_branch);
     let root = ctx.located.record.path.clone();
     let git_dir = ctx.located.repo.git_dir().display().to_string();
     let staging = format!("refs/graft/integrating/{}", record.id);
@@ -979,7 +1039,15 @@ fn land(
         }
         let checked_out = ctx.located.repo.head_ref()?.as_deref() == Some(refname.as_str());
         if !checked_out {
-            return git(&root, &["update-ref", &refname, new, head.as_str()]).map(drop);
+            // An all-zero old value makes update-ref refuse if the branch
+            // appeared meanwhile.
+            let zero = "0".repeat(head.as_str().len());
+            let old = if new_branch {
+                zero.as_str()
+            } else {
+                head.as_str()
+            };
+            return git(&root, &["update-ref", &refname, new, old]).map(drop);
         }
         if let Some(stop) = checkout_refusal(&root, target, args)? {
             bail!(stop.output);
@@ -1133,7 +1201,7 @@ pub(crate) fn integrate(
 ) -> anyhow::Result<(Output, std::process::ExitCode)> {
     let mut ctx = open(env)?;
     let target = target_branch(&ctx, args.onto.as_deref())?;
-    branch_head(&ctx, &target)?;
+    start_of(&ctx, &target, args.create_branch)?;
     if let Some(t) = &args.task
         && !t.is_file()
     {

@@ -205,6 +205,8 @@ pub fn tools() -> Vec<Tool> {
                 "properties": {
                     "names": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Grafts, in order."},
                     "onto": {"type": "string", "description": "Branch to land on (default: [integrate] branch in graft.toml, else the branch Root has checked out, which also needs update_checkout)."},
+                    "create_branch": {"type": "boolean", "description": "Create onto at Root's HEAD if it does not exist (else a missing branch is an error)."},
+                    "test": {"type": "string", "description": "Shell command to use as this call's test gate instead of graft.toml's [integrate] test, e.g. \"cargo test\". Runs confined to the scratch checkout; needs no graft trust."},
                     "message": {"type": "string", "description": "Commit message."},
                     "dry_run": {"type": "boolean", "description": "Run every step and check except landing, including the checked-out-branch rule, so a passing dry run predicts the real one."},
                     "prune": {"type": "boolean", "description": "Prune each graft once it has landed."},
@@ -314,12 +316,21 @@ fn integrate(args: &JsonObject, a: &mut Vec<String>) -> Result<(), String> {
         a.push(n);
     }
     option(a, "--onto", word(args, "onto")?);
+    if let Some(t) = args.get("test") {
+        let t = t.as_str().filter(|t| !t.trim().is_empty());
+        // `=` keeps a command starting with '-' from reading as a flag.
+        a.push(format!(
+            "--test={}",
+            t.ok_or("test must be a non-empty string")?
+        ));
+    }
     if let Some(m) = args.get("message") {
         let m = m.as_str().ok_or("message must be a string")?;
         a.extend(["--message".to_owned(), m.to_owned()]);
     }
     for (key, f) in [
         ("dry_run", "--dry-run"),
+        ("create_branch", "--create-branch"),
         ("prune", "--prune"),
         ("update_checkout", "--update-checkout"),
     ] {
@@ -520,6 +531,14 @@ mod tests {
             ["integrate", "--json", "a", "b", "--onto", "main"]
         );
         assert_eq!(
+            call(
+                "graft_integrate",
+                json!({"names": ["a"], "onto": "new", "create_branch": true, "test": "cargo test", "dry_run": true})
+            )
+            .unwrap(),
+            ["integrate", "--json", "a", "--onto", "new", "--test=cargo test", "--dry-run", "--create-branch"]
+        );
+        assert_eq!(
             call("graft_plan", json!({"task_file": "t.md", "apply": true})).unwrap(),
             ["plan", "t.md", "--json", "--apply"]
         );
@@ -564,6 +583,11 @@ mod tests {
             ("graft_diff", json!({"name": 3}), "must be a string"),
             ("graft_path", json!({}), "name is required"),
             ("graft_init", json!({"path": "/"}), "takes no argument path"),
+            (
+                "graft_integrate",
+                json!({"names": ["a"], "dry_run": true, "test": " "}),
+                "test must be a non-empty string",
+            ),
             (
                 "graft_run",
                 json!({"name": "a", "command": []}),
