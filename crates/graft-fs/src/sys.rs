@@ -327,6 +327,8 @@ pub(crate) fn process_umask() -> u32 {
             libc::umask(old);
             old
         };
+        // `mode_t` is u16 on macOS and u32 on Linux.
+        #[allow(clippy::useless_conversion)]
         u32::from(mask)
     })
 }
