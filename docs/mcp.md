@@ -77,6 +77,7 @@ Create a graft: a private copy-on-write workspace checked out from Root. Returns
 | --- | --- | --- | --- |
 | `backend` | string (reflink \| fuse \| nfs) | no | Filesystem backend: reflink (a real working tree; the default unless config.toml or $GRAFT_FS says otherwise), or a virtual graft served by graftd: fuse on Linux, nfs on macOS. Only virtual grafts support graft_bud, graft_ring and graft_rewind. |
 | `blueprint` | string | no | Blueprint of graft.toml to provision: ports, services, env files. |
+| `clone_ignored` | array of string | no | Git-ignored directories to reflink from Root's working tree as they are, with no build, e.g. ["target", "web/node_modules"]. Reflink grafts only. |
 | `from` | string | no | Revision to start from (default: Root's HEAD). |
 | `name` | string | yes | Graft name: lowercase letters, digits and hyphens, at most 40 characters. |
 

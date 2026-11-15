@@ -314,6 +314,92 @@ fn ls_no_disk_skips_measuring() {
     assert!(v["grafts"][0]["disk_bytes"].is_u64(), "{v}");
 }
 
+/// `--clone-ignored` brings Root's ignored build outputs into a new graft
+/// as they are, with no build; they stay private and never block prune.
+#[test]
+fn clone_ignored_brings_roots_build_outputs() {
+    let s = Setup::new();
+    let r = s.repo.path();
+    std::fs::write(r.join(".gitignore"), "/target/\nweb/node_modules\n").unwrap();
+    git(r, &["add", ".gitignore"]);
+    git(r, &["commit", "-qm", "ignore"]);
+    std::fs::create_dir_all(r.join("target/debug/deps")).unwrap();
+    std::fs::write(r.join("target/debug/deps/app"), "binary").unwrap();
+    std::fs::create_dir_all(r.join("web/node_modules/left-pad")).unwrap();
+    std::fs::write(
+        r.join("web/node_modules/left-pad/index.js"),
+        "module.exports = 1\n",
+    )
+    .unwrap();
+
+    let out = s.stdout(&[
+        "new",
+        "a",
+        "--clone-ignored",
+        "target,web/node_modules/",
+        "--json",
+    ]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["cloned"][0]["path"], "target", "{v}");
+    assert_eq!(v["cloned"][1]["path"], "web/node_modules", "{v}");
+    let total =
+        v["cloned"][0]["reflinked"].as_u64().unwrap() + v["cloned"][0]["copied"].as_u64().unwrap();
+    assert_eq!(total, 1, "{v}");
+    let a = s.path("a");
+    assert_eq!(
+        std::fs::read_to_string(a.join("target/debug/deps/app")).unwrap(),
+        "binary"
+    );
+    assert!(a.join("web/node_modules/left-pad/index.js").is_file());
+
+    // Private: a write in the graft does not reach Root.
+    std::fs::write(a.join("target/debug/deps/app"), "rebuilt").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(r.join("target/debug/deps/app")).unwrap(),
+        "binary"
+    );
+    // Ignored, so not a change and no reason to refuse prune.
+    let status = s.stdout(&["status", "a"]);
+    assert!(status.contains("nothing changed since base"), "{status}");
+    s.run(&["prune", "a"]).success();
+    assert!(
+        r.join("target/debug/deps/app").is_file(),
+        "prune touched Root"
+    );
+}
+
+#[test]
+fn clone_ignored_refuses_what_it_should_not_copy() {
+    let s = Setup::new();
+    let r = s.repo.path();
+    std::fs::write(r.join(".gitignore"), "/out\n/link\n").unwrap();
+    git(r, &["add", ".gitignore"]);
+    git(r, &["commit", "-qm", "ignore"]);
+    std::fs::create_dir_all(r.join("out/x")).unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), r.join("link")).unwrap();
+    for (arg, needle) in [
+        ("src", "not ignored by git"),
+        ("missing", "not in Root's working tree"),
+        ("../etc", "must not contain . or .."),
+        ("/etc", "must be relative"),
+        (".git", "inside .git"),
+        ("link", "not a directory"),
+        ("out,out/x", "inside out"),
+    ] {
+        s.run(&["new", "x", "--clone-ignored", arg])
+            .failure()
+            .stderr(predicate::str::contains(needle));
+    }
+    // Nothing was created by any refused call.
+    s.run(&["ls"])
+        .success()
+        .stdout(predicate::str::contains("No grafts"));
+    s.run(&["new", "x", "--clone-ignored", "out", "--backend", "fuse"])
+        .failure()
+        .stderr(predicate::str::contains("needs a reflink graft"));
+}
+
 #[test]
 fn prune_refuses_uncommitted_and_unintegrated_work() {
     let s = Setup::new();

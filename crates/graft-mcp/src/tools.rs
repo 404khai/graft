@@ -71,7 +71,8 @@ pub fn tools() -> Vec<Tool> {
                     "name": {"type": "string", "description": NAME},
                     "from": {"type": "string", "description": "Revision to start from (default: Root's HEAD)."},
                     "backend": {"type": "string", "enum": ["reflink", "fuse", "nfs"], "description": "Filesystem backend: reflink (a real working tree; the default unless config.toml or $GRAFT_FS says otherwise), or a virtual graft served by graftd: fuse on Linux, nfs on macOS. Only virtual grafts support graft_bud, graft_ring and graft_rewind."},
-                    "blueprint": {"type": "string", "description": "Blueprint of graft.toml to provision: ports, services, env files."}
+                    "blueprint": {"type": "string", "description": "Blueprint of graft.toml to provision: ports, services, env files."},
+                    "clone_ignored": {"type": "array", "items": {"type": "string"}, "description": "Git-ignored directories to reflink from Root's working tree as they are, with no build, e.g. [\"target\", \"web/node_modules\"]. Reflink grafts only."}
                 },
                 "required": ["name"],
                 "additionalProperties": false
@@ -410,6 +411,13 @@ pub fn invocation(name: &str, args: &JsonObject) -> Result<Invocation, String> {
             option(a, "--from", word(args, "from")?);
             option(a, "--backend", word(args, "backend")?);
             option(a, "--blueprint", word(args, "blueprint")?);
+            if args.contains_key("clone_ignored") {
+                let paths = strings(args, "clone_ignored")?;
+                if paths.iter().any(|p| p.contains(',')) {
+                    return Err("clone_ignored paths must not contain ','".to_owned());
+                }
+                a.push(format!("--clone-ignored={}", paths.join(",")));
+            }
         }
         "graft_list" => {
             a.extend(["ls".to_owned(), "--json".to_owned()]);
@@ -516,6 +524,19 @@ mod tests {
         );
         assert_eq!(
             call(
+                "graft_new",
+                json!({"name": "a", "clone_ignored": ["target", "web/node_modules"]})
+            )
+            .unwrap(),
+            [
+                "new",
+                "--json",
+                "a",
+                "--clone-ignored=target,web/node_modules"
+            ]
+        );
+        assert_eq!(
+            call(
                 "graft_run",
                 json!({"name": "a", "command": ["sh", "-c", "echo $HOME"]})
             )
@@ -604,6 +625,11 @@ mod tests {
                 "graft_integrate",
                 json!({"names": ["a"], "dry_run": true, "test": " "}),
                 "test must be a non-empty string",
+            ),
+            (
+                "graft_new",
+                json!({"name": "a", "clone_ignored": ["a,b"]}),
+                "must not contain ','",
             ),
             (
                 "graft_run",
