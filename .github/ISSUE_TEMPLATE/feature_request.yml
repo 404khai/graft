@@ -1,0 +1,20 @@
+name: Feature request
+description: Something Graft should do that it does not.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and where Graft gets in the way. A concrete workflow helps more than a proposed solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like
+      description: How it could work, if you have an idea. Commands, flags or MCP tools you would expect.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do today instead
