@@ -6,6 +6,7 @@
 //! tell why a call failed without matching on its wording.
 
 use std::fmt;
+use std::io::Write as _;
 
 use graft_core::InvalidGraftName;
 
@@ -77,16 +78,55 @@ fn hint_of(e: &anyhow::Error) -> Option<&str> {
         .and_then(|c| c.hint.as_deref())
 }
 
+/// `e`'s message chain without the hint, which is reported on its own.
+fn message_of(e: &anyhow::Error) -> String {
+    e.chain()
+        .map(|c| match c.downcast_ref::<Coded>() {
+            Some(coded) => coded.message.clone(),
+            None => c.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(": ")
+}
+
 /// The JSON line that reports `e` to `graft mcp`.
 pub(crate) fn error_json(e: &anyhow::Error) -> String {
+    line(code_of(e), &message_of(e), hint_of(e))
+}
+
+fn line(code: &str, message: &str, hint: Option<&str>) -> String {
     serde_json::json!({
-        "error": {
-            "code": code_of(e),
-            "message": format!("{e:#}"),
-            "hint": hint_of(e),
-        }
+        "error": {"code": code, "message": message, "hint": hint}
     })
     .to_string()
+}
+
+/// For a command that fails without returning an error (it still prints
+/// its result): under `graft mcp`, writes the JSON error line to stderr.
+pub(crate) fn report_failure(code: &str, message: &str, hint: Option<&str>) {
+    if is_mcp() {
+        let _ = writeln!(std::io::stderr(), "{}", line(code, message, hint));
+    }
+}
+
+/// Under `graft mcp`, writes how a `graft run` command ended to stderr as
+/// `{"run":{"exit_code","signal","duration_ms"}}`, for `graft_run`'s result.
+pub(crate) fn report_run(status: std::process::ExitStatus, took: std::time::Duration) {
+    if !is_mcp() {
+        return;
+    }
+    #[cfg(unix)]
+    let signal = std::os::unix::process::ExitStatusExt::signal(&status);
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
+    let v = serde_json::json!({
+        "run": {
+            "exit_code": status.code(),
+            "signal": signal,
+            "duration_ms": u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
+        }
+    });
+    let _ = writeln!(std::io::stderr(), "{v}");
 }
 
 #[cfg(test)]
@@ -105,6 +145,12 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&error_json(&e)).unwrap();
         assert_eq!(v["error"]["code"], "not_found");
         assert_eq!(v["error"]["hint"], "see graft_list");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .ends_with("no graft named a")
+        );
         assert!(
             v["error"]["message"]
                 .as_str()

@@ -54,7 +54,7 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_new",
             "Create a graft",
-            "Create a graft: a private copy-on-write workspace checked out from Root. Returns its path. Layers declared in Root's graft.toml (e.g. node_modules) are built on the first create and shared after; if a build fails, nothing is created and the error (code layer_build_failed) shows the build's output.",
+            "Create a graft: a private copy-on-write workspace checked out from Root. Returns JSON {name, path, base, backend, layers: [{path, status: built|reused, key}]}. Layers declared in Root's graft.toml (e.g. node_modules) are built on the first create and shared after; if a build fails, nothing is created and the error (code layer_build_failed) shows the build's output.",
             json!({
                 "type": "object",
                 "properties": {
@@ -71,14 +71,14 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_list",
             "List grafts",
-            "List grafts as JSON: name, base, state, backend, path, changed (file count) and disk_bytes (null when unknown, with the reason in note).",
+            "List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes (blocks not shared with Root or the layer cache, so build outputs count; null when unknown, with the reason in note).",
             json!({"type": "object", "properties": {}, "additionalProperties": false}),
             read_only(),
         ),
         tool(
             "graft_status",
             "Show a graft's changes",
-            "Show what changed in a graft since its base, as JSON: a list of grafts with their changes ({kind: A|M|D|..., path}). Without name, every graft.",
+            "Show what changed in a graft since its base, as JSON {root, version, grafts: [...]}, each with its changes ({kind: A|M|D|..., path}). Without name, every graft.",
             json!({
                 "type": "object",
                 "properties": {"name": {"type": "string", "description": NAME}},
@@ -101,7 +101,7 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_run",
             "Run a command in a graft",
-            "Run a command confined to a graft: it can only write inside the graft (and its private TMPDIR), with the graft's blueprint environment. The command is an argument list, not a shell line.",
+            "Run a command confined to a graft: it can only write inside the graft (and its private TMPDIR), with the graft's blueprint environment. The command is an argument list, not a shell line. Returns JSON {exit_code, signal, stdout, stderr, duration_ms, timed_out}; a non-zero exit, a signal or a timeout is a tool error with code command_failed or timed_out and the same fields.",
             json!({
                 "type": "object",
                 "properties": {
@@ -117,7 +117,7 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_bud",
             "Fork a graft",
-            "Fork a virtual graft (backend fuse or nfs) in constant time: a new graft with the same base and a copy of its changes. Reflink grafts are refused.",
+            "Fork a virtual graft (backend fuse or nfs) in constant time: a new graft with the same base and a copy of its changes. Reflink grafts are refused (backend_unsupported). Returns JSON {name, src, path, base, entries}.",
             json!({
                 "type": "object",
                 "properties": {
@@ -132,7 +132,7 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_ring",
             "Checkpoint a graft",
-            "Checkpoint a virtual graft's (fuse or nfs) changes as a named ring, to restore later with graft_rewind, or list its rings.",
+            "Checkpoint a virtual graft's (fuse or nfs) changes as a named ring, to restore later with graft_rewind, or list its rings. Returns JSON {graft, label, seq, entries, at}, or a list of them with list.",
             json!({
                 "type": "object",
                 "properties": {
@@ -148,7 +148,7 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_rewind",
             "Rewind a graft to a ring",
-            "Restore a virtual graft's changes to a ring made with graft_ring. The state it leaves is saved first as a ring named undo-<seq>, so a rewind can itself be undone.",
+            "Restore a virtual graft's changes to a ring made with graft_ring. The state it leaves is saved first as a ring named undo-<seq>, so a rewind can itself be undone. Returns JSON {name, ring, seq, undo}.",
             json!({
                 "type": "object",
                 "properties": {
@@ -177,16 +177,16 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_integrate",
             "Land grafts in Root",
-            "Merge grafts onto a branch of Root through the integrate queue: structural merge, the [integrate] test gate if graft.toml sets one (the result says when none ran), one commit each. Changes Root's history, so it needs confirm: true unless dry_run.",
+            "Merge grafts onto a branch of Root through the integrate queue: structural merge, the [integrate] test gate if graft.toml sets one (the result says when none ran), one commit each. Changes Root's history, so it needs confirm: true unless dry_run. Returns JSON {results: [{graft, target, state, code, commit, output}], gated}; if any request did not land, it is a tool error whose code is the first failed request's (conflict, gate_failed, checkout_would_fall_behind, root_not_clean, not_approved, nothing_to_integrate, claimed, failed) and whose output holds the results.",
             json!({
                 "type": "object",
                 "properties": {
                     "names": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Grafts, in order."},
                     "onto": {"type": "string", "description": "Branch to land on (default: [integrate] branch in graft.toml, else the branch Root has checked out, which also needs update_checkout)."},
                     "message": {"type": "string", "description": "Commit message."},
-                    "dry_run": {"type": "boolean", "description": "Run every step except landing."},
+                    "dry_run": {"type": "boolean", "description": "Run every step and check except landing, including the checked-out-branch rule, so a passing dry run predicts the real one."},
                     "prune": {"type": "boolean", "description": "Prune each graft once it has landed."},
-                    "update_checkout": {"type": "boolean", "description": "Allow landing on the branch Root has checked out (fast-forwards Root's clean working tree)."},
+                    "update_checkout": {"type": "boolean", "description": "Allow landing on the branch Root has checked out: Root's working tree is fast-forwarded, which needs no changes to tracked files (untracked files are left alone)."},
                     "confirm": {"type": "boolean", "description": "Required (true) to land anything."}
                 },
                 "required": ["names"],
@@ -197,7 +197,7 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_plan",
             "Plan a task",
-            "Split a task into an ordered DAG of grafts along the code's dependency graph, as JSON. The task names files and symbols in `code spans`. With apply, creates the grafts that are ready and records their claims.",
+            "Split a task into an ordered DAG of grafts along the code's dependency graph, as JSON {plan, base, nodes, width, unresolved}. The task names files, directories (every file under them) and symbols in `code spans`; spans that name nothing yet (a new file, an unknown symbol) are listed in unresolved, not placed. With apply, creates the grafts that are ready and records their claims.",
             json!({
                 "type": "object",
                 "properties": {
@@ -213,7 +213,7 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_prune",
             "Remove a graft",
-            "Remove a graft. Refuses if work would be lost; force discards it and needs confirm: true.",
+            "Remove a graft. Refuses if work would be lost (code work_would_be_lost); force discards it and needs confirm: true. Returns JSON {name, pruned}.",
             json!({
                 "type": "object",
                 "properties": {
@@ -426,6 +426,18 @@ pub fn invocation(name: &str, args: &JsonObject) -> Result<Invocation, String> {
         }
         _ => return Err(format!("no tool {name}")),
     }
+    // Every command whose result is more than text answers in JSON.
+    if matches!(
+        name,
+        "graft_new"
+            | "graft_bud"
+            | "graft_ring"
+            | "graft_rewind"
+            | "graft_integrate"
+            | "graft_prune"
+    ) {
+        inv.args.insert(1, "--json".to_owned());
+    }
     Ok(inv)
 }
 
@@ -451,7 +463,7 @@ mod tests {
     fn calls_become_graft_arguments() {
         assert_eq!(
             call("graft_new", json!({"name": "a", "backend": "nfs"})).unwrap(),
-            ["new", "a", "--backend", "nfs"]
+            ["new", "--json", "a", "--backend", "nfs"]
         );
         assert_eq!(
             call(
@@ -471,7 +483,7 @@ mod tests {
                 json!({"names": ["a", "b"], "onto": "main", "confirm": true})
             )
             .unwrap(),
-            ["integrate", "a", "b", "--onto", "main"]
+            ["integrate", "--json", "a", "b", "--onto", "main"]
         );
         assert_eq!(
             call("graft_plan", json!({"task_file": "t.md", "apply": true})).unwrap(),
@@ -488,13 +500,13 @@ mod tests {
         assert!(e.contains("confirm: true"), "{e}");
         assert_eq!(
             call("graft_integrate", json!({"names": ["a"], "dry_run": true})).unwrap(),
-            ["integrate", "a", "--dry-run"]
+            ["integrate", "--json", "a", "--dry-run"]
         );
         let e = call("graft_prune", json!({"name": "a", "force": true})).unwrap_err();
         assert!(e.contains("confirm: true"), "{e}");
         assert_eq!(
             call("graft_prune", json!({"name": "a"})).unwrap(),
-            ["prune", "a"]
+            ["prune", "--json", "a"]
         );
         assert_eq!(
             call(
@@ -502,7 +514,7 @@ mod tests {
                 json!({"name": "a", "force": true, "confirm": true})
             )
             .unwrap(),
-            ["prune", "a", "--force"]
+            ["prune", "--json", "a", "--force"]
         );
     }
 

@@ -293,6 +293,55 @@ fn error_result(stdout: &str, stderr: &str) -> CallToolResponse {
     text_result(err.to_string(), true)
 }
 
+/// The error for a command that could not run to the end: `timed_out`
+/// when the server killed it at its limit, else `failed`.
+fn failure(why: &str) -> CallToolResponse {
+    let code = if why.contains(" timed out after ") {
+        "timed_out"
+    } else {
+        "failed"
+    };
+    text_result(
+        serde_json::json!({"code": code, "message": why, "hint": null, "output": ""}).to_string(),
+        true,
+    )
+}
+
+/// `graft_run`'s result: how the command ended (from the `{"run": ...}`
+/// line `graft run` writes under `GRAFT_MCP`) with its stdout and stderr
+/// kept apart. A failure of `graft` itself (no such graft, ...) is its
+/// coded error instead.
+fn run_result(ran: &Ran) -> CallToolResponse {
+    let mut ended: Option<Value> = None;
+    let mut stderr: Vec<&str> = Vec::new();
+    for line in ran.stderr.lines() {
+        match serde_json::from_str::<Value>(line) {
+            Ok(v) if v.get("run").is_some_and(Value::is_object) => ended = Some(v["run"].clone()),
+            _ => stderr.push(line),
+        }
+    }
+    let Some(ended) = ended else {
+        return error_result(&ran.stdout, &ran.stderr);
+    };
+    let mut result = ended;
+    result["stdout"] = Value::String(ran.stdout.clone());
+    result["stderr"] = Value::String(stderr.join("\n"));
+    result["timed_out"] = Value::Bool(false);
+    let exit = result["exit_code"].as_i64();
+    if exit == Some(0) {
+        return text_result(result.to_string(), false);
+    }
+    let how = match (exit, result["signal"].as_i64()) {
+        (Some(c), _) => format!("exited with {c}"),
+        (None, Some(sig)) => format!("was killed by signal {sig}"),
+        (None, None) => "failed".to_owned(),
+    };
+    result["code"] = Value::String("command_failed".to_owned());
+    result["message"] = Value::String(format!("the command {how}"));
+    result["hint"] = Value::Null;
+    text_result(result.to_string(), true)
+}
+
 /// The error for a call refused before anything ran.
 fn refused(why: &str) -> CallToolResponse {
     let code = if why.contains("pass confirm: true") {
@@ -322,15 +371,19 @@ impl ServerHandler for GraftServer {
                 .build(),
         )
         .with_server_info(Implementation::new("graft", env!("CARGO_PKG_VERSION")))
-        .with_instructions(
-            "Graft gives each agent its own copy-on-write workspace (a graft) of this repository. \
+        .with_instructions(format!(
+            "This server serves the Root at {} (graft {}). \
+             Graft gives each agent its own copy-on-write workspace (a graft) of this repository. \
              Create one with graft_new, work in it with graft_run (confined to the graft), check \
              overlaps with other agents with graft_radar or by subscribing to graft://radar/<graft>, \
              and land it with graft_integrate. Failed calls return JSON \
-             {code, message, hint, output}; codes include not_found, invalid_name, \
-             invalid_arguments, confirm_required, layer_build_failed, backend_unsupported \
+             {{code, message, hint, output}}; codes include not_found, invalid_name, \
+             invalid_arguments, confirm_required, layer_build_failed, backend_unsupported, \
+             work_would_be_lost, checkout_would_fall_behind, command_failed, timed_out \
              and failed.",
-        )
+            self.cwd.display(),
+            env!("CARGO_PKG_VERSION"),
+        ))
     }
 
     async fn list_tools(
@@ -351,6 +404,12 @@ impl ServerHandler for GraftServer {
             Ok(i) => i,
             Err(why) => return Ok(refused(&why)),
         };
+        if request.name == "graft_run" {
+            return Ok(match self.run(&inv).await {
+                Ok(ran) => run_result(&ran),
+                Err(why) => failure(&why),
+            });
+        }
         Ok(match self.run(&inv).await {
             Ok(ran) if ran.ok => {
                 let stdout = match &inv.radar_filter {
@@ -365,11 +424,7 @@ impl ServerHandler for GraftServer {
                 text_result(text, false)
             }
             Ok(ran) => error_result(&ran.stdout, &ran.stderr),
-            Err(why) => text_result(
-                serde_json::json!({"code": "failed", "message": why, "hint": null, "output": ""})
-                    .to_string(),
-                true,
-            ),
+            Err(why) => failure(&why),
         })
     }
 

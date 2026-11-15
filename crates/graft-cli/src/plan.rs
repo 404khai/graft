@@ -10,7 +10,7 @@ use graft_core::{BackendKind, CommitId, GraftState};
 use graft_radar::symbols::Lang;
 use graft_sched::admission::{Claim, Verdict, admit};
 use graft_sched::graph::{Graph, build};
-use graft_sched::plan::{Plan, plan, seeds};
+use graft_sched::plan::{Plan, plan, seeds_and_unresolved};
 use graft_store::{ClaimRow, Store};
 
 use crate::grafts::{Ctx, find, open, parse_name};
@@ -180,14 +180,18 @@ pub(crate) fn run_plan(args: &PlanArgs, env: &Environment) -> anyhow::Result<Out
         .with_context(|| format!("reading {}", args.task.display()))?;
     let head = ctx.located.repo.head_commit()?;
     let graph: Graph = build(&tree_at(&ctx, &head)?);
-    let found = seeds(&task, &graph);
+    let (found, unresolved) = seeds_and_unresolved(&task, &graph);
     let p = plan(&graph, &found);
     let id = plan_id(&head, &task);
     let mut out = Output::default();
     if args.json {
-        out.stdout = serde_json::to_string(
-            &serde_json::json!({ "plan": id, "base": head.as_str(), "nodes": p.nodes, "width": p.width }),
-        )? + "\n";
+        out.stdout = serde_json::to_string(&serde_json::json!({
+            "plan": id,
+            "base": head.as_str(),
+            "nodes": p.nodes,
+            "width": p.width,
+            "unresolved": unresolved,
+        }))? + "\n";
     } else {
         let _ = writeln!(
             out.stdout,
@@ -195,6 +199,13 @@ pub(crate) fn run_plan(args: &PlanArgs, env: &Environment) -> anyhow::Result<Out
             head.short(7),
             graph.files.len()
         );
+        if !unresolved.is_empty() {
+            let _ = writeln!(
+                out.stdout,
+                "Not placed (no such file, directory or symbol yet): {}",
+                unresolved.join(", ")
+            );
+        }
         out.stdout.push_str(&p.render());
     }
     if args.apply {

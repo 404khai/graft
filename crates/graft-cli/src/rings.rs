@@ -21,6 +21,9 @@ pub(crate) struct BudArgs {
     src: String,
     /// The new graft's name.
     dst: String,
+    /// Print JSON: `{name, src, path, base, entries}`.
+    #[arg(long)]
+    json: bool,
 }
 
 /// Arguments for `graft ring`.
@@ -34,6 +37,10 @@ pub(crate) struct RingArgs {
     /// List the graft's rings instead of taking one.
     #[arg(long, conflicts_with = "label")]
     list: bool,
+    /// Print JSON: the ring `{graft, label, seq, entries, at}`, or with
+    /// `--list` a list of them.
+    #[arg(long)]
+    json: bool,
 }
 
 /// Arguments for `graft rewind`.
@@ -43,6 +50,9 @@ pub(crate) struct RewindArgs {
     name: String,
     /// The ring to return to.
     ring: String,
+    /// Print JSON: `{name, ring, seq, undo}`.
+    #[arg(long)]
+    json: bool,
 }
 
 /// Refuses reflink grafts, whose changes live in a working tree rather than
@@ -126,7 +136,15 @@ pub(crate) fn bud(args: &BudArgs, env: &Environment) -> anyhow::Result<Output> {
             path.display(),
             record.base_commit.short(7)
         );
-        Ok(out)
+        Ok(out.json_if(args.json, || {
+            serde_json::json!({
+                "name": dst.as_str(),
+                "src": src.as_str(),
+                "path": path,
+                "base": record.base_commit.as_str(),
+                "entries": paths,
+            })
+        }))
     })
 }
 
@@ -137,6 +155,10 @@ pub(crate) fn ring(args: &RingArgs, env: &Environment) -> anyhow::Result<Output>
     let record = find(&ctx.located.store, &name)?;
     if args.list {
         let rings = ctx.located.store.rings(record.id)?;
+        if args.json {
+            let list: Vec<_> = rings.iter().map(|r| ring_json(&name, r)).collect();
+            return Ok(Output::default().json_if(true, || serde_json::Value::Array(list)));
+        }
         if rings.is_empty() {
             return Ok(Output::stdout(format!("graft {name}: no rings\n")));
         }
@@ -171,7 +193,17 @@ pub(crate) fn ring(args: &RingArgs, env: &Environment) -> anyhow::Result<Output>
         "Ringed graft {name} as {} (op {}, {} delta entries)",
         ring.label, ring.seq, ring.paths
     );
-    Ok(out)
+    Ok(out.json_if(args.json, || ring_json(&name, &ring)))
+}
+
+fn ring_json(graft: &graft_core::GraftName, r: &graft_store::Ring) -> serde_json::Value {
+    serde_json::json!({
+        "graft": graft.as_str(),
+        "label": r.label.as_str(),
+        "seq": r.seq,
+        "entries": r.paths,
+        "at": r.created_at.to_string(),
+    })
 }
 
 /// Returns a graft to one of its rings.
@@ -233,5 +265,12 @@ pub(crate) fn rewind(args: &RewindArgs, env: &Environment) -> anyhow::Result<Out
         "Rewound graft {name} to ring {label} (op {}). To undo: {undo}",
         rewound.seq
     );
-    Ok(out)
+    Ok(out.json_if(args.json, || {
+        serde_json::json!({
+            "name": name.as_str(),
+            "ring": label.as_str(),
+            "seq": rewound.seq,
+            "undo": rewound.undo.as_str(),
+        })
+    }))
 }

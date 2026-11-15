@@ -9,7 +9,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": false,
       "title": "Create a graft"
     },
-    "description": "Create a graft: a private copy-on-write workspace checked out from Root. Returns its path. Layers declared in Root's graft.toml (e.g. node_modules) are built on the first create and shared after; if a build fails, nothing is created and the error (code layer_build_failed) shows the build's output.",
+    "description": "Create a graft: a private copy-on-write workspace checked out from Root. Returns JSON {name, path, base, backend, layers: [{path, status: built|reused, key}]}. Layers declared in Root's graft.toml (e.g. node_modules) are built on the first create and shared after; if a build fails, nothing is created and the error (code layer_build_failed) shows the build's output.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -47,7 +47,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": true,
       "title": "List grafts"
     },
-    "description": "List grafts as JSON: name, base, state, backend, path, changed (file count) and disk_bytes (null when unknown, with the reason in note).",
+    "description": "List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes (blocks not shared with Root or the layer cache, so build outputs count; null when unknown, with the reason in note).",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},
@@ -60,7 +60,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": true,
       "title": "Show a graft's changes"
     },
-    "description": "Show what changed in a graft since its base, as JSON: a list of grafts with their changes ({kind: A|M|D|..., path}). Without name, every graft.",
+    "description": "Show what changed in a graft since its base, as JSON {root, version, grafts: [...]}, each with its changes ({kind: A|M|D|..., path}). Without name, every graft.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -100,7 +100,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": false,
       "title": "Run a command in a graft"
     },
-    "description": "Run a command confined to a graft: it can only write inside the graft (and its private TMPDIR), with the graft's blueprint environment. The command is an argument list, not a shell line.",
+    "description": "Run a command confined to a graft: it can only write inside the graft (and its private TMPDIR), with the graft's blueprint environment. The command is an argument list, not a shell line. Returns JSON {exit_code, signal, stdout, stderr, duration_ms, timed_out}; a non-zero exit, a signal or a timeout is a tool error with code command_failed or timed_out and the same fields.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -137,7 +137,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": false,
       "title": "Fork a graft"
     },
-    "description": "Fork a virtual graft (backend fuse or nfs) in constant time: a new graft with the same base and a copy of its changes. Reflink grafts are refused.",
+    "description": "Fork a virtual graft (backend fuse or nfs) in constant time: a new graft with the same base and a copy of its changes. Reflink grafts are refused (backend_unsupported). Returns JSON {name, src, path, base, entries}.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -164,7 +164,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": false,
       "title": "Checkpoint a graft"
     },
-    "description": "Checkpoint a virtual graft's (fuse or nfs) changes as a named ring, to restore later with graft_rewind, or list its rings.",
+    "description": "Checkpoint a virtual graft's (fuse or nfs) changes as a named ring, to restore later with graft_rewind, or list its rings. Returns JSON {graft, label, seq, entries, at}, or a list of them with list.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -194,7 +194,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": false,
       "title": "Rewind a graft to a ring"
     },
-    "description": "Restore a virtual graft's changes to a ring made with graft_ring. The state it leaves is saved first as a ring named undo-<seq>, so a rewind can itself be undone.",
+    "description": "Restore a virtual graft's changes to a ring made with graft_ring. The state it leaves is saved first as a ring named undo-<seq>, so a rewind can itself be undone. Returns JSON {name, ring, seq, undo}.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -243,7 +243,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": false,
       "title": "Land grafts in Root"
     },
-    "description": "Merge grafts onto a branch of Root through the integrate queue: structural merge, the [integrate] test gate if graft.toml sets one (the result says when none ran), one commit each. Changes Root's history, so it needs confirm: true unless dry_run.",
+    "description": "Merge grafts onto a branch of Root through the integrate queue: structural merge, the [integrate] test gate if graft.toml sets one (the result says when none ran), one commit each. Changes Root's history, so it needs confirm: true unless dry_run. Returns JSON {results: [{graft, target, state, code, commit, output}], gated}; if any request did not land, it is a tool error whose code is the first failed request's (conflict, gate_failed, checkout_would_fall_behind, root_not_clean, not_approved, nothing_to_integrate, claimed, failed) and whose output holds the results.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -252,7 +252,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
           "type": "boolean"
         },
         "dry_run": {
-          "description": "Run every step except landing.",
+          "description": "Run every step and check except landing, including the checked-out-branch rule, so a passing dry run predicts the real one.",
           "type": "boolean"
         },
         "message": {
@@ -276,7 +276,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
           "type": "boolean"
         },
         "update_checkout": {
-          "description": "Allow landing on the branch Root has checked out (fast-forwards Root's clean working tree).",
+          "description": "Allow landing on the branch Root has checked out: Root's working tree is fast-forwarded, which needs no changes to tracked files (untracked files are left alone).",
           "type": "boolean"
         }
       },
@@ -293,7 +293,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": false,
       "title": "Plan a task"
     },
-    "description": "Split a task into an ordered DAG of grafts along the code's dependency graph, as JSON. The task names files and symbols in `code spans`. With apply, creates the grafts that are ready and records their claims.",
+    "description": "Split a task into an ordered DAG of grafts along the code's dependency graph, as JSON {plan, base, nodes, width, unresolved}. The task names files, directories (every file under them) and symbols in `code spans`; spans that name nothing yet (a new file, an unknown symbol) are listed in unresolved, not placed. With apply, creates the grafts that are ready and records their claims.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -328,7 +328,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": false,
       "title": "Remove a graft"
     },
-    "description": "Remove a graft. Refuses if work would be lost; force discards it and needs confirm: true.",
+    "description": "Remove a graft. Refuses if work would be lost (code work_would_be_lost); force discards it and needs confirm: true. Returns JSON {name, pruned}.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {

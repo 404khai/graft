@@ -24,10 +24,20 @@ object ([ADR 0025](decisions/0025-mcp-errors-for-agents.md)):
 | `not_found` | No such graft (or ring). |
 | `layer_build_failed` | A `graft.toml` layer build failed; nothing was created. `message` ends with the build's output. |
 | `backend_unsupported` | The graft's backend cannot do this (bud, ring and rewind need a virtual graft). |
-| `failed` | Anything else, including a `graft_run` command that exited non-zero; see `output`. |
+| `work_would_be_lost` | `graft_prune` without `force` on a graft with work Root does not have. |
+| `checkout_would_fall_behind` | `graft_integrate` onto the branch Root has checked out, without `update_checkout: true` (a dry run reports it too). |
+| `root_not_clean` | `update_checkout`, but Root has changes to tracked files. |
+| `conflict`, `gate_failed`, `not_approved`, `nothing_to_integrate`, `claimed` | Why a `graft_integrate` request stopped; each request's code is in the results in `output`, and the call's code is the first one's. |
+| `command_failed` | A `graft_run` command exited non-zero or was killed; the error also carries `exit_code`, `signal`, `stdout`, `stderr`, `duration_ms`. |
+| `timed_out` | The call ran past its time limit and was killed. |
+| `failed` | Anything else; see `message` and `output`. |
 
-`hint`, when not null, is the next step. `output` is what the command
-printed besides the error.
+`hint`, when not null, is the next step (it is not repeated in
+`message`). `output` is what the command printed besides the error.
+
+Every successful call returns JSON too (except `graft_diff`, a unified diff), described with each tool below;
+`graft_list` and `graft_status` start with the `root` and `version` they
+describe, and the server's instructions name them as well.
 
 Tools that change Root's history or discard work need `confirm: true`:
 `graft_integrate` (unless `dry_run: true`) and `graft_prune` with
@@ -52,7 +62,7 @@ test (`crates/graft-mcp/src/snapshots/`).
 
 ### `graft_new`
 
-Create a graft: a private copy-on-write workspace checked out from Root. Returns its path. Layers declared in Root's graft.toml (e.g. node_modules) are built on the first create and shared after; if a build fails, nothing is created and the error (code layer_build_failed) shows the build's output.
+Create a graft: a private copy-on-write workspace checked out from Root. Returns JSON {name, path, base, backend, layers: [{path, status: built|reused, key}]}. Layers declared in Root's graft.toml (e.g. node_modules) are built on the first create and shared after; if a build fails, nothing is created and the error (code layer_build_failed) shows the build's output.
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -63,13 +73,13 @@ Create a graft: a private copy-on-write workspace checked out from Root. Returns
 
 ### `graft_list`
 
-List grafts as JSON: name, base, state, backend, path, changed (file count) and disk_bytes (null when unknown, with the reason in note). (read-only)
+List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes (blocks not shared with Root or the layer cache, so build outputs count; null when unknown, with the reason in note). (read-only)
 
 No parameters.
 
 ### `graft_status`
 
-Show what changed in a graft since its base, as JSON: a list of grafts with their changes ({kind: A|M|D|..., path}). Without name, every graft. (read-only)
+Show what changed in a graft since its base, as JSON {root, version, grafts: [...]}, each with its changes ({kind: A|M|D|..., path}). Without name, every graft. (read-only)
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -85,7 +95,7 @@ Show a graft's changes as a unified diff. (read-only)
 
 ### `graft_run`
 
-Run a command confined to a graft: it can only write inside the graft (and its private TMPDIR), with the graft's blueprint environment. The command is an argument list, not a shell line.
+Run a command confined to a graft: it can only write inside the graft (and its private TMPDIR), with the graft's blueprint environment. The command is an argument list, not a shell line. Returns JSON {exit_code, signal, stdout, stderr, duration_ms, timed_out}; a non-zero exit, a signal or a timeout is a tool error with code command_failed or timed_out and the same fields.
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -95,7 +105,7 @@ Run a command confined to a graft: it can only write inside the graft (and its p
 
 ### `graft_bud`
 
-Fork a virtual graft (backend fuse or nfs) in constant time: a new graft with the same base and a copy of its changes. Reflink grafts are refused.
+Fork a virtual graft (backend fuse or nfs) in constant time: a new graft with the same base and a copy of its changes. Reflink grafts are refused (backend_unsupported). Returns JSON {name, src, path, base, entries}.
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -104,7 +114,7 @@ Fork a virtual graft (backend fuse or nfs) in constant time: a new graft with th
 
 ### `graft_ring`
 
-Checkpoint a virtual graft's (fuse or nfs) changes as a named ring, to restore later with graft_rewind, or list its rings.
+Checkpoint a virtual graft's (fuse or nfs) changes as a named ring, to restore later with graft_rewind, or list its rings. Returns JSON {graft, label, seq, entries, at}, or a list of them with list.
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -114,7 +124,7 @@ Checkpoint a virtual graft's (fuse or nfs) changes as a named ring, to restore l
 
 ### `graft_rewind`
 
-Restore a virtual graft's changes to a ring made with graft_ring. The state it leaves is saved first as a ring named undo-<seq>, so a rewind can itself be undone.
+Restore a virtual graft's changes to a ring made with graft_ring. The state it leaves is saved first as a ring named undo-<seq>, so a rewind can itself be undone. Returns JSON {name, ring, seq, undo}.
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -132,21 +142,21 @@ Overlaps between live grafts, as JSON: same file (path), same symbol, merge conf
 
 ### `graft_integrate`
 
-Merge grafts onto a branch of Root through the integrate queue: structural merge, the [integrate] test gate if graft.toml sets one (the result says when none ran), one commit each. Changes Root's history, so it needs confirm: true unless dry_run. (destructive)
+Merge grafts onto a branch of Root through the integrate queue: structural merge, the [integrate] test gate if graft.toml sets one (the result says when none ran), one commit each. Changes Root's history, so it needs confirm: true unless dry_run. Returns JSON {results: [{graft, target, state, code, commit, output}], gated}; if any request did not land, it is a tool error whose code is the first failed request's (conflict, gate_failed, checkout_would_fall_behind, root_not_clean, not_approved, nothing_to_integrate, claimed, failed) and whose output holds the results. (destructive)
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `confirm` | boolean | no | Required (true) to land anything. |
-| `dry_run` | boolean | no | Run every step except landing. |
+| `dry_run` | boolean | no | Run every step and check except landing, including the checked-out-branch rule, so a passing dry run predicts the real one. |
 | `message` | string | no | Commit message. |
 | `names` | array of string | yes | Grafts, in order. |
 | `onto` | string | no | Branch to land on (default: [integrate] branch in graft.toml, else the branch Root has checked out, which also needs update_checkout). |
 | `prune` | boolean | no | Prune each graft once it has landed. |
-| `update_checkout` | boolean | no | Allow landing on the branch Root has checked out (fast-forwards Root's clean working tree). |
+| `update_checkout` | boolean | no | Allow landing on the branch Root has checked out: Root's working tree is fast-forwarded, which needs no changes to tracked files (untracked files are left alone). |
 
 ### `graft_plan`
 
-Split a task into an ordered DAG of grafts along the code's dependency graph, as JSON. The task names files and symbols in `code spans`. With apply, creates the grafts that are ready and records their claims.
+Split a task into an ordered DAG of grafts along the code's dependency graph, as JSON {plan, base, nodes, width, unresolved}. The task names files, directories (every file under them) and symbols in `code spans`; spans that name nothing yet (a new file, an unknown symbol) are listed in unresolved, not placed. With apply, creates the grafts that are ready and records their claims.
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -157,7 +167,7 @@ Split a task into an ordered DAG of grafts along the code's dependency graph, as
 
 ### `graft_prune`
 
-Remove a graft. Refuses if work would be lost; force discards it and needs confirm: true. (destructive)
+Remove a graft. Refuses if work would be lost (code work_would_be_lost); force discards it and needs confirm: true. Returns JSON {name, pruned}. (destructive)
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |

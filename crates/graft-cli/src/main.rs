@@ -121,14 +121,24 @@ struct McpArgs {
 pub(crate) struct Output {
     pub stdout: String,
     pub warnings: Vec<String>,
+    /// Printed instead of `stdout` when set (a command's `--json`).
+    pub json: Option<serde_json::Value>,
 }
 
 impl Output {
     pub(crate) fn stdout(stdout: String) -> Self {
         Self {
             stdout,
-            warnings: Vec::new(),
+            ..Self::default()
         }
+    }
+
+    /// Uses `value` as the output when `json` is set.
+    pub(crate) fn json_if(mut self, json: bool, value: impl FnOnce() -> serde_json::Value) -> Self {
+        if json {
+            self.json = Some(value());
+        }
+        self
     }
 }
 
@@ -236,9 +246,13 @@ fn run() -> anyhow::Result<ExitCode> {
             let _ = writeln!(stderr, "graft: warning: {warning}");
         }
     }
+    let text = match &output.json {
+        Some(v) => v.to_string() + "\n",
+        None => output.stdout,
+    };
     let mut stdout = std::io::stdout().lock();
     stdout
-        .write_all(output.stdout.as_bytes())
+        .write_all(text.as_bytes())
         .and_then(|()| stdout.flush())
         .context("writing to stdout")?;
     Ok(code)
