@@ -6,6 +6,21 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
   {
     "annotations": {
       "destructiveHint": false,
+      "idempotentHint": true,
+      "readOnlyHint": false,
+      "title": "Register Root"
+    },
+    "description": "Register the repository this server runs in as a Root, so the other tools can use it. Safe to repeat. Returns JSON {root, path, registered}; registered is false when it already was a Root.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "name": "graft_init"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
       "readOnlyHint": false,
       "title": "Create a graft"
     },
@@ -54,6 +69,27 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "type": "object"
     },
     "name": "graft_list"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true,
+      "title": "Locate a graft"
+    },
+    "description": "The absolute path of a graft's working tree, as JSON {name, path}. Run shell commands there (it may contain spaces, so quote it).",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Graft name: lowercase letters, digits and hyphens, at most 40 characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "graft_path"
   },
   {
     "annotations": {
