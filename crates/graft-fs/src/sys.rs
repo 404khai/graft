@@ -298,3 +298,43 @@ pub(crate) fn unshared_data_bytes(path: &Path) -> io::Result<Option<u64>> {
 pub(crate) fn unshared_data_bytes(_path: &Path) -> io::Result<Option<u64>> {
     Ok(None)
 }
+
+/// The process file-mode creation mask, read once and cached.
+///
+/// `umask(2)` can only be read by setting it, so the first call sets it to
+/// its own value and back. That is racy only against another thread
+/// creating a file at the same instant; on Linux `/proc/self/status` is
+/// read first, which avoids touching the mask at all.
+#[cfg(unix)]
+pub(crate) fn process_umask() -> u32 {
+    static UMASK: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *UMASK.get_or_init(|| {
+        #[cfg(target_os = "linux")]
+        if let Some(mask) = std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find_map(|l| l.strip_prefix("Umask:"))
+                    .and_then(|v| u32::from_str_radix(v.trim(), 8).ok())
+            })
+        {
+            return mask;
+        }
+        // SAFETY: umask(2) cannot fail and has no memory-safety
+        // preconditions; the second call restores the original mask.
+        let mask = unsafe {
+            let old = libc::umask(0o022);
+            libc::umask(old);
+            old
+        };
+        // `mode_t` is u16 on macOS and u32 on Linux.
+        #[allow(clippy::useless_conversion)]
+        u32::from(mask)
+    })
+}
+
+/// Other platforms use git's default mask.
+#[cfg(not(unix))]
+pub(crate) fn process_umask() -> u32 {
+    0o022
+}
