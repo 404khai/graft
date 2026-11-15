@@ -137,6 +137,16 @@ pub(crate) struct LowerTree {
     cache: Mutex<ContentCache>,
     sizes: Mutex<HashMap<RelPath, u64>>,
     filter: OnceLock<Result<Filter, String>>,
+    /// Mask applied to modes of git entries, as `git checkout` does.
+    umask: u32,
+}
+
+/// The mode `git checkout` gives an entry: git stores only the executable
+/// bit, and the rest comes from the umask. Using it keeps a graft's
+/// permissions identical to Root's working tree.
+fn checkout_mode(executable_or_dir: bool, umask: u32) -> u32 {
+    let base = if executable_or_dir { 0o777 } else { 0o666 };
+    base & !umask
 }
 
 fn bytes_of(name: &std::ffi::OsStr) -> Vec<u8> {
@@ -155,6 +165,7 @@ impl LowerTree {
             cache: Mutex::new(ContentCache::new(DEFAULT_CACHE_BYTES)),
             sizes: Mutex::new(HashMap::new()),
             filter: OnceLock::new(),
+            umask: crate::sys::process_umask(),
         }
     }
 
@@ -403,9 +414,15 @@ impl LowerTree {
     fn kind_of(&self, path: &[u8], e: &LEntry) -> io::Result<LowerKind> {
         Ok(match &e.source {
             Source::Git { kind, id, .. } => match kind {
-                EntryKind::Tree | EntryKind::Submodule => LowerKind::Dir { mode: 0o755 },
-                EntryKind::Blob => LowerKind::File { mode: 0o644 },
-                EntryKind::BlobExecutable => LowerKind::File { mode: 0o755 },
+                EntryKind::Tree | EntryKind::Submodule => LowerKind::Dir {
+                    mode: checkout_mode(true, self.umask),
+                },
+                EntryKind::Blob => LowerKind::File {
+                    mode: checkout_mode(false, self.umask),
+                },
+                EntryKind::BlobExecutable => LowerKind::File {
+                    mode: checkout_mode(true, self.umask),
+                },
                 EntryKind::Symlink => LowerKind::Symlink {
                     target: self
                         .objects
@@ -413,7 +430,9 @@ impl LowerTree {
                         .map_err(|e| io::Error::other(e.to_string()))?,
                 },
             },
-            Source::Synthetic => LowerKind::Dir { mode: 0o755 },
+            Source::Synthetic => LowerKind::Dir {
+                mode: checkout_mode(true, self.umask),
+            },
             Source::Real(p) => {
                 let meta = std::fs::symlink_metadata(p)?;
                 #[cfg(unix)]
@@ -484,6 +503,17 @@ mod tests {
             cache.get(b"4").is_none(),
             "entries larger than the budget are not kept"
         );
+    }
+
+    #[test]
+    fn git_entries_get_checkout_modes_under_the_umask() {
+        // Debian and Fedora give users umask 002; macOS and CI use 022.
+        assert_eq!(checkout_mode(false, 0o002), 0o664);
+        assert_eq!(checkout_mode(true, 0o002), 0o775);
+        assert_eq!(checkout_mode(false, 0o022), 0o644);
+        assert_eq!(checkout_mode(true, 0o022), 0o755);
+        assert_eq!(checkout_mode(false, 0o077), 0o600);
+        assert_eq!(checkout_mode(true, 0o077), 0o700);
     }
 
     #[test]
