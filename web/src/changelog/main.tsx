@@ -22,6 +22,20 @@ type Entry = {
 const ENTRIES: Entry[] = [
   {
     date: "2026-11-15",
+    title: "Every MCP tool answers in JSON",
+    tag: "Feature",
+    lede: "After the first complete agent session over MCP, every safety check held. These changes make every result machine-readable.",
+    items: [
+      { title: "Exit codes from graft_run", body: "Each run returns exit_code, signal, stdout, stderr, duration_ms and timed_out, with stdout and stderr kept apart.", pr: 35 },
+      { title: "Specific refusal codes", body: "work_would_be_lost, checkout_would_fall_behind and a code for each integrate request, with hints that name MCP parameters.", pr: 35 },
+      { title: "Dry runs that predict", body: "A dry run now applies the checked-out-branch rule, so a passing dry run means the real one will land.", pr: 35 },
+      { title: "Results that name the Root", body: "graft_list, graft_status and the server instructions say which Root and version they serve.", pr: 35 },
+      { title: "Plans that drop nothing", body: "graft_plan expands directories into their files and lists what it could not place yet, such as new files.", pr: 35 },
+    ],
+    art: "leaf1",
+  },
+  {
+    date: "2026-11-15",
     title: "Clearer answers for agents over MCP",
     tag: "Feature",
     lede: "From the first agent session driving Graft over MCP: failures an agent can act on, and every tool answering in JSON.",
