@@ -11,7 +11,7 @@ export function Hero() {
         <Flora kind="leaf2" className="hf-leaf-c" style={{ "--r": "200deg", "--d": "-4s" }} />
         <Flora kind="branch" className="hf-branch" style={{ "--r": "-62deg", "--d": "-1s" }} />
       </div>
-      <span className="pill"><i />0.1.0 — now on Linux &amp; macOS</span>
+      <span className="pill"><i />0.1.1 — now on Linux &amp; macOS</span>
       <h1>
         One root. Every agent its own <em>graft.</em>
       </h1>
