@@ -212,10 +212,16 @@ function Changelog() {
         <main className="cl-entries">
           {ENTRIES.map((e, i) => {
             const firstOfMonth = ENTRIES.findIndex((x) => monthKey(x.date) === monthKey(e.date)) === i;
+            // Entries from the same day share one date and no divider.
+            const sameDay = i > 0 && ENTRIES[i - 1].date === e.date;
+            const continues = ENTRIES[i + 1]?.date === e.date;
+            const cls = ["cl-entry", sameDay && "same-day", continues && "continues"]
+              .filter(Boolean)
+              .join(" ");
             return (
               <article
                 key={e.title}
-                className="cl-entry"
+                className={cls}
                 id={firstOfMonth ? monthKey(e.date) : undefined}
                 data-month={firstOfMonth ? monthKey(e.date) : undefined}
               >
@@ -226,7 +232,9 @@ function Changelog() {
                     style={{ "--r": i % 2 ? "24deg" : "-24deg", "--d": `-${i}s` }}
                   />
                 )}
-                <time dateTime={e.date}>{fmt(e.date, { month: "long", day: "numeric", year: "numeric" })}</time>
+                {!sameDay && (
+                  <time dateTime={e.date}>{fmt(e.date, { month: "long", day: "numeric", year: "numeric" })}</time>
+                )}
                 <h2>{e.title}</h2>
                 <span className={`cl-tag tag-${e.tag.toLowerCase()}`}>{e.tag}</span>
                 <p className="cl-lede">{e.lede}</p>
