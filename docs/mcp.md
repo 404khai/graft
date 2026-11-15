@@ -164,12 +164,14 @@ Merge grafts onto a branch of Root through the integrate queue: structural merge
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `confirm` | boolean | no | Required (true) to land anything. |
+| `create_branch` | boolean | no | Create onto at Root's HEAD if it does not exist (else a missing branch is an error). |
 | `dry_run` | boolean | no | Run every step and check except landing, including the checked-out-branch rule, so a passing dry run predicts the real one. |
 | `message` | string | no | Commit message. |
 | `names` | array of string | yes | Grafts, in order. |
 | `onto` | string | no | Branch to land on (default: [integrate] branch in graft.toml, else the branch Root has checked out, which also needs update_checkout). |
 | `prune` | boolean | no | Prune each graft once it has landed. |
 | `update_checkout` | boolean | no | Allow landing on the branch Root has checked out: Root's working tree is fast-forwarded, which needs no changes to tracked files (untracked files are left alone). |
+| `test` | string | no | Shell command to use as this call's test gate instead of graft.toml's [integrate] test, e.g. "cargo test". Runs confined to the scratch checkout; needs no graft trust. |
 
 ### `graft_plan`
 

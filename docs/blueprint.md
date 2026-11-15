@@ -206,6 +206,10 @@ branch = "main"               # the target, if not Root's current branch
 `graft trust` approves the gate and the resolver; an unapproved one stops
 the integration instead of being skipped. The table is read at the
 target's head.
+For one call, `graft integrate --test COMMAND` replaces `test` without a
+commit or `graft trust` (it is the operator's command, not the
+repository's), and `--create-branch` creates a missing target at Root's
+HEAD ([ADR 0027](decisions/0027-per-call-integrate-options.md)).
 
 Each file the graft changed is merged in turn: the side that changed it
 wins, then `git merge-file`, then Mergiraf (`$GRAFT_MERGIRAF` or

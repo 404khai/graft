@@ -234,6 +234,8 @@ Follow-up from the first agent session over MCP (`reports/graft-mcp-report.md`, 
 
 Follow-up from the Astrid field report (`reports/graft_report_astrid.md`, two features landed over MCP on a Rust + Swift repo): `graft_init` registers Root over MCP, and `graft mcp` now starts in any git repository (an unregistered one fails with code `not_registered` and hint `call graft_init`); `graft_path` returns a graft's path as JSON.
 
+Follow-up from the Astrid field report (`reports/graft_report_astrid.md`, ADR 0027): `graft integrate --create-branch` creates a missing target at Root's HEAD, and `--test COMMAND` gates one call without `graft.toml` or `graft trust` (`create_branch` and `test` on `graft_integrate`).
+
 - [x] An MCP client test harness can run the full cycle: plan → new → run → radar → integrate → prune.
   - `an_agent_runs_the_whole_cycle_over_mcp` drives `graft mcp` with raw JSON-RPC over stdio: plan, two grafts, `graft_run` edits (and a refused write outside the graft), Radar as a tool, a resource and a subscription (`notifications/resources/updated` arrives), a dry-run and a real integrate, and prunes.
 - [x] Tool schemas are documented and covered by snapshot tests.
