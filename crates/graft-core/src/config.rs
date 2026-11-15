@@ -12,6 +12,11 @@
 //! # Backend for new grafts: "reflink", "fuse" (Linux) or "nfs" (macOS). `$GRAFT_FS` and
 //! # `graft new --backend` override it.
 //! backend = "reflink"
+//!
+//! [git]
+//! # Register new grafts as git worktrees of Root, so `git worktree list`,
+//! # editors and git clients list them (ADR 0027). Off by default.
+//! worktrees = true
 //! ```
 
 use std::io::ErrorKind;
@@ -34,6 +39,17 @@ pub struct Config {
     pub log: LogConfig,
     /// Filesystem backend settings.
     pub fs: FsConfig,
+    /// How grafts appear to git.
+    pub git: GitConfig,
+}
+
+/// The `[git]` table.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GitConfig {
+    /// Register new grafts as linked worktrees of Root (ADR 0027). Grafts
+    /// that exist already keep their layout.
+    pub worktrees: bool,
 }
 
 /// The `[fs]` table.
@@ -110,6 +126,15 @@ mod tests {
         let config = Config::parse("[fs]\nbackend = \"fuse\"\n").unwrap();
         assert_eq!(config.fs.backend, Some(BackendKind::Fuse));
         assert!(Config::parse("[fs]\nbackend = \"zfs\"\n").is_err());
+    }
+
+    #[test]
+    fn reads_git_worktrees() {
+        assert!(!Config::default().git.worktrees);
+        let config = Config::parse("[git]\nworktrees = true\n").unwrap();
+        assert!(config.git.worktrees);
+        assert!(Config::parse("[git]\nworktree = true\n").is_err());
+        assert!(Config::parse("[git]\nworktrees = \"yes\"\n").is_err());
     }
 
     #[test]
