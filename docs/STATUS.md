@@ -238,6 +238,8 @@ Follow-up from the Astrid field report (`reports/graft_report_astrid.md`, ADR 00
 
 Follow-up from the Astrid field report (`reports/graft_report_astrid.md`, ADR 0028): `graft prune` moves the working tree aside and deletes it in the background (`--wait` for the old behaviour; `graft gc` finishes an interrupted delete), and `graft_list` measures disk use only with `disk: true` (`graft ls --no-disk`); the disk walk itself now runs on up to 8 threads. With a 1.9 GB `target/` on APFS, prune went from 0.45 s to 0.01 s.
 
+Follow-up from the Astrid field report (`reports/graft_report_astrid.md`): `graft new --clone-ignored target,web/node_modules` (`clone_ignored` on `graft_new`) reflinks git-ignored directories from Root's working tree into a new reflink graft, with no build and no `graft.toml`. 17 GB / 173k files on APFS: 14.5 s, against 36.8 s for `cp -c -R`.
+
 - [x] An MCP client test harness can run the full cycle: plan → new → run → radar → integrate → prune.
   - `an_agent_runs_the_whole_cycle_over_mcp` drives `graft mcp` with raw JSON-RPC over stdio: plan, two grafts, `graft_run` edits (and a refused write outside the graft), Radar as a tool, a resource and a subscription (`notifications/resources/updated` arrives), a dry-run and a real integrate, and prunes.
 - [x] Tool schemas are documented and covered by snapshot tests.

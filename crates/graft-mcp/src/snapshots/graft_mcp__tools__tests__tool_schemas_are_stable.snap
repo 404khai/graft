@@ -41,6 +41,13 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
           "description": "Blueprint of graft.toml to provision: ports, services, env files.",
           "type": "string"
         },
+        "clone_ignored": {
+          "description": "Git-ignored directories to reflink from Root's working tree as they are, with no build, e.g. [\"target\", \"web/node_modules\"]. Reflink grafts only.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "from": {
           "description": "Revision to start from (default: Root's HEAD).",
           "type": "string"
