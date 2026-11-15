@@ -112,8 +112,26 @@ pub(crate) fn bud(args: &BudArgs, env: &Environment) -> anyhow::Result<Output> {
         let mut client = timing::time("reach graftd", || daemon(&ctx.home, &mut out))?;
         timing::time("sync source", || sync(&ctx, &mut client, &source))?;
         let record = timing::time("copy delta", || ctx.located.store.bud(source.id, &dst))?;
+        let mut registered = false;
         let created = (|| -> anyhow::Result<_> {
             ctx.located.repo.pin(record.id, &record.base_commit, &dst)?;
+            if crate::grafts::register_worktrees(env) {
+                // The bud gets its own registration and branch at the base,
+                // as a budded graft gets a fresh `.git` (ADR 0013).
+                let layers =
+                    graft_fs::layer_mounts(&ctx.located.store, &ctx.root_dir(), record.id)?;
+                let paths: Vec<&std::path::Path> =
+                    layers.iter().map(|l| l.path.as_path()).collect();
+                registered = crate::grafts::register_new(
+                    env,
+                    &ctx.located.repo,
+                    &dst,
+                    &ctx.backend.path(&dst),
+                    &record.base_commit,
+                    graft_root::worktree::Layout::Virtual,
+                    &paths,
+                )?;
+            }
             Ok(timing::time("mount", || {
                 client.mount(&ctx.located.record.id, &dst)
             })?)
@@ -123,6 +141,12 @@ pub(crate) fn bud(args: &BudArgs, env: &Environment) -> anyhow::Result<Output> {
             Err(e) => {
                 let _ = client.unmount(&ctx.located.record.id, &dst);
                 let _ = std::fs::remove_dir(ctx.backend.path(&dst));
+                crate::grafts::undo_register(
+                    &ctx.located.repo,
+                    &dst,
+                    &ctx.backend.path(&dst),
+                    registered,
+                );
                 let _ = ctx.located.repo.unpin(record.id);
                 let _ = ctx.located.store.delete_graft(record.id);
                 return Err(e.context(format!("budding graft {dst}")));

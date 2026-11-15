@@ -20,6 +20,7 @@ mod repo_policy;
 mod root;
 mod run;
 mod virtual_grafts;
+mod worktrees;
 
 use std::path::Path;
 

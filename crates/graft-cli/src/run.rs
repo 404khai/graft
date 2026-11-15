@@ -142,6 +142,12 @@ pub(crate) fn run_in(
     create_private_dir(&tmp)?;
     let mut writable = vec![graft_dir.clone(), tmp.clone()];
     writable.extend(extra);
+    // A graft registered as a git worktree keeps its git state in Root's
+    // `.git`: commits need its registration, Root's object store and its
+    // own ref namespace, and nothing else there (ADR 0027).
+    if let Some(admin) = ctx.located.repo.registration(name, &graft_dir) {
+        writable.extend(ctx.located.repo.registered_write_paths(&admin)?);
+    }
     let policy = Policy::new(&writable)?;
 
     let session = GraftId::random()?.to_string();

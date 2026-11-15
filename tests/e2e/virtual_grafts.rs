@@ -214,6 +214,112 @@ mod fuse {
         String::from_utf8(out.stdout).unwrap().trim().into()
     }
 
+    /// Runs git in `dir`, isolated from the user's config.
+    fn git_out(dir: &Path, args: &[&str]) -> std::process::Output {
+        Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "Graft Test")
+            .env("GIT_AUTHOR_EMAIL", "test@graft.invalid")
+            .env("GIT_COMMITTER_NAME", "Graft Test")
+            .env("GIT_COMMITTER_EMAIL", "test@graft.invalid")
+            .output()
+            .unwrap()
+    }
+
+    fn git_ok(dir: &Path, args: &[&str]) -> String {
+        let o = git_out(dir, args);
+        assert!(
+            o.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8(o.stdout).unwrap()
+    }
+
+    /// ADR 0027: with `[git] worktrees = true`, a virtual graft is a locked
+    /// git worktree of Root whose `.git` is a file served by the mount.
+    #[test]
+    fn registered_virtual_graft_is_a_locked_git_worktree() {
+        require_fuse();
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join("config.toml"), "[git]\nworktrees = true\n").unwrap();
+        let _daemon = Daemon(home.path());
+        let repo = crate::git_repo();
+        init(home.path(), repo.path());
+        let path = new_fuse(home.path(), repo.path(), "v");
+
+        let list = git_ok(repo.path(), &["worktree", "list", "--porcelain"]);
+        assert!(list.contains("branch refs/heads/graft-live/v\n"), "{list}");
+        assert!(list.contains("locked graft: virtual graft"), "{list}");
+        let admin = repo
+            .path()
+            .join(".git/worktrees/graft-v")
+            .canonicalize()
+            .unwrap();
+        assert!(
+            !admin.join("index").exists(),
+            "the index waits for first use"
+        );
+        let link = std::fs::read_to_string(path.join(".git")).unwrap();
+        assert_eq!(link, format!("gitdir: {}\n", admin.display()));
+        assert!(path.join(".git").is_file());
+        assert!(
+            std::fs::write(path.join(".git"), "x").is_err(),
+            ".git is read-only through the mount"
+        );
+        assert_eq!(git_ok(&path, &["status", "--porcelain"]), "");
+        assert!(admin.join("index").is_file());
+
+        // A commit inside lands on the graft's branch in Root.
+        std::fs::write(path.join("README.md"), "changed\n").unwrap();
+        git_ok(&path, &["commit", "-q", "-am", "feat: change"]);
+        assert_eq!(
+            git_ok(repo.path(), &["log", "-1", "--format=%s", "graft-live/v"]).trim(),
+            "feat: change"
+        );
+        assert_eq!(git_ok(&path, &["status", "--porcelain"]), "");
+
+        // git will not remove a mount; graft prune does, after asking.
+        let removed = git_out(repo.path(), &["worktree", "remove", path.to_str().unwrap()]);
+        assert!(!removed.status.success());
+        assert_eq!(
+            std::fs::read_to_string(path.join("README.md")).unwrap(),
+            "changed\n"
+        );
+        // Restarting graftd remounts it with the same git state.
+        graft_d(home.path())
+            .args(["daemon", "stop"])
+            .assert()
+            .success();
+        graft_d(home.path())
+            .current_dir(repo.path())
+            .arg("ls")
+            .assert()
+            .success();
+        assert_eq!(git_ok(&path, &["status", "--porcelain"]), "");
+        graft_d(home.path())
+            .current_dir(repo.path())
+            .args(["prune", "v"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("is on no other branch in Root"));
+        graft_d(home.path())
+            .current_dir(repo.path())
+            .args(["prune", "v", "--force"])
+            .assert()
+            .success();
+        let list = git_ok(repo.path(), &["worktree", "list", "--porcelain"]);
+        assert_eq!(list.matches("worktree ").count(), 1, "{list}");
+        assert_eq!(
+            git_ok(repo.path(), &["for-each-ref", "--format=%(refname)"]).trim(),
+            "refs/heads/main"
+        );
+        assert!(!repo.path().join(".git/worktrees").exists());
+    }
+
     #[test]
     fn full_lifecycle_leaves_nothing_behind() {
         require_fuse();

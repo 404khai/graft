@@ -71,7 +71,7 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_list",
             "List grafts",
-            "List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes (blocks not shared with Root or the layer cache, so build outputs count; null when unknown, with the reason in note).",
+            "List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes (blocks not shared with Root or the layer cache, so build outputs count; null when unknown, with the reason in note) and git_worktree (whether it is registered as a git worktree of Root).",
             json!({"type": "object", "properties": {}, "additionalProperties": false}),
             read_only(),
         ),

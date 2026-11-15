@@ -47,7 +47,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": true,
       "title": "List grafts"
     },
-    "description": "List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes (blocks not shared with Root or the layer cache, so build outputs count; null when unknown, with the reason in note).",
+    "description": "List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes (blocks not shared with Root or the layer cache, so build outputs count; null when unknown, with the reason in note) and git_worktree (whether it is registered as a git worktree of Root).",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},

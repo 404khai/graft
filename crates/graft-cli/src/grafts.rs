@@ -13,6 +13,7 @@ use graft_daemon::Client;
 use graft_fs::{FsBackend, GraftSpec, ReflinkBackend, human_bytes};
 use graft_root::graft::{GraftRepo, unified_diff};
 use graft_root::layer::LayerCache;
+use graft_root::worktree::{BranchOutcome, BranchPolicy, Layout};
 use graft_store::registry::{Located, locate};
 use graft_store::{GraftRecord, Store};
 
@@ -202,6 +203,83 @@ fn choose_backend(args: &NewArgs, env: &Environment) -> anyhow::Result<BackendKi
         .unwrap_or_default())
 }
 
+/// Whether new grafts are registered as git worktrees of Root (`[git]
+/// worktrees` in `config.toml`, ADR 0027).
+pub(crate) fn register_worktrees(env: &Environment) -> bool {
+    env.config
+        .as_ref()
+        .and_then(|c| c.as_ref().ok())
+        .is_some_and(|c| c.git.worktrees)
+}
+
+/// Registers the new graft `name` at `workdir` as a git worktree of Root
+/// when `[git] worktrees` is on (ADR 0027). Returns whether it did, which
+/// is what a failed create must undo with [`undo_register`].
+pub(crate) fn register_new(
+    env: &Environment,
+    repo: &graft_root::Repo,
+    name: &GraftName,
+    workdir: &Path,
+    base: &graft_core::CommitId,
+    layout: Layout,
+    layers: &[&Path],
+) -> anyhow::Result<bool> {
+    if !register_worktrees(env) {
+        return Ok(false);
+    }
+    if let Some(parent) = workdir.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    timing::time("register worktree", || {
+        repo.register(name, workdir, base, layout, layers)
+    })?;
+    Ok(true)
+}
+
+/// Undoes [`register_new`] for a create that failed afterwards. When
+/// registering was refused (`registered` is false), nothing is touched:
+/// the worktree or branch that stood in the way is not this graft's.
+pub(crate) fn undo_register(
+    repo: &graft_root::Repo,
+    name: &GraftName,
+    workdir: &Path,
+    registered: bool,
+) {
+    if registered {
+        let _ = repo.unregister(name, workdir, BranchPolicy::Delete);
+    }
+}
+
+/// Removes graft `name`'s git worktree registration, if it has one, and
+/// its `graft-live/<name>` branch. `checked` means the branch's work was
+/// checked by the lost-work check, integrated, or discarded with
+/// `--force`; otherwise a branch with commits on no other ref is kept.
+pub(crate) fn unregister(
+    ctx: &Ctx,
+    name: &GraftName,
+    checked: bool,
+    out: &mut Output,
+) -> anyhow::Result<()> {
+    let policy = if checked {
+        BranchPolicy::Delete
+    } else {
+        BranchPolicy::KeepIfUnique
+    };
+    let outcome = ctx
+        .located
+        .repo
+        .unregister(name, &ctx.backend.path(name), policy)
+        .with_context(|| format!("removing graft {name}'s git worktree registration"))?;
+    if let BranchOutcome::Kept { reason } = outcome {
+        out.warnings.push(format!(
+            "kept branch {} in Root: {reason}",
+            graft_root::worktree::live_branch(name)
+        ));
+    }
+    Ok(())
+}
+
 /// Connects to graftd, starting it if needed, and warns once if its version
 /// differs from ours.
 pub(crate) fn daemon(home: &GraftHome, out: &mut Output) -> anyhow::Result<Client> {
@@ -306,10 +384,20 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
         name,
         base: &base,
     };
+    let mut registered = false;
     let created = timing::time("check out tree", || backend.create(&located.repo, &spec))
         .map_err(anyhow::Error::from)
         .and_then(|report| {
             timing::time("pin base", || located.repo.pin(record.id, &base, name))?;
+            registered = register_new(
+                env,
+                &located.repo,
+                name,
+                &report.path,
+                &base,
+                Layout::Reflink,
+                &[],
+            )?;
             let applied = layers::apply(
                 &planned,
                 &cache,
@@ -326,6 +414,7 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
         Ok(created) => created,
         Err(e) => {
             let _ = backend.prune(name, record.id);
+            undo_register(&located.repo, name, &backend.path(name), registered);
             let _ = located.repo.unpin(record.id);
             let _ = located.store.delete_graft(record.id);
             return Err(e.context(format!("creating graft {name}")));
@@ -407,6 +496,7 @@ fn new_virtual(
     // Layers that are not cached yet are built in a throwaway reflink
     // checkout of the same base (ADR 0006).
     let builder = ReflinkBackend::new(backend.mounts().join(".layer-build"));
+    let mut registered = false;
     let created = (|| -> anyhow::Result<_> {
         located.repo.pin(record.id, &base, name)?;
         let applied = if layers::needs_build(&planned, &cache) {
@@ -442,6 +532,16 @@ fn new_virtual(
                 args.build_output(),
             )?
         };
+        let layer_paths: Vec<&Path> = applied.iter().map(|a| a.path.as_path()).collect();
+        registered = register_new(
+            env,
+            &located.repo,
+            name,
+            &backend.path(name),
+            &base,
+            Layout::Virtual,
+            &layer_paths,
+        )?;
         let path = timing::time("mount", || client.mount(&located.record.id, name))?;
         Ok((path, applied))
     })();
@@ -451,6 +551,7 @@ fn new_virtual(
             let _ = client.unmount(&located.record.id, name);
             let _ = std::fs::remove_dir(backend.path(name));
             let _ = builder.prune(name, record.id);
+            undo_register(&located.repo, name, &backend.path(name), registered);
             let _ = located.repo.unpin(record.id);
             let _ = located.store.delete_graft(record.id);
             // A graftd this command started for nothing is stopped again.
@@ -617,6 +718,13 @@ pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
     for g in &grafts {
         let path = backend.path(&g.name);
         let (changed, disk, note) = measure(&ctx, g, &path, mounted.as_deref(), &mut out.warnings);
+        // A registered graft's index lives in Root's `.git` (ADR 0027).
+        let registration = located.repo.registration(&g.name, &path);
+        let disk = disk.map(|d| {
+            d + registration
+                .as_deref()
+                .map_or(0, graft_root::Repo::registration_bytes)
+        });
         let shown = |v: Option<String>| v.or_else(|| note.clone()).unwrap_or_default();
         rows.push([
             g.name.to_string(),
@@ -634,6 +742,7 @@ pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
             "changed": changed,
             "disk_bytes": disk,
             "note": note,
+            "git_worktree": registration.is_some(),
         }));
     }
     if args.json {
@@ -848,6 +957,25 @@ fn would_lose(name: &GraftName, why: &str) -> anyhow::Error {
     )
 }
 
+/// One line on a commit pruning would lose.
+pub(crate) fn describe_lost(lost: &graft_root::graft::Unintegrated) -> String {
+    let reference = lost
+        .reference
+        .strip_prefix("refs/heads/")
+        .unwrap_or(&lost.reference);
+    if lost.in_root {
+        format!(
+            "commit {} on {reference} is on no other branch in Root",
+            lost.commit.short(7)
+        )
+    } else {
+        format!(
+            "commit {} on {reference} is not in Root",
+            lost.commit.short(7)
+        )
+    }
+}
+
 /// Why pruning `path` would lose work, if it would.
 fn work_at_risk(ctx: &Ctx, path: &Path) -> anyhow::Result<Option<String>> {
     let graft = match GraftRepo::open(path) {
@@ -874,12 +1002,7 @@ fn work_at_risk(ctx: &Ctx, path: &Path) -> anyhow::Result<Option<String>> {
         why.push('\n');
     }
     for lost in graft.unintegrated(&ctx.located.repo)? {
-        let _ = writeln!(
-            why,
-            "  commit {} on {} is not in Root",
-            lost.commit.short(7),
-            lost.reference
-        );
+        let _ = writeln!(why, "  {}", describe_lost(&lost));
     }
     Ok((!why.is_empty()).then_some(why))
 }
@@ -901,6 +1024,11 @@ pub(crate) fn prune(args: &PruneArgs, env: &Environment) -> anyhow::Result<Outpu
     if record.backend.is_virtual() {
         return prune_virtual(&mut ctx, &record, args.force, args.json);
     }
+    // The lost-work check below covers the graft's branch only when its
+    // working tree is still there to check.
+    let checked = args.force
+        || matches!(record.state, GraftState::Pruned | GraftState::Integrated)
+        || path.is_dir();
     // An integrated graft's changes are in Root already.
     if !matches!(record.state, GraftState::Pruned | GraftState::Integrated)
         && !args.force
@@ -915,6 +1043,7 @@ pub(crate) fn prune(args: &PruneArgs, env: &Environment) -> anyhow::Result<Outpu
     let mut out = Output::default();
     crate::blueprints::release(&mut ctx, &record, &mut out)?;
     ctx.backend.prune(&name, record.id)?;
+    unregister(&ctx, &name, checked, &mut out)?;
     remove_tmp(&ctx, record.id)?;
     ctx.located.repo.unpin(record.id)?;
     ctx.located.store.delete_graft(record.id)?;
@@ -979,6 +1108,9 @@ fn prune_virtual(
         ));
     }
     ReflinkBackend::new(ctx.backend.mounts().join(".layer-build")).prune(name, record.id)?;
+    // A registered virtual graft is locked, so its registration is always
+    // there for the lost-work check above.
+    unregister(ctx, name, true, &mut out)?;
     remove_tmp(ctx, record.id)?;
     ctx.located.repo.unpin(record.id)?;
     ctx.located.store.delete_graft(record.id)?;
