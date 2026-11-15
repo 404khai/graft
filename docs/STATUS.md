@@ -236,6 +236,8 @@ Follow-up from the Astrid field report (`reports/graft_report_astrid.md`, two fe
 
 Follow-up from the Astrid field report (`reports/graft_report_astrid.md`, ADR 0027): `graft integrate --create-branch` creates a missing target at Root's HEAD, and `--test COMMAND` gates one call without `graft.toml` or `graft trust` (`create_branch` and `test` on `graft_integrate`).
 
+Follow-up from the Astrid field report (`reports/graft_report_astrid.md`, ADR 0028): `graft prune` moves the working tree aside and deletes it in the background (`--wait` for the old behaviour; `graft gc` finishes an interrupted delete), and `graft_list` measures disk use only with `disk: true` (`graft ls --no-disk`); the disk walk itself now runs on up to 8 threads. With a 1.9 GB `target/` on APFS, prune went from 0.45 s to 0.01 s.
+
 - [x] An MCP client test harness can run the full cycle: plan → new → run → radar → integrate → prune.
   - `an_agent_runs_the_whole_cycle_over_mcp` drives `graft mcp` with raw JSON-RPC over stdio: plan, two grafts, `graft_run` edits (and a refused write outside the graft), Radar as a tool, a resource and a subscription (`notifications/resources/updated` arrives), a dry-run and a real integrate, and prunes.
 - [x] Tool schemas are documented and covered by snapshot tests.

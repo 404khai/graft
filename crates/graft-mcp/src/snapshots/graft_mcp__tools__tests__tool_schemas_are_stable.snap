@@ -62,10 +62,15 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": true,
       "title": "List grafts"
     },
-    "description": "List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes (blocks not shared with Root or the layer cache, so build outputs count; null when unknown, with the reason in note).",
+    "description": "List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes. disk_bytes (blocks not shared with Root or the layer cache, so build outputs count) is measured only with disk: true, which walks every file and can take seconds for a large build tree; otherwise, or when unknown, it is null with the reason in note.",
     "inputSchema": {
       "additionalProperties": false,
-      "properties": {},
+      "properties": {
+        "disk": {
+          "description": "Measure disk_bytes (slow for large build trees such as target/).",
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "name": "graft_list"
@@ -372,7 +377,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": false,
       "title": "Remove a graft"
     },
-    "description": "Remove a graft. Refuses if work would be lost (code work_would_be_lost); force discards it and needs confirm: true. Returns JSON {name, pruned}.",
+    "description": "Remove a graft. Refuses if work would be lost (code work_would_be_lost); force discards it and needs confirm: true. Its working tree is moved aside at once and deleted in the background, so the name is free again immediately. Returns JSON {name, pruned}.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
