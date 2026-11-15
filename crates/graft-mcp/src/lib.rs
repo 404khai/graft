@@ -293,6 +293,28 @@ fn error_result(stdout: &str, stderr: &str) -> CallToolResponse {
     text_result(err.to_string(), true)
 }
 
+/// A successful call's text: its stdout, plus what it printed on stderr
+/// (warnings, a layer build's notice). A JSON object keeps them as a
+/// `warnings` list, so it stays valid JSON; other output gets them
+/// appended.
+fn with_warnings(stdout: String, stderr: &str) -> String {
+    if stderr.trim().is_empty() {
+        return stdout;
+    }
+    match serde_json::from_str::<Value>(&stdout) {
+        Ok(Value::Object(mut map)) => {
+            let lines: Vec<Value> = stderr
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| Value::String(l.strip_prefix("graft: warning: ").unwrap_or(l).to_owned()))
+                .collect();
+            map.insert("warnings".to_owned(), Value::Array(lines));
+            Value::Object(map).to_string() + "\n"
+        }
+        _ => format!("{stdout}{stderr}"),
+    }
+}
+
 /// The error for a command that could not run to the end: `timed_out`
 /// when the server killed it at its limit, else `failed`.
 fn failure(why: &str) -> CallToolResponse {
@@ -416,12 +438,7 @@ impl ServerHandler for GraftServer {
                     Some(g) => filter_radar(&ran.stdout, g),
                     None => ran.stdout,
                 };
-                let text = if ran.stderr.trim().is_empty() {
-                    stdout
-                } else {
-                    format!("{stdout}{}", ran.stderr)
-                };
-                text_result(text, false)
+                text_result(with_warnings(stdout, &ran.stderr), false)
             }
             Ok(ran) => error_result(&ran.stdout, &ran.stderr),
             Err(why) => failure(&why),
@@ -540,6 +557,22 @@ mod tests {
         assert_eq!(radar_filter("graft://radar/"), None);
         assert_eq!(radar_filter("graft://radar/a/b"), None);
         assert_eq!(radar_filter("file:///etc/passwd"), None);
+    }
+
+    #[test]
+    fn warnings_stay_inside_json_results() {
+        let out = with_warnings(
+            "{\"name\":\"a\"}\n".to_owned(),
+            "graft: warning: copied 3 files instead of reflinking them\n",
+        );
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["name"], "a");
+        assert_eq!(
+            v["warnings"],
+            serde_json::json!(["copied 3 files instead of reflinking them"])
+        );
+        assert_eq!(with_warnings("text\n".to_owned(), "w\n"), "text\nw\n");
+        assert_eq!(with_warnings("{}\n".to_owned(), ""), "{}\n");
     }
 
     #[test]

@@ -37,7 +37,8 @@ object ([ADR 0025](decisions/0025-mcp-errors-for-agents.md)):
 
 Every successful call returns JSON too (except `graft_diff`, a unified diff), described with each tool below;
 `graft_list` and `graft_status` start with the `root` and `version` they
-describe, and the server's instructions name them as well.
+describe, and the server's instructions name them as well. Warnings a command prints (for example a copy fallback on a
+filesystem without reflinks) are a `warnings` list in a JSON result.
 
 Tools that change Root's history or discard work need `confirm: true`:
 `graft_integrate` (unless `dry_run: true`) and `graft_prune` with
