@@ -93,6 +93,27 @@ a first "contract" node, and orders the rest. `graft plan task.md --apply`
 creates the grafts that are ready, each holding claims on its files; a
 graft that touches another's claims is refused, by name.
 
+### See grafts in your editor and git tools
+
+Grafts are private repositories by default, so `git worktree list` and the
+worktree pickers in editors, git clients and agent apps do not show them.
+To make new grafts real git worktrees of Root, opt in once:
+
+```toml
+# $GRAFT_HOME/config.toml
+[git]
+worktrees = true
+```
+
+Grafts created from then on appear in `git worktree list` (and in every
+tool that reads it) on a `graft-live/<name>` branch, so you can open one
+and point an agent at it like any worktree. Their commits land in Root
+straight away. Virtual grafts are listed as locked, so `git worktree
+remove` leaves them to `graft prune`. Because they are ordinary worktrees,
+git's rule applies: two worktrees cannot have the same branch checked out.
+Existing grafts keep their layout; see
+[ADR 0027](docs/decisions/0027-grafts-as-git-worktrees.md).
+
 ### Use it from an agent (MCP)
 
 `graft mcp` serves Graft to any MCP client over stdio: agents create

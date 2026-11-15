@@ -74,7 +74,7 @@ Create a graft: a private copy-on-write workspace checked out from Root. Returns
 
 ### `graft_list`
 
-List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes (blocks not shared with Root or the layer cache, so build outputs count; null when unknown, with the reason in note). (read-only)
+List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes (blocks not shared with Root or the layer cache, so build outputs count; null when unknown, with the reason in note) and git_worktree (whether it is registered as a git worktree of Root). (read-only)
 
 No parameters.
 
