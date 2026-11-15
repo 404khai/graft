@@ -186,6 +186,30 @@ pub(crate) enum BuildOutput {
     Stream,
 }
 
+/// Which program a build command starts and the `PATH` it ran with, for
+/// a failed build: under `graft mcp` the environment is the MCP client's,
+/// not the user's shell (ADR 0025).
+fn build_environment(command: &str) -> String {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let program = command.split_whitespace().next().unwrap_or("");
+    let found = if program.contains('/') || program.is_empty() {
+        None
+    } else {
+        std::env::split_paths(&path)
+            .map(|d| d.join(program))
+            .find(|p| p.is_file())
+    };
+    let program = match found {
+        Some(p) => format!("`{program}` is {}", p.display()),
+        None if program.contains('/') => format!("`{program}`"),
+        None => format!("`{program}` is not on PATH"),
+    };
+    format!(
+        "build environment: {program}; PATH={}",
+        path.to_string_lossy()
+    )
+}
+
 /// The last bytes of a failed build's output that are shown.
 const FAILED_TAIL: usize = 8000;
 
@@ -253,10 +277,11 @@ fn build(
             )
         });
         let retry = crate::agent::suggest("rerun `graft new`", "call graft_new again");
+        let env_line = build_environment(&spec.build);
         return Err(crate::agent::coded(
             "layer_build_failed",
             format!(
-                "layer {}: build `{}` failed ({status}){shown}",
+                "layer {}: build `{}` failed ({status}){shown}\n{env_line}",
                 spec.path.display(),
                 spec.build
             ),

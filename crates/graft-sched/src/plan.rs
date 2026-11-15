@@ -27,10 +27,19 @@ impl std::fmt::Display for Seed {
     }
 }
 
-/// The seeds a task text names: code spans that are files, `file::symbol`
-/// or a symbol defined in exactly one file, and bare words that are files.
+/// The seeds a task text names: code spans that are files, directories
+/// (every file under them), `file::symbol` or a symbol defined in exactly
+/// one file, and bare words that are files or directories.
 #[must_use]
 pub fn seeds(task: &str, graph: &Graph) -> Vec<Seed> {
+    seeds_and_unresolved(task, graph).0
+}
+
+/// [`seeds`], plus the code spans that name nothing in the graph (a file
+/// that does not exist yet, a symbol defined nowhere or in several files),
+/// so a plan can say what it could not place instead of dropping it.
+#[must_use]
+pub fn seeds_and_unresolved(task: &str, graph: &Graph) -> (Vec<Seed>, Vec<String>) {
     let mut by_name: BTreeMap<&str, BTreeSet<(usize, &str)>> = BTreeMap::new();
     for (i, syms) in graph.symbols.iter().enumerate() {
         for s in syms {
@@ -49,10 +58,26 @@ pub fn seeds(task: &str, graph: &Graph) -> Vec<Seed> {
         let w = w.trim_start_matches("./");
         graph.index(Path::new(w)).map(|i| graph.files[i].clone())
     };
+    // Every file under directory `w`, if it is one.
+    let dir = |w: &str| -> Vec<PathBuf> {
+        let w = w.trim_start_matches("./").trim_end_matches('/');
+        if w.is_empty() {
+            return Vec::new();
+        }
+        let prefix = Path::new(w);
+        graph
+            .files
+            .iter()
+            .filter(|f| f.starts_with(prefix) && f.as_path() != prefix)
+            .cloned()
+            .collect()
+    };
     let mut out = BTreeSet::new();
+    let mut unresolved = BTreeSet::new();
     let spans: Vec<&str> = task.split('`').skip(1).step_by(2).collect();
     for span in spans {
         let span = span.trim();
+        let under = dir(span);
         if let Some(f) = file(span) {
             out.insert(Seed {
                 path: f,
@@ -75,18 +100,29 @@ pub fn seeds(task: &str, graph: &Graph) -> Vec<Seed> {
                 path: graph.files[*i].clone(),
                 symbol: Some((*full).to_owned()),
             });
+        } else if !under.is_empty() {
+            out.extend(under.into_iter().map(|path| Seed { path, symbol: None }));
+        } else if !span.is_empty() {
+            unresolved.insert(span.to_owned());
         }
     }
     for word in task.split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '(' | ')' | '`'))
     {
         let word = word.trim_end_matches(['.', ':']);
-        if word.contains('/')
-            && let Some(f) = file(word)
-        {
+        if !word.contains('/') {
+            continue;
+        }
+        if let Some(f) = file(word) {
             out.insert(Seed {
                 path: f,
                 symbol: None,
             });
+        } else {
+            out.extend(
+                dir(word)
+                    .into_iter()
+                    .map(|path| Seed { path, symbol: None }),
+            );
         }
     }
     // A whole-file seed covers its symbol seeds.
@@ -95,9 +131,11 @@ pub fn seeds(task: &str, graph: &Graph) -> Vec<Seed> {
         .filter(|s| s.symbol.is_none())
         .map(|s| s.path.clone())
         .collect();
-    out.into_iter()
+    let seeds = out
+        .into_iter()
         .filter(|s| s.symbol.is_none() || !whole.contains(&s.path))
-        .collect()
+        .collect();
+    (seeds, unresolved.into_iter().collect())
 }
 
 /// Files most of the graph depends on: imported by at least 3 files and by
@@ -333,6 +371,28 @@ mod tests {
         );
         assert_eq!(node_name(&[Path::new("src/lib.rs")]), "lib");
         assert_eq!(node_name(&[Path::new("My Dir/x.py")]), "my-dir");
+    }
+
+    #[test]
+    fn directories_expand_and_unknown_spans_are_reported() {
+        let g = build(&tree(&[
+            ("src/m002/f01.ts", "export const a = 1;\n"),
+            ("src/m002/f02.ts", "export const b = 2;\n"),
+            ("src/m0020/f01.ts", "export const c = 3;\n"),
+            ("src/core.ts", "export function format() {}\n"),
+        ]));
+        let (found, unresolved) = seeds_and_unresolved(
+            "Edit files in `src/m002`, add `test/convert.test.ts` with `convert`, \
+             and change `format`. Also src/m002/ again.",
+            &g,
+        );
+        let paths: Vec<String> = found.iter().map(ToString::to_string).collect();
+        // The directory, not its sibling with a longer name.
+        assert_eq!(
+            paths,
+            ["src/core.ts::format", "src/m002/f01.ts", "src/m002/f02.ts"]
+        );
+        assert_eq!(unresolved, ["convert", "test/convert.test.ts"]);
     }
 
     #[test]

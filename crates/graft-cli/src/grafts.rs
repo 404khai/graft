@@ -41,6 +41,10 @@ pub(crate) struct NewArgs {
     /// a failed build's output is shown).
     #[arg(long, short)]
     verbose: bool,
+    /// Print JSON: `{name, path, base, backend, layers: [{path, status,
+    /// key}]}`.
+    #[arg(long)]
+    json: bool,
 }
 
 impl NewArgs {
@@ -61,6 +65,7 @@ impl NewArgs {
             backend,
             blueprint: None,
             verbose: false,
+            json: false,
         }
     }
 }
@@ -116,13 +121,20 @@ pub(crate) struct PruneArgs {
     /// not have. That work is lost.
     #[arg(long)]
     force: bool,
+    /// Print JSON: `{name, pruned}`.
+    #[arg(long)]
+    json: bool,
 }
 
 impl PruneArgs {
     /// `graft prune <name> --force`, for commands that prune a graft whose
     /// work has landed elsewhere.
     pub(crate) fn forced(name: String) -> Self {
-        Self { name, force: true }
+        Self {
+            name,
+            force: true,
+            json: false,
+        }
     }
 }
 
@@ -222,13 +234,7 @@ pub(crate) fn new(args: &NewArgs, env: &Environment) -> anyhow::Result<Output> {
         })
     {
         // Release what was provisioned and remove the graft.
-        let undo = prune(
-            &PruneArgs {
-                name: name.to_string(),
-                force: true,
-            },
-            env,
-        );
+        let undo = prune(&PruneArgs::forced(name.to_string()), env);
         let note = match undo {
             Ok(_) => format!("graft {name} was removed again"),
             Err(u) => format!(
@@ -360,7 +366,9 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
             }
         ));
     }
-    Ok(out)
+    Ok(out.json_if(args.json, || {
+        created_json(name, &report.path, &base, BackendKind::Reflink, &applied)
+    }))
 }
 
 /// Creates a FUSE graft: a record, a pin and layer references, then graftd
@@ -460,7 +468,33 @@ fn new_virtual(
         base.short(7)
     );
     report_layers(&applied, &mut out);
-    Ok(out)
+    Ok(out.json_if(args.json, || {
+        created_json(name, &path, &base, kind, &applied)
+    }))
+}
+
+/// `graft new --json`.
+fn created_json(
+    name: &GraftName,
+    path: &Path,
+    base: &graft_core::CommitId,
+    backend: BackendKind,
+    applied: &[layers::Applied],
+) -> serde_json::Value {
+    serde_json::json!({
+        "name": name.as_str(),
+        "path": path,
+        "base": base.as_str(),
+        "backend": backend.to_string(),
+        "layers": applied
+            .iter()
+            .map(|l| serde_json::json!({
+                "path": l.path,
+                "status": if l.built { "built" } else { "reused" },
+                "key": l.key.to_string(),
+            }))
+            .collect::<Vec<_>>(),
+    })
 }
 
 /// One line per layer of a new graft, and a warning for each one copied.
@@ -524,6 +558,16 @@ fn measure(
     } else {
         (None, None, Some("missing".to_owned()))
     }
+}
+
+/// `graft ls --json` and `graft status --json`: the Root they describe,
+/// this binary's version, and one object per graft.
+fn listing_json(ctx: &Ctx, grafts: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({
+        "root": ctx.located.record.path,
+        "version": env!("CARGO_PKG_VERSION"),
+        "grafts": serde_json::Value::Array(grafts),
+    })
 }
 
 /// Lists grafts.
@@ -593,7 +637,7 @@ pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
         }));
     }
     if args.json {
-        out.stdout = serde_json::Value::Array(listed).to_string() + "\n";
+        out.json = Some(listing_json(&ctx, listed));
         return Ok(out);
     }
     let widths: Vec<usize> = (0..5)
@@ -735,8 +779,8 @@ pub(crate) fn status(args: &StatusArgs, env: &Environment) -> anyhow::Result<Out
         None => ctx.located.store.grafts()?,
     };
     if grafts.is_empty() {
-        let text = if args.json { "[]\n" } else { "No grafts.\n" };
-        return Ok(Output::stdout(text.to_owned()));
+        return Ok(Output::stdout("No grafts.\n".to_owned())
+            .json_if(args.json, || listing_json(&ctx, Vec::new())));
     }
     // Reaching graftd remounts virtual grafts after a crash.
     if grafts.iter().any(|g| g.backend.is_virtual()) {
@@ -746,12 +790,10 @@ pub(crate) fn status(args: &StatusArgs, env: &Environment) -> anyhow::Result<Out
     for g in grafts {
         views.push(status_one(&ctx, &g, &mut out.warnings)?);
     }
-    out.stdout = if args.json {
-        serde_json::Value::Array(views.iter().map(StatusView::json).collect()).to_string() + "\n"
-    } else {
-        views.iter().map(StatusView::text).collect()
-    };
-    Ok(out)
+    out.stdout = views.iter().map(StatusView::text).collect();
+    Ok(out.json_if(args.json, || {
+        listing_json(&ctx, views.iter().map(StatusView::json).collect())
+    }))
 }
 
 /// Prints a unified diff of a graft against its base.
@@ -786,6 +828,24 @@ pub(crate) fn diff(args: &NameArgs, env: &Environment) -> anyhow::Result<Output>
         .map(unified_diff)
         .collect();
     Ok(Output::stdout(text))
+}
+
+/// The refusal to prune graft `name`, whose work `why` would be lost.
+fn would_lose(name: &GraftName, why: &str) -> anyhow::Error {
+    let discard = crate::agent::suggest(
+        "rerun with --force to discard it",
+        "call graft_prune with force: true and confirm: true to discard it",
+    );
+    crate::agent::coded(
+        "work_would_be_lost",
+        format!(
+            "graft {name} has work that pruning would lose:\n{}",
+            why.trim_end()
+        ),
+        Some(format!(
+            "commit it and integrate it into Root, or {discard}"
+        )),
+    )
 }
 
 /// Why pruning `path` would lose work, if it would.
@@ -839,7 +899,7 @@ pub(crate) fn prune(args: &PruneArgs, env: &Environment) -> anyhow::Result<Outpu
     };
     let path = ctx.backend.path(&name);
     if record.backend.is_virtual() {
-        return prune_virtual(&mut ctx, &record, args.force);
+        return prune_virtual(&mut ctx, &record, args.force, args.json);
     }
     // An integrated graft's changes are in Root already.
     if !matches!(record.state, GraftState::Pruned | GraftState::Integrated)
@@ -847,10 +907,7 @@ pub(crate) fn prune(args: &PruneArgs, env: &Environment) -> anyhow::Result<Outpu
         && path.is_dir()
         && let Some(why) = work_at_risk(&ctx, &path)?
     {
-        bail!(
-            "graft {name} has work that pruning would lose:\n{why}\
-             Commit it and integrate it into Root, or rerun with --force to discard it."
-        );
+        return Err(would_lose(&name, &why));
     }
     if record.state != GraftState::Pruned {
         ctx.located.store.set_state(record.id, GraftState::Pruned)?;
@@ -862,7 +919,10 @@ pub(crate) fn prune(args: &PruneArgs, env: &Environment) -> anyhow::Result<Outpu
     ctx.located.repo.unpin(record.id)?;
     ctx.located.store.delete_graft(record.id)?;
     out.stdout = format!("Pruned graft {name}\n");
-    Ok(out)
+    Ok(out.json_if(
+        args.json,
+        || serde_json::json!({"name": name.as_str(), "pruned": true}),
+    ))
 }
 
 /// Removes the graft's `graft run` temp dir, `$GRAFT_HOME/roots/<root-id>/tmp/<graft-id>/`.
@@ -880,7 +940,12 @@ fn remove_tmp(ctx: &Ctx, id: graft_core::GraftId) -> anyhow::Result<()> {
 /// Prunes a FUSE graft: graftd unmounts it (lazily if busy), then the empty
 /// mount point, pin and record go. A virtual graft is read-only, so no work
 /// can be lost.
-fn prune_virtual(ctx: &mut Ctx, record: &GraftRecord, force: bool) -> anyhow::Result<Output> {
+fn prune_virtual(
+    ctx: &mut Ctx,
+    record: &GraftRecord,
+    force: bool,
+    json: bool,
+) -> anyhow::Result<Output> {
     let name = &record.name;
     let mut out = Output::default();
     let mut client = daemon(&ctx.home, &mut out)?;
@@ -893,10 +958,7 @@ fn prune_virtual(ctx: &mut Ctx, record: &GraftRecord, force: bool) -> anyhow::Re
             &mount,
             record,
         )? {
-            bail!(
-                "graft {name} has work that pruning would lose:\n{why}\
-                 Commit it and integrate it into Root, or rerun with --force to discard it."
-            );
+            return Err(would_lose(name, &why));
         }
     }
     if record.state != GraftState::Pruned {
@@ -921,7 +983,10 @@ fn prune_virtual(ctx: &mut Ctx, record: &GraftRecord, force: bool) -> anyhow::Re
     ctx.located.repo.unpin(record.id)?;
     ctx.located.store.delete_graft(record.id)?;
     out.stdout = format!("Pruned graft {name}\n");
-    Ok(out)
+    Ok(out.json_if(
+        json,
+        || serde_json::json!({"name": name.as_str(), "pruned": true}),
+    ))
 }
 
 /// Arguments for `graft log`.
@@ -978,5 +1043,6 @@ pub(crate) fn log(args: &LogArgs, env: &Environment) -> anyhow::Result<Output> {
     Ok(Output {
         stdout: out,
         warnings,
+        json: None,
     })
 }

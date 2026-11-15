@@ -75,7 +75,9 @@ pub(crate) fn run(args: &RunArgs, env: &Environment) -> anyhow::Result<(Output, 
         );
     }
     let mut out = Output::default();
+    let started = std::time::Instant::now();
     let status = run_in(&ctx, &record, &args.write, &args.command, &mut out)?;
+    crate::agent::report_run(status, started.elapsed());
     Ok((out, exit_code(status)))
 }
 

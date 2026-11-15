@@ -27,6 +27,7 @@ use crate::{Environment, Output};
 
 /// Arguments for `graft integrate`.
 #[derive(Debug, clap::Args)]
+#[allow(clippy::struct_excessive_bools)] // independent command-line flags
 pub(crate) struct IntegrateArgs {
     /// The grafts to integrate, in order.
     #[arg(required = true)]
@@ -53,6 +54,10 @@ pub(crate) struct IntegrateArgs {
     /// A task description for the resolver hook.
     #[arg(long, value_name = "FILE")]
     task: Option<PathBuf>,
+    /// Print JSON: `{"results": [{graft, target, state, code, commit,
+    /// output}], "gated": bool}`.
+    #[arg(long)]
+    json: bool,
 }
 
 /// Arguments for `graft queue`.
@@ -381,6 +386,9 @@ struct Outcome {
     commit: Option<String>,
     /// It passed with no test gate configured.
     ungated: bool,
+    /// Why it stopped, for agents (ADR 0025); `None` derives one from
+    /// `state`.
+    code: Option<&'static str>,
 }
 
 impl Outcome {
@@ -390,7 +398,23 @@ impl Outcome {
             output: output.into(),
             commit: None,
             ungated: false,
+            code: None,
         }
+    }
+
+    fn with_code(mut self, code: &'static str) -> Self {
+        self.code = Some(code);
+        self
+    }
+
+    /// The code an agent sees for this outcome.
+    fn code(&self) -> &'static str {
+        self.code.unwrap_or(match self.state {
+            IntegrationState::Conflict => "conflict",
+            IntegrationState::Landed => "landed",
+            IntegrationState::Checked => "checked",
+            _ => "failed",
+        })
     }
 
     fn passed(
@@ -404,6 +428,7 @@ impl Outcome {
             output,
             commit,
             ungated: spec.test.is_none(),
+            code: None,
         }
     }
 }
@@ -460,17 +485,23 @@ fn gate(dir: &Path, spec: &IntegrateSpec, log: &mut String) -> anyhow::Result<Op
             let _ = writeln!(log, "test gate `{test}` passed");
             None
         }
-        Some(s) => Some(Outcome::stop(
-            IntegrationState::Failed,
-            format!("{log}test gate `{test}` failed ({s}):\n{tail}"),
-        )),
-        None => Some(Outcome::stop(
-            IntegrationState::Failed,
-            format!(
-                "{log}test gate `{test}` timed out after {}s:\n{tail}",
-                spec.timeout_secs
-            ),
-        )),
+        Some(s) => Some(
+            Outcome::stop(
+                IntegrationState::Failed,
+                format!("{log}test gate `{test}` failed ({s}):\n{tail}"),
+            )
+            .with_code("gate_failed"),
+        ),
+        None => Some(
+            Outcome::stop(
+                IntegrationState::Failed,
+                format!(
+                    "{log}test gate `{test}` timed out after {}s:\n{tail}",
+                    spec.timeout_secs
+                ),
+            )
+            .with_code("gate_failed"),
+        ),
     })
 }
 
@@ -546,7 +577,8 @@ fn preflight(
             return Ok(Err(Outcome::stop(
                 IntegrationState::Failed,
                 format!("{what} is not approved; review it and run `graft trust`"),
-            )));
+            )
+            .with_code("not_approved")));
         }
     }
     let diffs = changes(ctx, record, out)?;
@@ -554,10 +586,13 @@ fn preflight(
         return Ok(Err(Outcome::stop(
             IntegrationState::Failed,
             "nothing to integrate: no changes since base",
-        )));
+        )
+        .with_code("nothing_to_integrate")));
     }
     if let Some(refused) = claims_refuse(ctx, record, &diffs)? {
-        return Ok(Err(Outcome::stop(IntegrationState::Failed, refused)));
+        return Ok(Err(
+            Outcome::stop(IntegrationState::Failed, refused).with_code("claimed")
+        ));
     }
     Ok(Ok(diffs))
 }
@@ -684,6 +719,9 @@ fn attempt(
         Ok(d) => d,
         Err(stop) => return Ok(stop),
     };
+    if let Some(stop) = target_refusal(ctx, entry, record, &spec, args)? {
+        return Ok(stop);
+    }
     let mut scratch = Scratch::for_head(ctx, kept.take(), &head)?;
     // Whether a resolver or test gate ran in the checkout: then it is
     // never reused.
@@ -849,6 +887,65 @@ fn publish(
     Ok(())
 }
 
+/// Why landing on `target`, which Root has checked out, is refused: Root's
+/// working tree would fall behind (no `--update-checkout`), or has
+/// changes so it cannot be fast-forwarded. Checked before any work and
+/// again when landing, so a dry run predicts it.
+fn checkout_refusal(
+    root: &Path,
+    target: &str,
+    args: &IntegrateArgs,
+) -> anyhow::Result<Option<Outcome>> {
+    if !args.update_checkout {
+        let how = crate::agent::suggest(
+            "land elsewhere with --onto, or pass --update-checkout to fast-forward Root",
+            "land elsewhere with onto, or pass update_checkout: true to fast-forward Root",
+        );
+        return Ok(Some(
+            Outcome::stop(
+                IntegrationState::Failed,
+                format!(
+                    "{target} is checked out in Root, so its working tree would fall behind; {how}"
+                ),
+            )
+            .with_code("checkout_would_fall_behind"),
+        ));
+    }
+    // Untracked files are left alone by a fast-forward, so only tracked
+    // changes stop it.
+    let dirty = git(root, &["status", "--porcelain", "--untracked-files=no"])?;
+    if !dirty.is_empty() {
+        return Ok(Some(
+            Outcome::stop(
+                IntegrationState::Failed,
+                format!(
+                    "Root's working tree has changes, so it cannot be fast-forwarded:\n{dirty}"
+                ),
+            )
+            .with_code("root_not_clean"),
+        ));
+    }
+    Ok(None)
+}
+
+/// [`checkout_refusal`] when `entry` lands on the branch Root has checked
+/// out.
+fn target_refusal(
+    ctx: &Ctx,
+    entry: &Integration,
+    record: &GraftRecord,
+    spec: &IntegrateSpec,
+    args: &IntegrateArgs,
+) -> anyhow::Result<Option<Outcome>> {
+    let checked_out = spec.mode == IntegrateMode::Commit
+        && ctx.located.repo.head_ref()?.as_deref()
+            == Some(landed_ref(spec, &entry.target, record).as_str());
+    if !checked_out {
+        return Ok(None);
+    }
+    checkout_refusal(&ctx.located.record.path, &entry.target, args)
+}
+
 /// Copies commit `new` into Root and moves the ref from `head` to it.
 #[allow(clippy::too_many_arguments)] // one call site
 fn land(
@@ -884,15 +981,8 @@ fn land(
         if !checked_out {
             return git(&root, &["update-ref", &refname, new, head.as_str()]).map(drop);
         }
-        if !args.update_checkout {
-            bail!(
-                "{target} is checked out in Root, so its working tree would fall behind; \
-                 land elsewhere with --onto, or pass --update-checkout to fast-forward Root"
-            );
-        }
-        let dirty = git(&root, &["status", "--porcelain", "--untracked-files=no"])?;
-        if !dirty.is_empty() {
-            bail!("Root's working tree has changes, so it cannot be fast-forwarded:\n{dirty}");
+        if let Some(stop) = checkout_refusal(&root, target, args)? {
+            bail!(stop.output);
         }
         if git(&root, &["rev-parse", "HEAD"])? != head.as_str() {
             bail!("{target} moved while integrating");
@@ -901,6 +991,38 @@ fn land(
     })();
     let _ = git(&root, &["update-ref", "-d", &staging]);
     moved
+}
+
+/// The end of a queue run: the JSON or the no-gate note, and under
+/// `graft mcp` the error line when a request did not land.
+fn finish(
+    args: &IntegrateArgs,
+    out: &mut Output,
+    results: &[serde_json::Value],
+    ungated: bool,
+    first_failure: Option<&'static str>,
+) {
+    if args.json {
+        out.stdout = serde_json::json!({"results": results, "gated": !ungated}).to_string() + "\n";
+    } else if ungated {
+        out.stdout.push_str(
+            "note: no test gate ran: set [integrate] test in graft.toml to test before landing\n",
+        );
+    }
+    if let Some(code) = first_failure {
+        let failed = results
+            .iter()
+            .filter(|r| r["code"] != "landed" && r["code"] != "checked")
+            .count();
+        crate::agent::report_failure(
+            code,
+            &format!(
+                "{failed} of {} requests did not land; see output",
+                results.len()
+            ),
+            None,
+        );
+    }
 }
 
 /// Processes the queue in order, holding `integrate.lock`.
@@ -918,6 +1040,8 @@ fn process(ctx: &mut Ctx, args: &IntegrateArgs, out: &mut Output) -> anyhow::Res
     let mut all_ok = true;
     let mut ungated = false;
     let mut kept: Option<Scratch> = None;
+    let mut results = Vec::new();
+    let mut first_failure: Option<&'static str> = None;
     while let Some(entry) = ctx.located.store.next_queued()? {
         ctx.located
             .store
@@ -945,6 +1069,14 @@ fn process(ctx: &mut Ctx, args: &IntegrateArgs, out: &mut Output) -> anyhow::Res
             outcome.commit.as_deref(),
         )?;
         ungated |= outcome.ungated;
+        results.push(serde_json::json!({
+            "graft": entry.graft_name.as_str(),
+            "target": entry.target,
+            "state": outcome.state.as_str(),
+            "code": outcome.code(),
+            "commit": outcome.commit,
+            "output": outcome.output.trim_end(),
+        }));
         let short = outcome.commit.as_deref().map_or("", |c| &c[..12]);
         let _ = writeln!(
             out.stdout,
@@ -972,6 +1104,7 @@ fn process(ctx: &mut Ctx, args: &IntegrateArgs, out: &mut Output) -> anyhow::Res
             }
         } else if outcome.state != IntegrationState::Checked {
             all_ok = false;
+            first_failure.get_or_insert(outcome.code());
             for line in outcome.output.lines() {
                 let _ = writeln!(out.stdout, "    {line}");
             }
@@ -980,11 +1113,7 @@ fn process(ctx: &mut Ctx, args: &IntegrateArgs, out: &mut Output) -> anyhow::Res
     if let Some(s) = kept {
         s.remove()?;
     }
-    if ungated {
-        out.stdout.push_str(
-            "note: no test gate ran: set [integrate] test in graft.toml to test before landing\n",
-        );
-    }
+    finish(args, out, &results, ungated, first_failure);
     drop(lock);
     Ok(all_ok)
 }

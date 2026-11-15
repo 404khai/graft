@@ -6,6 +6,7 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use std::io::{BufRead as _, BufReader, Write as _};
+use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
@@ -66,6 +67,18 @@ impl Client {
             }),
         );
         assert_eq!(init["serverInfo"]["name"], "graft", "{init}");
+        // The instructions say which Root and version this server is.
+        let instructions = init["instructions"].as_str().unwrap();
+        let real = root.canonicalize().unwrap();
+        assert!(
+            instructions.contains(&format!("the Root at {}", real.display()))
+                || instructions.contains(&format!("the Root at {}", root.display())),
+            "{instructions}"
+        );
+        assert!(
+            instructions.contains(&format!("(graft {})", env!("CARGO_PKG_VERSION"))),
+            "{instructions}"
+        );
         assert_eq!(
             init["capabilities"]["resources"]["subscribe"], true,
             "{init}"
@@ -202,9 +215,16 @@ fn an_agent_runs_the_whole_cycle_over_mcp() {
 
     // new, run
     for g in ["a", "b"] {
+        let made: Value =
+            serde_json::from_str(&c.ok("graft_new", json!({"name": g, "backend": "reflink"})))
+                .unwrap();
+        assert_eq!(made["name"], g, "{made}");
         assert!(
-            c.ok("graft_new", json!({"name": g, "backend": "reflink"}))
-                .contains(&format!("Created graft {g}"))
+            made["path"]
+                .as_str()
+                .unwrap()
+                .ends_with(&format!("/mounts/{g}")),
+            "{made}"
         );
     }
     for (g, v) in [("a", "10"), ("b", "11")] {
@@ -293,7 +313,7 @@ fn an_agent_runs_the_whole_cycle_over_mcp() {
     );
     c.ok("graft_prune", json!({"name": "a"}));
     let left: Value = serde_json::from_str(&c.ok("graft_list", json!({}))).unwrap();
-    assert_eq!(left, json!([]), "grafts left behind");
+    assert_eq!(left["grafts"], json!([]), "grafts left behind");
 }
 
 #[test]
@@ -416,11 +436,11 @@ fn failures_have_codes_and_mcp_hints() {
 
     // Empty lists are JSON too.
     assert_eq!(
-        serde_json::from_str::<Value>(&c.ok("graft_list", json!({}))).unwrap(),
+        serde_json::from_str::<Value>(&c.ok("graft_list", json!({}))).unwrap()["grafts"],
         json!([])
     );
     assert_eq!(
-        serde_json::from_str::<Value>(&c.ok("graft_status", json!({}))).unwrap(),
+        serde_json::from_str::<Value>(&c.ok("graft_status", json!({}))).unwrap()["grafts"],
         json!([])
     );
 
@@ -445,21 +465,50 @@ fn failures_have_codes_and_mcp_hints() {
     assert_eq!(e["code"], "invalid_arguments", "{e}");
 
     // A command that fails inside graft_run is `failed`, with its output.
-    assert!(
-        c.ok("graft_new", json!({"name": "a", "backend": "reflink"}))
-            .contains("Created graft a")
-    );
+    let made: Value =
+        serde_json::from_str(&c.ok("graft_new", json!({"name": "a", "backend": "reflink"})))
+            .unwrap();
+    assert_eq!(made["backend"], "reflink", "{made}");
+    assert_eq!(made["layers"], json!([]), "{made}");
+    // A command's exit code and its two streams, apart.
     let e = error_of(
         &mut c,
         "graft_run",
         json!({"name": "a", "command": ["sh", "-c", "echo out; echo err >&2; exit 3"]}),
     );
-    assert_eq!(e["code"], "failed", "{e}");
-    let output = e["output"].as_str().unwrap();
-    assert!(output.contains("out") && output.contains("err"), "{e}");
+    assert_eq!(e["code"], "command_failed", "{e}");
+    assert_eq!(e["exit_code"], 3, "{e}");
+    assert_eq!(e["signal"], Value::Null, "{e}");
+    assert_eq!(e["stdout"], "out\n", "{e}");
+    assert_eq!(e["stderr"], "err", "{e}");
+    assert_eq!(e["timed_out"], false, "{e}");
+    assert!(e["duration_ms"].is_u64(), "{e}");
+    let done: Value = serde_json::from_str(&c.ok(
+        "graft_run",
+        json!({"name": "a", "command": ["sh", "-c", "echo fine"]}),
+    ))
+    .unwrap();
+    assert_eq!(done["exit_code"], 0, "{done}");
+    assert_eq!(done["stdout"], "fine\n", "{done}");
+    let killed = error_of(
+        &mut c,
+        "graft_run",
+        json!({"name": "a", "command": ["sh", "-c", "kill -9 $$"]}),
+    );
+    assert_eq!(killed["code"], "command_failed", "{killed}");
+    assert_eq!(killed["exit_code"], Value::Null, "{killed}");
+    assert_eq!(killed["signal"], 9, "{killed}");
 
     // list and status describe the graft.
-    let list: Value = serde_json::from_str(&c.ok("graft_list", json!({}))).unwrap();
+    let listing: Value = serde_json::from_str(&c.ok("graft_list", json!({}))).unwrap();
+    assert!(
+        listing["root"]
+            .as_str()
+            .is_some_and(|p| Path::new(p) == r.canonicalize().unwrap() || Path::new(p) == r),
+        "{listing}"
+    );
+    assert_eq!(listing["version"], env!("CARGO_PKG_VERSION"), "{listing}");
+    let list = &listing["grafts"];
     assert_eq!(list[0]["name"], "a", "{list}");
     assert_eq!(list[0]["backend"], "reflink", "{list}");
     assert_eq!(list[0]["changed"], 0, "{list}");
@@ -474,7 +523,7 @@ fn failures_have_codes_and_mcp_hints() {
     );
     let status: Value = serde_json::from_str(&c.ok("graft_status", json!({"name": "a"}))).unwrap();
     assert_eq!(
-        status[0]["changes"],
+        status["grafts"][0]["changes"],
         json!([{"kind": "A", "path": "new.txt"}]),
         "{status}"
     );
@@ -530,8 +579,14 @@ fn failures_have_codes_and_mcp_hints() {
         e["hint"].as_str().unwrap().contains("call graft_new again"),
         "{e}"
     );
+    // It names the environment the build ran in: the MCP client's.
+    let message = e["message"].as_str().unwrap();
+    assert!(message.contains("build environment: `echo` is /"), "{e}");
+    assert!(message.contains("PATH="), "{e}");
+    // The hint is not repeated in the message.
+    assert!(!message.contains("call graft_new again"), "{e}");
     assert_eq!(
-        serde_json::from_str::<Value>(&c.ok("graft_list", json!({}))).unwrap(),
+        serde_json::from_str::<Value>(&c.ok("graft_list", json!({}))).unwrap()["grafts"],
         json!([])
     );
 }
@@ -571,14 +626,16 @@ fn rings_rewind_over_mcp() {
         "graft_run",
         json!({"name": "v", "command": ["sh", "-c", "echo two > b.txt"]}),
     );
-    let done = c.ok("graft_rewind", json!({"name": "v", "ring": "one"}));
+    let done: Value =
+        serde_json::from_str(&c.ok("graft_rewind", json!({"name": "v", "ring": "one"}))).unwrap();
+    assert_eq!(done["ring"], "one", "{done}");
     assert!(
-        done.contains("To undo: graft_rewind with name: \"v\""),
+        done["undo"].as_str().unwrap().starts_with("undo-"),
         "{done}"
     );
     let status: Value = serde_json::from_str(&c.ok("graft_status", json!({"name": "v"}))).unwrap();
     assert_eq!(
-        status[0]["changes"],
+        status["grafts"][0]["changes"],
         json!([{"kind": "A", "path": "a.txt"}]),
         "{status}"
     );
@@ -596,4 +653,124 @@ fn rings_rewind_over_mcp() {
         .status()
         .unwrap();
     assert!(stop.success());
+}
+
+/// Integrate's and prune's refusals have their own codes and MCP wording;
+/// a dry run predicts the checked-out-branch refusal; plan lists what it
+/// could not place (ADR 0025).
+#[test]
+#[allow(clippy::too_many_lines)] // one scenario, step by step
+fn refusals_have_codes_and_dry_runs_predict_them() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = git_repo();
+    let r = repo.path();
+    git(r, &["config", "user.name", "Graft Test"]);
+    git(r, &["config", "user.email", "test@graft.invalid"]);
+    std::fs::create_dir_all(r.join("pkg")).unwrap();
+    std::fs::write(r.join("lib.py"), LIB).unwrap();
+    std::fs::write(r.join("pkg/one.py"), "X = 1\n").unwrap();
+    std::fs::write(r.join("pkg/two.py"), "Y = 2\n").unwrap();
+    git(r, &["add", "-A"]);
+    git(r, &["commit", "-qm", "lib"]);
+    let init = Command::new(env!("CARGO_BIN_EXE_graft"))
+        .arg("init")
+        .current_dir(r)
+        .env("GRAFT_HOME", home.path())
+        .status()
+        .unwrap();
+    assert!(init.success());
+    let mut c = Client::start(home.path(), r);
+    let head = |r: &Path| {
+        String::from_utf8(
+            Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(r)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+    };
+    let before = head(r);
+
+    // plan: a directory expands, a new file is reported, not dropped.
+    let plan: Value = serde_json::from_str(&c.ok(
+        "graft_plan",
+        json!({"task": "Edit `pkg` and add `pkg/three.py`."}),
+    ))
+    .unwrap();
+    let claimed: Vec<&str> = plan["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|n| n["claims"].as_array().unwrap())
+        .map(|c| c["path"].as_str().unwrap())
+        .collect();
+    assert!(
+        claimed.contains(&"pkg/one.py") && claimed.contains(&"pkg/two.py"),
+        "{plan}"
+    );
+    assert_eq!(plan["unresolved"], json!(["pkg/three.py"]), "{plan}");
+
+    c.ok("graft_new", json!({"name": "a", "backend": "reflink"}));
+    c.ok(
+        "graft_run",
+        json!({"name": "a", "command": ["sh", "-c", "echo 'Z = 3' >> pkg/one.py"]}),
+    );
+    // main is checked out in Root: the dry run already refuses, in MCP terms.
+    let e = error_of(
+        &mut c,
+        "graft_integrate",
+        json!({"names": ["a"], "onto": "main", "dry_run": true}),
+    );
+    assert_eq!(e["code"], "checkout_would_fall_behind", "{e}");
+    let results: Value = serde_json::from_str(e["output"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        results["results"][0]["code"], "checkout_would_fall_behind",
+        "{results}"
+    );
+    let why = results["results"][0]["output"].as_str().unwrap();
+    assert!(
+        why.contains("update_checkout: true") && !why.contains("--update-checkout"),
+        "{why}"
+    );
+    // With update_checkout the dry run passes, and so does the real one.
+    let dry: Value = serde_json::from_str(&c.ok(
+        "graft_integrate",
+        json!({"names": ["a"], "onto": "main", "dry_run": true, "update_checkout": true}),
+    ))
+    .unwrap();
+    assert_eq!(dry["results"][0]["state"], "checked", "{dry}");
+    assert_eq!(head(r), before, "a dry run moved main");
+    let landed: Value = serde_json::from_str(&c.ok(
+        "graft_integrate",
+        json!({"names": ["a"], "onto": "main", "update_checkout": true, "confirm": true}),
+    ))
+    .unwrap();
+    assert_eq!(landed["results"][0]["state"], "landed", "{landed}");
+    assert_eq!(landed["results"][0]["code"], "landed", "{landed}");
+    assert_eq!(landed["gated"], false, "{landed}");
+    let commit = landed["results"][0]["commit"].as_str().unwrap();
+    assert_eq!(head(r).trim(), commit, "{landed}");
+
+    // prune: would-lose-work has its own code and an MCP hint.
+    c.ok("graft_new", json!({"name": "b", "backend": "reflink"}));
+    c.ok(
+        "graft_run",
+        json!({"name": "b", "command": ["sh", "-c", "echo w > work.txt"]}),
+    );
+    let e = error_of(&mut c, "graft_prune", json!({"name": "b"}));
+    assert_eq!(e["code"], "work_would_be_lost", "{e}");
+    let hint = e["hint"].as_str().unwrap();
+    assert!(
+        hint.contains("force: true and confirm: true") && !hint.contains("--force"),
+        "{e}"
+    );
+    let pruned: Value = serde_json::from_str(&c.ok(
+        "graft_prune",
+        json!({"name": "b", "force": true, "confirm": true}),
+    ))
+    .unwrap();
+    assert_eq!(pruned, json!({"name": "b", "pruned": true}));
+    c.ok("graft_prune", json!({"name": "a"}));
 }
