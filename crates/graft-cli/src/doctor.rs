@@ -11,7 +11,7 @@ use std::process::ExitCode;
 use graft_core::{GraftHome, HomeSource};
 use graft_fs::{Availability, FsType};
 
-use crate::Environment;
+use crate::{Environment, Output};
 
 /// Arguments for `graft doctor`.
 #[derive(Debug, clap::Args)]
@@ -19,6 +19,36 @@ pub(crate) struct Args {
     /// Directory to check, usually inside the repository that will become a
     /// Root. Defaults to the current directory.
     path: Option<PathBuf>,
+    /// Print the report as JSON.
+    #[arg(long)]
+    json: bool,
+    /// Also write a diagnostics bundle for a bug report: this report plus
+    /// Roots, recent graftd log lines and crash files, as one JSON file
+    /// (secret-looking values redacted). Defaults to
+    /// `$GRAFT_HOME/reports/report-<time>.json`.
+    #[arg(long)]
+    report: bool,
+    /// Write the bundle to this file (or directory) instead; implies
+    /// `--report`.
+    #[arg(long, value_name = "FILE")]
+    report_to: Option<PathBuf>,
+}
+
+/// Doctor's findings, as text rows and as JSON fields.
+#[derive(Default)]
+struct Report {
+    text: String,
+    fields: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Report {
+    /// Adds a row: a fixed-width label column then the value; `key` names
+    /// it in the JSON.
+    fn row(&mut self, key: &str, label: &str, value: impl std::fmt::Display) {
+        let value = value.to_string();
+        let _ = writeln!(self.text, "{label:<14}{value}");
+        self.fields.insert(key.to_owned(), value.into());
+    }
 }
 
 /// The repository (or plain directory) doctor inspected.
@@ -61,11 +91,6 @@ fn existing_ancestor(path: &Path) -> Option<&Path> {
     path.ancestors().find(|p| p.exists())
 }
 
-/// Renders a row: a fixed-width label column then the value.
-fn row(out: &mut String, label: &str, value: impl std::fmt::Display) {
-    let _ = writeln!(out, "{label:<14}{value}");
-}
-
 fn describe(a: &Availability) -> String {
     match a {
         Availability::Available { detail } => format!("available ({detail})"),
@@ -91,17 +116,52 @@ fn describe_reflink(result: &std::io::Result<bool>, fs: Option<&FsType>) -> Stri
     }
 }
 
-/// Runs doctor and returns its report and exit code. The exit code is
-/// failure only for problems that will stop Graft from working (an unusable
-/// `$GRAFT_HOME`, an invalid config, a path that cannot be inspected), not for
-/// missing optional capabilities such as reflinks or FUSE.
-pub(crate) fn run(args: &Args, env: &Environment) -> (String, ExitCode) {
-    let mut out = String::new();
+/// Runs doctor, writes the bundle if asked, and returns the output and exit
+/// code. The exit code is failure only for problems that will stop Graft
+/// from working (an unusable `$GRAFT_HOME`, an invalid config, a path that
+/// cannot be inspected), not for missing optional capabilities such as
+/// reflinks or FUSE.
+///
+/// # Errors
+///
+/// If `--report` was given and the bundle cannot be written.
+pub(crate) fn run(args: &Args, env: &Environment) -> anyhow::Result<(Output, ExitCode)> {
+    let (mut report, healthy) = inspect(args, env);
+    report.fields.insert("healthy".to_owned(), healthy.into());
+    let code = if healthy {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    };
+    if args.report || args.report_to.is_some() {
+        let dest = args.report_to.as_deref();
+        let path = crate::diagnostics::write_bundle(dest, env, &report.fields)?;
+        let _ = writeln!(
+            report.text,
+            "\nreport written to {}\nread it before sharing it: it names paths on this machine",
+            path.display()
+        );
+        report
+            .fields
+            .insert("report".to_owned(), path.display().to_string().into());
+    }
+    let Report { text, fields } = report;
+    Ok((
+        Output::stdout(text).json_if(args.json, || fields.into()),
+        code,
+    ))
+}
+
+/// Gathers doctor's findings; the flag is false when Graft cannot work.
+fn inspect(args: &Args, env: &Environment) -> (Report, bool) {
+    let mut out = Report::default();
     let mut healthy = true;
 
-    let _ = writeln!(out, "graft {}\n", env!("CARGO_PKG_VERSION"));
-    row(
-        &mut out,
+    let _ = writeln!(out.text, "graft {}\n", env!("CARGO_PKG_VERSION"));
+    out.fields
+        .insert("version".to_owned(), env!("CARGO_PKG_VERSION").into());
+    out.row(
+        "platform",
         "platform",
         format_args!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
     );
@@ -111,8 +171,8 @@ pub(crate) fn run(args: &Args, env: &Environment) -> (String, ExitCode) {
         Ok(t) => Some(t),
         Err(e) => {
             healthy = false;
-            row(
-                &mut out,
+            out.row(
+                "repository",
                 "repository",
                 format_args!("error: cannot inspect {}: {e}", start.display()),
             );
@@ -126,15 +186,15 @@ pub(crate) fn run(args: &Args, env: &Environment) -> (String, ExitCode) {
         } else {
             " (not a git repository; checked this directory)"
         };
-        row(
-            &mut out,
+        out.row(
+            "repository",
             "repository",
             format_args!("{}{kind}", t.top.display()),
         );
-        let repo_fs = report_fs(&mut out, &t.top);
+        let repo_fs = report_fs(&mut out, "repository_filesystem", &t.top);
         let reflink = graft_fs::probe_reflink(&t.probe_dir);
-        row(
-            &mut out,
+        out.row(
+            "reflink",
             "  reflink",
             describe_reflink(&reflink, repo_fs.as_ref()),
         );
@@ -146,7 +206,7 @@ pub(crate) fn run(args: &Args, env: &Environment) -> (String, ExitCode) {
         }
         Err(e) => {
             healthy = false;
-            row(&mut out, "graft home", format_args!("error: {e}"));
+            out.row("graft_home", "graft home", format_args!("error: {e}"));
         }
     }
 
@@ -160,16 +220,16 @@ pub(crate) fn run(args: &Args, env: &Environment) -> (String, ExitCode) {
                 format!("error: {e}")
             }
         };
-        row(
-            &mut out,
+        out.row(
+            "config",
             "config",
             format_args!("{} ({status})", path.display()),
         );
     }
 
-    row(&mut out, "fuse", describe(&graft_fs::fuse_availability()));
-    row(
-        &mut out,
+    out.row("fuse", "fuse", describe(&graft_fs::fuse_availability()));
+    out.row(
+        "nfs_client",
         "nfs client",
         describe(&graft_fs::nfs_client_availability()),
     );
@@ -178,30 +238,24 @@ pub(crate) fn run(args: &Args, env: &Environment) -> (String, ExitCode) {
         (m, Ok(())) => format!("available ({m})"),
         (m, Err(why)) => format!("unavailable ({m}: {why}); graft run will refuse to start"),
     };
-    row(&mut out, "sandbox", sandbox);
-
-    let code = if healthy {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    };
-    (out, code)
+    out.row("sandbox", "sandbox", sandbox);
+    (out, healthy)
 }
 
-fn report_fs(out: &mut String, path: &Path) -> Option<FsType> {
+fn report_fs(out: &mut Report, key: &str, path: &Path) -> Option<FsType> {
     match graft_fs::filesystem_type(path) {
         Ok(fs) => {
-            row(out, "  filesystem", &fs);
+            out.row(key, "  filesystem", &fs);
             Some(fs)
         }
         Err(e) => {
-            row(out, "  filesystem", format_args!("unknown ({e})"));
+            out.row(key, "  filesystem", format_args!("unknown ({e})"));
             None
         }
     }
 }
 
-fn report_home(out: &mut String, home: &GraftHome, repo: Option<&Path>) {
+fn report_home(out: &mut Report, home: &GraftHome, repo: Option<&Path>) {
     let source = match home.source() {
         HomeSource::Env => "from $GRAFT_HOME",
         HomeSource::PlatformDefault => "default",
@@ -211,15 +265,15 @@ fn report_home(out: &mut String, home: &GraftHome, repo: Option<&Path>) {
     } else {
         "not created yet"
     };
-    row(
-        out,
+    out.row(
+        "graft_home",
         "graft home",
         format_args!("{} ({source}, {exists})", home.path().display()),
     );
     if home.path().to_string_lossy().contains(char::is_whitespace) {
         // ADR 0022: the macOS default has a space; scripts must quote.
-        row(
-            out,
+        out.row(
+            "graft_home_spaces",
             "  spaces",
             "graft paths contain a space: quote them in scripts (cd \"$(graft path NAME)\"), \
              or set GRAFT_HOME to a path without one",
@@ -229,10 +283,14 @@ fn report_home(out: &mut String, home: &GraftHome, repo: Option<&Path>) {
     // Graft never creates $GRAFT_HOME just to inspect it; measure the
     // filesystem it will be created on instead.
     let Some(existing) = existing_ancestor(home.path()) else {
-        row(out, "  filesystem", "unknown (no existing ancestor)");
+        out.row(
+            "graft_home_filesystem",
+            "  filesystem",
+            "unknown (no existing ancestor)",
+        );
         return;
     };
-    report_fs(out, existing);
+    report_fs(out, "graft_home_filesystem", existing);
     if let Some(repo) = repo {
         let same = match graft_fs::same_filesystem(existing, repo) {
             Ok(true) => "yes".to_owned(),
@@ -241,7 +299,7 @@ fn report_home(out: &mut String, home: &GraftHome, repo: Option<&Path>) {
             }
             Err(e) => format!("unknown ({e})"),
         };
-        row(out, "  same fs", same);
+        out.row("same_filesystem", "  same fs", same);
     }
 }
 

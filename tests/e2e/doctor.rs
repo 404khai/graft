@@ -172,3 +172,134 @@ fn warns_when_graft_paths_contain_a_space() {
     let plain = doctor_stdout(&base.path().join("graft"), repo.path());
     assert!(!plain.contains("spaces"), "{plain}");
 }
+
+#[test]
+fn json_has_the_same_findings() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = fake_repo();
+    let out = graft(home.path())
+        .args(["doctor", "--json"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["healthy"], true);
+    assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+    for key in [
+        "platform",
+        "repository",
+        "reflink",
+        "graft_home",
+        "fuse",
+        "sandbox",
+    ] {
+        assert!(v[key].is_string(), "{key} missing from {v}");
+    }
+}
+
+/// The bug-report bundle: findings, Roots, graftd's log and crash files,
+/// with secret-looking values redacted.
+#[test]
+fn report_bundles_diagnostics_and_redacts_secrets() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = crate::git_repo();
+    graft(home.path())
+        .arg("init")
+        .current_dir(repo.path())
+        .assert()
+        .success();
+    std::fs::write(
+        home.path().join("config.toml"),
+        "[log]\nfilter = \"warn\"\n",
+    )
+    .unwrap();
+    // Placeholders made at run time, so no credential-looking literal
+    // sits in the source for secret scanners to flag.
+    let fake = |n: u32| format!("placeholder{n}x{}", std::process::id());
+    let (log_value, crash_value, env_value) = (fake(1), fake(2), fake(3));
+    let run = home.path().join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    std::fs::write(
+        run.join("graftd.log"),
+        format!("old\nmounted ok\nAPI_TOKEN={log_value} next\n"),
+    )
+    .unwrap();
+    graft_core::crash::write_crash(
+        &graft_core::crash::crash_dir(&graft_core::GraftHome::from_path(home.path()).unwrap()),
+        "graftd",
+        "0.0.0",
+        &format!("boom with password={crash_value}"),
+        "x.rs:1",
+        "bt",
+    )
+    .unwrap();
+
+    let out = graft(home.path())
+        .args(["doctor", "--json", "--report"])
+        .current_dir(repo.path())
+        .env("GRAFT_SECRET_KEY", &env_value)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    let path = std::path::PathBuf::from(v["report"].as_str().unwrap());
+    assert!(path.starts_with(home.path().join("reports")), "{path:?}");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "report must be private: {mode:o}");
+    }
+    let text = std::fs::read_to_string(&path).unwrap();
+    for secret in [&log_value, &crash_value, &env_value] {
+        assert!(!text.contains(secret), "{secret} leaked into the report");
+    }
+    let b: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(b["bundle_version"], 1);
+    assert_eq!(b["doctor"]["healthy"], true);
+    assert_eq!(b["environment"]["GRAFT_SECRET_KEY"], "<redacted>");
+    assert!(b["config"].as_str().unwrap().contains("filter = \"warn\""));
+    let roots = b["roots"].as_array().unwrap();
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0]["integrity"], "ok");
+    assert_eq!(
+        roots[0]["schema_version"],
+        roots[0]["supported_schema_version"]
+    );
+    assert_eq!(b["daemon"]["status"]["running"], false);
+    let log = b["daemon"]["log_tail"].as_str().unwrap();
+    assert!(
+        log.contains("mounted ok") && log.contains("API_TOKEN=<redacted> next"),
+        "{log}"
+    );
+    let crashes = b["crashes"].as_array().unwrap();
+    assert_eq!(crashes.len(), 1);
+    assert!(
+        crashes[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("password=<redacted>")
+    );
+}
+
+#[test]
+fn report_can_be_written_to_a_chosen_file() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = fake_repo();
+    let dest = tempfile::tempdir().unwrap();
+    let file = dest.path().join("bug.json");
+    graft(home.path())
+        .args(["doctor", "--report-to"])
+        .arg(&file)
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("report written to"));
+    let b: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(b["roots"], serde_json::json!([]));
+}
