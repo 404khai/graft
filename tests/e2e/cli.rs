@@ -50,3 +50,35 @@ fn graftd_reports_its_version() {
         .success()
         .stdout(predicate::str::starts_with("graftd "));
 }
+
+/// A caller's `$GRAFT_REQUEST_ID` is on every log line of the command
+/// (ADR 0031); an unsafe one is ignored with a warning.
+#[test]
+fn log_lines_carry_the_request_id() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = crate::git_repo();
+    let out = graft(home.path())
+        .arg("init")
+        .current_dir(repo.path())
+        .env("GRAFT_LOG", "debug")
+        .env("GRAFT_REQUEST_ID", "script-42")
+        .assert()
+        .success()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(out).unwrap();
+    assert!(stderr.contains("request=script-42"), "{stderr}");
+
+    let out = graft(home.path())
+        .arg("root")
+        .current_dir(repo.path())
+        .env("GRAFT_REQUEST_ID", "bad id")
+        .assert()
+        .success()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(out).unwrap();
+    assert!(stderr.contains("ignoring GRAFT_REQUEST_ID"), "{stderr}");
+}

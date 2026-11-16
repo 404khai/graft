@@ -185,11 +185,29 @@ fn init_logging(config: Option<&Config>) {
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .with_writer(std::io::stderr)
+        // Colour only a terminal: logs redirected to a file stay greppable.
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_target(false)
         .init();
     if let Some(e) = invalid {
         tracing::warn!(filter, source, error = %e, "invalid log filter, using \"warn\"");
     }
+}
+
+/// This invocation's request ID: `$GRAFT_REQUEST_ID` when a caller set a
+/// valid one, else a new random one (ADR 0031). Graft processes this one
+/// starts get it through [`graft_daemon::client::request_id`].
+fn request_id() -> graft_core::RequestId {
+    let given = std::env::var(graft_core::REQUEST_ID_ENV)
+        .ok()
+        .filter(|s| !s.is_empty());
+    if let Some(given) = given {
+        match given.parse() {
+            Ok(id) => return id,
+            Err(e) => tracing::warn!(error = %e, "ignoring {}", graft_core::REQUEST_ID_ENV),
+        }
+    }
+    graft_core::RequestId::random().unwrap_or_else(|_| graft_core::RequestId::unknown())
 }
 
 fn run() -> anyhow::Result<ExitCode> {
@@ -199,6 +217,9 @@ fn run() -> anyhow::Result<ExitCode> {
     if let Ok(home) = &env.home {
         graft_core::crash::install_panic_hook(home, "graft", env!("CARGO_PKG_VERSION"));
     }
+    let request = request_id();
+    graft_daemon::client::set_request_id(&request);
+    let _span = tracing::info_span!("graft", request = %request).entered();
 
     let ok = |r: anyhow::Result<Output>| r.map(|o| (o, ExitCode::SUCCESS));
     let (output, code) = match cli.command {
