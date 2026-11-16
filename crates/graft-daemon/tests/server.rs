@@ -370,3 +370,78 @@ fn serves_a_deep_home() {
     server.join().unwrap().unwrap();
     assert!(!socket.exists());
 }
+
+/// Log lines written by the in-process daemon, for tests that read them.
+fn captured_logs() -> Arc<Mutex<Vec<u8>>> {
+    static LOGS: std::sync::OnceLock<Arc<Mutex<Vec<u8>>>> = std::sync::OnceLock::new();
+    Arc::clone(LOGS.get_or_init(|| {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::clone(&buf);
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_ansi(false)
+            .with_writer(move || Capture(Arc::clone(&writer)))
+            .finish();
+        tracing::subscriber::set_global_default(subscriber).unwrap();
+        buf
+    }))
+}
+
+struct Capture(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Capture {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The caller's request ID is on graftd's log lines for that request, and
+/// one that could forge log lines is replaced (ADR 0031).
+#[test]
+fn logs_each_request_with_its_request_id() {
+    let logs = captured_logs();
+    let env = env();
+    let server = start(&env.home, Arc::new(Fake::default()));
+    let mut stream = UnixStream::connect(paths::socket(&env.home)).unwrap();
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut send = |line: serde_json::Value| {
+        writeln!(stream, "{line}").unwrap();
+        let mut answer = String::new();
+        reader.read_line(&mut answer).unwrap();
+        answer
+    };
+    send(serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "ping", "request_id": "cli-7a1"}));
+    send(serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "nope", "request_id": "cli-7a2"}));
+    send(
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "nope", "request_id": "x\nFAKE line"}),
+    );
+    // Older clients send no ID.
+    let old = send(serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "ping"}));
+    assert!(old.contains("\"result\""), "{old}");
+
+    let text = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+    let line_with = |needle: &str| {
+        text.lines()
+            .find(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("no line with {needle:?} in:\n{text}"))
+            .to_owned()
+    };
+    assert!(line_with("request=cli-7a1").contains("method=ping"));
+    let failed = line_with("request=cli-7a2");
+    assert!(
+        failed.contains("request failed") && failed.contains("method=nope"),
+        "{failed}"
+    );
+    assert!(
+        !text.contains("FAKE line"),
+        "a request ID forged a log line:\n{text}"
+    );
+    line_with("request=invalid");
+
+    Client::connect(&env.home).unwrap().shutdown().unwrap();
+    server.join().unwrap().unwrap();
+}

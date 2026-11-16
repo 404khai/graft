@@ -28,6 +28,10 @@ pub struct Request {
     /// Method parameters; `null` when there are none.
     #[serde(default)]
     pub params: serde_json::Value,
+    /// The calling `graft` invocation's request ID, logged with the
+    /// request (ADR 0031). Optional, so older clients still work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 /// A response: exactly one of `result` and `error` is set.

@@ -5,13 +5,14 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use graft_core::{GraftHome, GraftName, GraftState, RootId};
+use graft_core::{GraftHome, GraftName, GraftState, RequestId, RootId};
 use graft_fs::view::LayerMount;
 use graft_root::Repo;
 use graft_store::{GraftRecord, Store};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Notify;
+use tracing::Instrument;
 
 use crate::paths;
 use crate::protocol::{
@@ -429,9 +430,28 @@ async fn dispatch(state: &Arc<State>, line: &str) -> Response {
     if request.jsonrpc != JSONRPC {
         return Response::err(Some(request.id), INVALID_REQUEST, "jsonrpc must be \"2.0\"");
     }
-    match handle(state, &request.method, request.params).await {
-        Ok(v) => Response::ok(request.id, v),
-        Err((code, message)) => Response::err(Some(request.id), code, message),
+    // Only a valid ID reaches the log, so a client cannot forge log lines.
+    let request_id = match request.request_id.as_deref().map(str::parse::<RequestId>) {
+        None => "-".to_owned(),
+        Some(Ok(id)) => id.to_string(),
+        Some(Err(_)) => "invalid".to_owned(),
+    };
+    let span = tracing::info_span!("rpc", request = %request_id, method = %request.method);
+    let started = std::time::Instant::now();
+    let result = handle(state, &request.method, request.params)
+        .instrument(span.clone())
+        .await;
+    let _entered = span.enter();
+    let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    match result {
+        Ok(v) => {
+            tracing::debug!(ms, "handled");
+            Response::ok(request.id, v)
+        }
+        Err((code, message)) => {
+            tracing::warn!(ms, code, error = %message, "request failed");
+            Response::err(Some(request.id), code, message)
+        }
     }
 }
 
