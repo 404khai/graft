@@ -31,6 +31,7 @@ object ([ADR 0025](decisions/0025-mcp-errors-for-agents.md)):
 | `root_not_clean` | `update_checkout`, but Root has changes to tracked files. |
 | `conflict`, `gate_failed`, `not_approved`, `nothing_to_integrate`, `claimed` | Why a `graft_integrate` request stopped; each request's code is in the results in `output`, and the call's code is the first one's. |
 | `command_failed` | A `graft_run` command exited non-zero or was killed; the error also carries `exit_code`, `signal`, `stdout`, `stderr`, `duration_ms`. |
+| `fsck_failed` | `graft_fsck` found at least one error; the findings are in `output`. |
 | `timed_out` | The call ran past its time limit and was killed. |
 | `failed` | Anything else; see `message` and `output`. |
 
@@ -106,6 +107,14 @@ Check whether this machine can run grafts, as JSON {version, healthy, platform, 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `report` | boolean | no | Also write a diagnostics bundle and return its path. |
+
+### `graft_fsck`
+
+Check this Root's stored state without changing anything: the database, that each virtual graft's op log replays to its delta exactly, that referenced blobs exist and match their hashes, that layers and reflink working trees exist, and that mounts/ holds nothing stray. Returns JSON {root, ok, checked, findings: [{severity: error|warning, check, graft, message, hint}]}; any error makes it a tool error with code fsck_failed and the same JSON in output. Call it when a graft's files, status or diff look wrong; before pruning or integrating a graft it flags, tell the user. (read-only)
+
+| Parameter | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `quick` | boolean | no | Check that blobs exist without re-hashing them (faster on large deltas). |
 
 ### `graft_status`
 

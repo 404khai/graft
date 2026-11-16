@@ -126,6 +126,24 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
   {
     "annotations": {
       "readOnlyHint": true,
+      "title": "Check Root's stored state"
+    },
+    "description": "Check this Root's stored state without changing anything: the database, that each virtual graft's op log replays to its delta exactly, that referenced blobs exist and match their hashes, that layers and reflink working trees exist, and that mounts/ holds nothing stray. Returns JSON {root, ok, checked, findings: [{severity: error|warning, check, graft, message, hint}]}; any error makes it a tool error with code fsck_failed and the same JSON in output. Call it when a graft's files, status or diff look wrong; before pruning or integrating a graft it flags, tell the user.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "quick": {
+          "description": "Check that blobs exist without re-hashing them (faster on large deltas).",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "graft_fsck"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true,
       "title": "Show a graft's changes"
     },
     "description": "Show what changed in a graft since its base, as JSON {root, version, grafts: [...]}, each with its changes ({kind: A|M|D|..., path}). Without name, every graft.",
