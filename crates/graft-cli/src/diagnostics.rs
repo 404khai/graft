@@ -165,7 +165,12 @@ fn roots(home: &GraftHome) -> Value {
 fn daemon(home: &GraftHome) -> Value {
     // Connect only: a report never starts graftd.
     let status = match graft_daemon::Client::connect(home).and_then(|mut c| c.ping()) {
-        Ok(p) => json!({"running": true, "version": p.version, "pid": p.pid}),
+        Ok(p) => {
+            let stats = graft_daemon::Client::connect(home)
+                .and_then(|mut c| c.stats())
+                .ok();
+            json!({"running": true, "version": p.version, "pid": p.pid, "stats": stats})
+        }
         Err(e) => json!({"running": false, "detail": e.to_string()}),
     };
     let log = graft_daemon::paths::log_file(home);
