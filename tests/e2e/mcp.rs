@@ -803,3 +803,18 @@ fn doctor_over_mcp_reports_and_writes_a_bundle() {
     let b: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     assert_eq!(b["doctor"]["healthy"], true);
 }
+
+/// A failed call names its request ID, to match against graftd's log.
+#[test]
+fn failures_carry_a_request_id() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = git_repo();
+    let mut c = Client::start(home.path(), repo.path());
+    c.ok("graft_init", json!({}));
+    let (text, err) = c.call("graft_path", json!({"name": "missing"}));
+    assert!(err, "{text}");
+    let v: Value = serde_json::from_str(&text).unwrap();
+    let id = v["request_id"].as_str().unwrap_or_default();
+    assert!(id.starts_with("mcp-"), "{v}");
+    assert!(id.parse::<graft_core::RequestId>().is_ok(), "{id}");
+}
