@@ -128,6 +128,13 @@ pub fn tools() -> Vec<Tool> {
             read_only(),
         ),
         tool(
+            "graft_stats",
+            "Show graftd's counters",
+            "What graftd has served since it started, as JSON {running, version, pid, uptime_ms, mounts, rss_bytes, ops: [{op, count, errors, mean_us, p50_us, p99_us, max_us}], cache_hits, cache_misses}. Covers virtual grafts (fuse, nfs) only; {running: false} when graftd is not running. Call it when file access in a virtual graft seems slow, to tell which operation is. p50_us and p99_us are power-of-two bucket bounds; errors include expected ones, such as lookups of missing names.",
+            json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            read_only(),
+        ),
+        tool(
             "graft_status",
             "Show a graft's changes",
             "Show what changed in a graft since its base, as JSON {root, version, grafts: [...]}, each with its changes ({kind: A|M|D|..., path}). Without name, every graft.",
@@ -445,6 +452,7 @@ pub fn invocation(name: &str, args: &JsonObject) -> Result<Invocation, String> {
                 a.push("--quick".to_owned());
             }
         }
+        "graft_stats" => a.extend(["stats".to_owned(), "--json".to_owned()]),
         "graft_new" => {
             a.extend(["new".to_owned(), required(args, "name")?]);
             option(a, "--from", word(args, "from")?);
@@ -595,6 +603,7 @@ mod tests {
             ["run", "a", "--", "sh", "-c", "echo $HOME"]
         );
         assert_eq!(call("graft_init", json!({})).unwrap(), ["init", "--json"]);
+        assert_eq!(call("graft_stats", json!({})).unwrap(), ["stats", "--json"]);
         assert_eq!(
             call("graft_fsck", json!({"quick": true})).unwrap(),
             ["fsck", "--json", "--quick"]

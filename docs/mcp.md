@@ -116,6 +116,12 @@ Check this Root's stored state without changing anything: the database, that eac
 | --- | --- | --- | --- |
 | `quick` | boolean | no | Check that blobs exist without re-hashing them (faster on large deltas). |
 
+### `graft_stats`
+
+What graftd has served since it started, as JSON {running, version, pid, uptime_ms, mounts, rss_bytes, ops: [{op, count, errors, mean_us, p50_us, p99_us, max_us}], cache_hits, cache_misses}. Covers virtual grafts (fuse, nfs) only; {running: false} when graftd is not running. Call it when file access in a virtual graft seems slow, to tell which operation is. p50_us and p99_us are power-of-two bucket bounds; errors include expected ones, such as lookups of missing names. (read-only)
+
+No parameters.
+
 ### `graft_status`
 
 Show what changed in a graft since its base, as JSON {root, version, grafts: [...]}, each with its changes ({kind: A|M|D|..., path}). Without name, every graft. (read-only)
