@@ -21,6 +21,7 @@
 mod backend;
 mod commit;
 mod config;
+pub mod crash;
 mod error;
 mod graft;
 mod home;
