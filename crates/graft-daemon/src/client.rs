@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use crate::paths;
 use crate::protocol::{
     ActorParams, GraftRef, JSONRPC, MountInfo, Mounted, Ping, Request, Response, RootRef, RpcError,
-    Swept, Unmounted,
+    Stats, Swept, Unmounted,
 };
 
 /// Environment variable naming the `graftd` binary to start.
@@ -362,6 +362,15 @@ impl Client {
     /// As for [`Client::call`].
     pub fn mounts(&mut self) -> Result<Vec<MountInfo>, ClientError> {
         self.call("mounts", &())
+    }
+
+    /// `stats`.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Client::call`].
+    pub fn stats(&mut self) -> Result<Stats, ClientError> {
+        self.call("stats", &())
     }
 
     /// Asks the daemon to unmount everything and exit.
