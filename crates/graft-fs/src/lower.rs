@@ -350,8 +350,10 @@ impl LowerTree {
         filtered: bool,
     ) -> Result<Arc<Vec<u8>>, Errno> {
         if let Some(data) = lock(&self.cache).get(path) {
+            crate::stats::cache_lookup(true);
             return Ok(data);
         }
+        crate::stats::cache_lookup(false);
         let raw = self
             .objects
             .blob(id)

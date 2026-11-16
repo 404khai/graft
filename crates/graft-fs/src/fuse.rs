@@ -19,6 +19,7 @@ use fuser::{
     ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 
+use crate::stats::{self, FsOp};
 use crate::view::{Attr, Errno, GraftView, NodeKind};
 use crate::virtual_backend::Unmounted;
 use crate::write::{OpenMode, SetAttr};
@@ -87,11 +88,14 @@ struct FuseFs {
 
 impl Filesystem for FuseFs {
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
-        entry(reply, self.view.lookup(parent.0, name));
+        entry(
+            reply,
+            stats::timed(FsOp::Lookup, || self.view.lookup(parent.0, name)),
+        );
     }
 
     fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
-        match self.view.getattr(ino.0) {
+        match stats::timed(FsOp::Getattr, || self.view.getattr(ino.0)) {
             Ok(a) => reply.attr(&TTL, &file_attr(&a)),
             Err(e) => reply.error(errno(e)),
         }
@@ -122,14 +126,14 @@ impl Filesystem for FuseFs {
             size,
             mtime: mtime.map(when),
         };
-        match self.view.setattr(ino.0, set) {
+        match stats::timed(FsOp::Setattr, || self.view.setattr(ino.0, set)) {
             Ok(a) => reply.attr(&TTL, &file_attr(&a)),
             Err(e) => reply.error(errno(e)),
         }
     }
 
     fn readlink(&self, _req: &Request, ino: INodeNo, reply: ReplyData) {
-        match self.view.readlink(ino.0) {
+        match stats::timed(FsOp::Readlink, || self.view.readlink(ino.0)) {
             Ok(target) => reply.data(&target),
             Err(e) => reply.error(errno(e)),
         }
@@ -145,7 +149,12 @@ impl Filesystem for FuseFs {
         _rdev: u32,
         reply: ReplyEntry,
     ) {
-        entry(reply, self.view.mknod(parent.0, name, mode, umask));
+        entry(
+            reply,
+            stats::timed(FsOp::Create, || {
+                self.view.mknod(parent.0, name, mode, umask)
+            }),
+        );
     }
 
     fn mkdir(
@@ -157,15 +166,24 @@ impl Filesystem for FuseFs {
         umask: u32,
         reply: ReplyEntry,
     ) {
-        entry(reply, self.view.mkdir(parent.0, name, mode, umask));
+        entry(
+            reply,
+            stats::timed(FsOp::Mkdir, || self.view.mkdir(parent.0, name, mode, umask)),
+        );
     }
 
     fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
-        empty(reply, self.view.unlink(parent.0, name));
+        empty(
+            reply,
+            stats::timed(FsOp::Unlink, || self.view.unlink(parent.0, name)),
+        );
     }
 
     fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
-        empty(reply, self.view.rmdir(parent.0, name));
+        empty(
+            reply,
+            stats::timed(FsOp::Rmdir, || self.view.rmdir(parent.0, name)),
+        );
     }
 
     fn symlink(
@@ -176,7 +194,12 @@ impl Filesystem for FuseFs {
         target: &Path,
         reply: ReplyEntry,
     ) {
-        entry(reply, self.view.symlink(parent.0, link_name, target));
+        entry(
+            reply,
+            stats::timed(FsOp::Symlink, || {
+                self.view.symlink(parent.0, link_name, target)
+            }),
+        );
     }
 
     fn rename(
@@ -196,8 +219,10 @@ impl Filesystem for FuseFs {
         let noreplace = flags.contains(RenameFlags::RENAME_NOREPLACE);
         empty(
             reply,
-            self.view
-                .rename(parent.0, name, newparent.0, newname, noreplace),
+            stats::timed(FsOp::Rename, || {
+                self.view
+                    .rename(parent.0, name, newparent.0, newname, noreplace)
+            }),
         );
     }
 
@@ -216,7 +241,7 @@ impl Filesystem for FuseFs {
 
     fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
         let mode = OpenMode::from_flags(flags.0);
-        match self.view.open(ino.0, mode) {
+        match stats::timed(FsOp::Open, || self.view.open(ino.0, mode)) {
             Ok(fh) => reply.opened(FileHandle(fh), FopenFlags::empty()),
             Err(e) => reply.error(errno(e)),
         }
@@ -233,7 +258,7 @@ impl Filesystem for FuseFs {
         _lock_owner: Option<LockOwner>,
         reply: ReplyData,
     ) {
-        match self.view.read_handle(fh.0, offset, size) {
+        match stats::timed(FsOp::Read, || self.view.read_handle(fh.0, offset, size)) {
             Ok(data) => reply.data(&data),
             Err(e) => reply.error(errno(e)),
         }
@@ -251,7 +276,7 @@ impl Filesystem for FuseFs {
         _lock_owner: Option<LockOwner>,
         reply: ReplyWrite,
     ) {
-        match self.view.write(fh.0, offset, data) {
+        match stats::timed(FsOp::Write, || self.view.write(fh.0, offset, data)) {
             Ok(n) => reply.written(u32::try_from(n).unwrap_or(u32::MAX)),
             Err(e) => reply.error(errno(e)),
         }
@@ -265,7 +290,7 @@ impl Filesystem for FuseFs {
         _lock_owner: LockOwner,
         reply: ReplyEmpty,
     ) {
-        empty(reply, self.view.flush(fh.0));
+        empty(reply, stats::timed(FsOp::Flush, || self.view.flush(fh.0)));
     }
 
     fn release(
@@ -278,7 +303,10 @@ impl Filesystem for FuseFs {
         _flush: bool,
         reply: ReplyEmpty,
     ) {
-        empty(reply, self.view.release(fh.0));
+        empty(
+            reply,
+            stats::timed(FsOp::Release, || self.view.release(fh.0)),
+        );
     }
 
     fn fsync(
@@ -289,11 +317,11 @@ impl Filesystem for FuseFs {
         _datasync: bool,
         reply: ReplyEmpty,
     ) {
-        empty(reply, self.view.fsync(fh.0));
+        empty(reply, stats::timed(FsOp::Fsync, || self.view.fsync(fh.0)));
     }
 
     fn opendir(&self, _req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
-        match self.view.opendir(ino.0) {
+        match stats::timed(FsOp::Open, || self.view.opendir(ino.0)) {
             Ok(fh) => reply.opened(FileHandle(fh), FopenFlags::empty()),
             Err(e) => reply.error(errno(e)),
         }
@@ -307,7 +335,7 @@ impl Filesystem for FuseFs {
         offset: u64,
         mut reply: ReplyDirectory,
     ) {
-        let entries = match self.view.dir_entries(fh.0) {
+        let entries = match stats::timed(FsOp::Readdir, || self.view.dir_entries(fh.0)) {
             Ok(entries) => entries,
             Err(e) => {
                 reply.error(errno(e));
@@ -356,7 +384,9 @@ impl Filesystem for FuseFs {
         _flags: i32,
         reply: ReplyCreate,
     ) {
-        match self.view.create(parent.0, name, mode, umask) {
+        match stats::timed(FsOp::Create, || {
+            self.view.create(parent.0, name, mode, umask)
+        }) {
             Ok((a, fh)) => reply.created(
                 &TTL,
                 &file_attr(&a),
@@ -421,7 +451,10 @@ impl Filesystem for FuseFs {
             return;
         }
         // Permission bits are checked by the kernel (`default_permissions`).
-        empty(reply, self.view.getattr(ino.0).map(|_| ()));
+        empty(
+            reply,
+            stats::timed(FsOp::Getattr, || self.view.getattr(ino.0)).map(|_| ()),
+        );
     }
 }
 

@@ -28,6 +28,7 @@ use nfsserve::nfs::{
 use nfsserve::tcp::{NFSTcp, NFSTcpListener};
 use nfsserve::vfs::{DirEntry as NfsDirEntry, NFSFileSystem, ReadDirResult, VFSCapabilities};
 
+use crate::stats::{self, FsOp};
 use crate::view::{Attr, Errno, GraftView, Ino, NodeKind, ROOT_INO};
 use crate::virtual_backend::Unmounted;
 use crate::write::{OpenMode, SetAttr};
@@ -561,19 +562,19 @@ impl NFSFileSystem for SharedFs {
         self.0.root_dir()
     }
     async fn lookup(&self, d: fileid3, f: &filename3) -> Result<fileid3, nfsstat3> {
-        self.0.lookup(d, f).await
+        stats::timed_async(FsOp::Lookup, self.0.lookup(d, f)).await
     }
     async fn getattr(&self, id: fileid3) -> Result<fattr3, nfsstat3> {
-        self.0.getattr(id).await
+        stats::timed_async(FsOp::Getattr, self.0.getattr(id)).await
     }
     async fn setattr(&self, id: fileid3, a: sattr3) -> Result<fattr3, nfsstat3> {
-        self.0.setattr(id, a).await
+        stats::timed_async(FsOp::Setattr, self.0.setattr(id, a)).await
     }
     async fn read(&self, id: fileid3, o: u64, c: u32) -> Result<(Vec<u8>, bool), nfsstat3> {
-        self.0.read(id, o, c).await
+        stats::timed_async(FsOp::Read, self.0.read(id, o, c)).await
     }
     async fn write(&self, id: fileid3, o: u64, d: &[u8]) -> Result<fattr3, nfsstat3> {
-        self.0.write(id, o, d).await
+        stats::timed_async(FsOp::Write, self.0.write(id, o, d)).await
     }
     async fn create(
         &self,
@@ -581,16 +582,16 @@ impl NFSFileSystem for SharedFs {
         f: &filename3,
         a: sattr3,
     ) -> Result<(fileid3, fattr3), nfsstat3> {
-        self.0.create(d, f, a).await
+        stats::timed_async(FsOp::Create, self.0.create(d, f, a)).await
     }
     async fn create_exclusive(&self, d: fileid3, f: &filename3) -> Result<fileid3, nfsstat3> {
-        self.0.create_exclusive(d, f).await
+        stats::timed_async(FsOp::Create, self.0.create_exclusive(d, f)).await
     }
     async fn mkdir(&self, d: fileid3, f: &filename3) -> Result<(fileid3, fattr3), nfsstat3> {
-        self.0.mkdir(d, f).await
+        stats::timed_async(FsOp::Mkdir, self.0.mkdir(d, f)).await
     }
     async fn remove(&self, d: fileid3, f: &filename3) -> Result<(), nfsstat3> {
-        self.0.remove(d, f).await
+        stats::timed_async(FsOp::Unlink, self.0.remove(d, f)).await
     }
     async fn rename(
         &self,
@@ -599,7 +600,7 @@ impl NFSFileSystem for SharedFs {
         td: fileid3,
         tf: &filename3,
     ) -> Result<(), nfsstat3> {
-        self.0.rename(fd, ff, td, tf).await
+        stats::timed_async(FsOp::Rename, self.0.rename(fd, ff, td, tf)).await
     }
     async fn readdir(
         &self,
@@ -607,7 +608,7 @@ impl NFSFileSystem for SharedFs {
         after: fileid3,
         max: usize,
     ) -> Result<ReadDirResult, nfsstat3> {
-        self.0.readdir(d, after, max).await
+        stats::timed_async(FsOp::Readdir, self.0.readdir(d, after, max)).await
     }
     async fn symlink(
         &self,
@@ -616,10 +617,10 @@ impl NFSFileSystem for SharedFs {
         t: &nfspath3,
         a: &sattr3,
     ) -> Result<(fileid3, fattr3), nfsstat3> {
-        self.0.symlink(d, l, t, a).await
+        stats::timed_async(FsOp::Symlink, self.0.symlink(d, l, t, a)).await
     }
     async fn readlink(&self, id: fileid3) -> Result<nfspath3, nfsstat3> {
-        self.0.readlink(id).await
+        stats::timed_async(FsOp::Readlink, self.0.readlink(id)).await
     }
 }
 
