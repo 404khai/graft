@@ -14,6 +14,7 @@ worth reading before its numbers.
 | `linux-x86_64-xfs-workloads/` | In-graft workloads, reflink and FUSE | Phase 8 baseline, run 42113580319 |
 | `linux-x86_64-ext4-workloads/` | In-graft workloads, reflink (copy fallback) and FUSE | Phase 8 baseline, run 42113580319 |
 | `macos-arm64-apfs-workloads/` | In-graft workloads, reflink and NFS | Phase 8 baseline, run 42113580319 |
+| `linux-x86_64-btrfs-netcup/` | Create matrix and in-graft workloads, reflink and FUSE, on btrfs | netcup VPS (4 shared vCPUs), `main` cd964c4; see its NOTE.md |
 | `profiles/` | `graft new` step timings against a worktree, and notes | Profile run 42180527426 |
 | `nfs-backend/` | NFS against reflink on macOS (small-medium and large) | Phase 7, run 41999454838 |
 
