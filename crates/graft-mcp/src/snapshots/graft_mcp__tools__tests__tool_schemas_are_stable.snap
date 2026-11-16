@@ -105,6 +105,26 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
   },
   {
     "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "readOnlyHint": false,
+      "title": "Diagnose Graft"
+    },
+    "description": "Check whether this machine can run grafts, as JSON {version, healthy, platform, repository, repository_filesystem, reflink, graft_home, config, fuse, nfs_client, sandbox, ...}: call it first when a tool fails in a way its error does not explain (a backend that will not mount, copies instead of reflinks, a sandbox that will not start). healthy is false only when Graft cannot work at all, and then the call is a tool error with the same JSON. With report: true it also writes a diagnostics bundle for a bug report (doctor's findings, Roots and their integrity, graftd's status and recent log lines, crash files; secret-looking values redacted) under Graft's home and returns its path as report: give that path to the user, do not paste its contents, since it names paths on their machine.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "report": {
+          "description": "Also write a diagnostics bundle and return its path.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "graft_doctor"
+  },
+  {
+    "annotations": {
       "readOnlyHint": true,
       "title": "Show a graft's changes"
     },

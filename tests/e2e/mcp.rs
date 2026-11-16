@@ -200,6 +200,7 @@ fn an_agent_runs_the_whole_cycle_over_mcp() {
             "graft_new",
             "graft_list",
             "graft_path",
+            "graft_doctor",
             "graft_status",
             "graft_diff",
             "graft_run",
@@ -783,4 +784,22 @@ fn refusals_have_codes_and_dry_runs_predict_them() {
     .unwrap();
     assert_eq!(pruned, json!({"name": "b", "pruned": true}));
     c.ok("graft_prune", json!({"name": "a"}));
+}
+
+/// An agent can diagnose the machine and hand the user a bug-report bundle.
+#[test]
+fn doctor_over_mcp_reports_and_writes_a_bundle() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = git_repo();
+    let mut c = Client::start(home.path(), repo.path());
+    let v: Value = serde_json::from_str(&c.ok("graft_doctor", json!({}))).unwrap();
+    assert_eq!(v["healthy"], true);
+    assert!(v["reflink"].is_string(), "{v}");
+    assert!(v.get("report").is_none());
+
+    let v: Value = serde_json::from_str(&c.ok("graft_doctor", json!({"report": true}))).unwrap();
+    let path = std::path::PathBuf::from(v["report"].as_str().unwrap());
+    assert!(path.starts_with(home.path().join("reports")), "{path:?}");
+    let b: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(b["doctor"]["healthy"], true);
 }
