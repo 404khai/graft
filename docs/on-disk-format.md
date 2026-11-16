@@ -1,6 +1,6 @@
 # On-disk format
 
-**Format version: 15** (metadata schema v10)
+**Format version: 16** (metadata schema v10)
 
 This file describes everything Graft persists. Any change to a structure
 below bumps the format version, adds a migration, and updates this file in
@@ -28,7 +28,9 @@ $GRAFT_HOME/
 ├── run/                        mode 0700, graftd's runtime files (ADR 0007)
 │   ├── graftd.sock             JSON-RPC socket, mode 0600 (see `run/` below)
 │   ├── graftd.lock             OS file lock held by the running graftd
-│   └── graftd.log              graftd's stderr when started by the CLI
+│   ├── graftd.log              graftd's stderr when started by the CLI
+│   └── graftd.log.1            the previous log, moved aside at 8 MiB when
+│                               graftd starts (ADR 0031)
 └── roots/
     └── <root-id>/              one directory per Root, mode 0700
         ├── graft.db            SQLite metadata (+ graft.db-wal, graft.db-shm)
@@ -89,6 +91,7 @@ Entries in `roots/` whose name is not a valid Root ID, or that contain no
 | 13 | Adds `logs/layer-<layer-key>.log` (layer build output); an `integrate/` scratch checkout may outlive one request within a queue run (ADR 0021) | None: additive; layers built before v13 simply have no log, and Graft never reads the logs |
 | 14 | Adds `mounts/.trash-<graft-id>/` (a pruned reflink graft's tree awaiting background deletion) and `trash.lock` (ADR 0028) | None: additive; v13 never created them, and older binaries never list `mounts/`, so they leave them in place |
 | 15 | Adds `crashes/<binary>-<ms>-<pid>.txt` (panic details) and `reports/report-<ms>.json` (diagnostics bundles; ADR 0030) | None: additive; Graft only reads them back to build a new report, and either directory may be deleted at any time |
+| 16 | Adds `run/graftd.log.1` (ADR 0031) | None: additive; never read by Graft except into a report |
 
 ## `config.toml`
 

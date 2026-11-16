@@ -35,7 +35,9 @@ object ([ADR 0025](decisions/0025-mcp-errors-for-agents.md)):
 | `failed` | Anything else; see `message` and `output`. |
 
 `hint`, when not null, is the next step (it is not repeated in
-`message`). `output` is what the command printed besides the error.
+`message`). `output` is what the command printed besides the error. `request_id`
+(`mcp-<pid>-<n>`) is the ID the call ran with; graftd's log lines for it
+carry `request=<id>`, so quote it in a bug report ([ADR 0031](decisions/0031-request-ids-and-log-rotation.md)).
 
 Every successful call returns JSON too (except `graft_diff`, a unified diff), described with each tool below;
 `graft_list` and `graft_status` start with the `root` and `version` they
