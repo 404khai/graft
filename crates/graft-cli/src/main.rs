@@ -10,6 +10,7 @@ mod blueprints;
 mod daemon;
 mod diagnostics;
 mod doctor;
+mod fsck;
 mod grafts;
 mod integrate;
 mod layers;
@@ -109,6 +110,9 @@ enum Command {
     Mcp(McpArgs),
     /// Report platform, filesystem, reflink and FUSE/NFS support.
     Doctor(doctor::Args),
+    /// Check this Root's stored state: database, op log replay, blobs,
+    /// layers and working trees. Read-only.
+    Fsck(fsck::Args),
 }
 
 /// Arguments for `graft mcp`.
@@ -267,6 +271,7 @@ fn run() -> anyhow::Result<ExitCode> {
             (Output::default(), ExitCode::SUCCESS)
         }
         Command::Doctor(args) => doctor::run(&args, &env)?,
+        Command::Fsck(args) => fsck::run(&args, &env)?,
     };
     {
         let mut stderr = std::io::stderr().lock();
