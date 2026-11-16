@@ -148,7 +148,7 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
       "readOnlyHint": false,
       "title": "Run a command in a graft"
     },
-    "description": "Run a command confined to a graft: it can only write inside the graft (and its private TMPDIR), with the graft's blueprint environment. The command is an argument list, not a shell line. Returns JSON {exit_code, signal, stdout, stderr, duration_ms, timed_out}; a non-zero exit, a signal or a timeout is a tool error with code command_failed or timed_out and the same fields.",
+    "description": "Run a command confined to a graft: it can only write inside the graft (and its private TMPDIR), with the graft's blueprint environment. The command is an argument list, not a shell line; in [\"sh\", \"-c\", ...] a pipeline's status is its last command's, so use set -o pipefail. Returns JSON {exit_code, signal, stdout, stderr, duration_ms, timed_out, sandbox}; a non-zero exit, a signal or a timeout is a tool error with code command_failed or timed_out and the same fields. On a failure, sandbox is {denied, hint}: denied lists the paths outside the graft the sandbox refused writes to (macOS), so a failure the sandbox caused is not mistaken for a bug; hint says how to allow them.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -160,6 +160,10 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
           "minItems": 1,
           "type": "array"
         },
+        "dev_caches": {
+          "description": "Also make toolchain caches writable: on macOS the per-user cache and temp directories (clang module cache, xcrun) and SwiftPM's caches; on Linux ~/.cache. Shared with other runs, so off by default.",
+          "type": "boolean"
+        },
         "name": {
           "description": "Graft name: lowercase letters, digits and hyphens, at most 40 characters.",
           "type": "string"
@@ -169,6 +173,13 @@ expression: "serde_json::to_string_pretty(&all).unwrap()"
           "maximum": 86400,
           "minimum": 1,
           "type": "integer"
+        },
+        "write": {
+          "description": "Absolute paths outside the graft to make writable for this run only, e.g. a tool's cache.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [

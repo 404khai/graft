@@ -128,13 +128,15 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_run",
             "Run a command in a graft",
-            "Run a command confined to a graft: it can only write inside the graft (and its private TMPDIR), with the graft's blueprint environment. The command is an argument list, not a shell line. Returns JSON {exit_code, signal, stdout, stderr, duration_ms, timed_out}; a non-zero exit, a signal or a timeout is a tool error with code command_failed or timed_out and the same fields.",
+            "Run a command confined to a graft: it can only write inside the graft (and its private TMPDIR), with the graft's blueprint environment. The command is an argument list, not a shell line; in [\"sh\", \"-c\", ...] a pipeline's status is its last command's, so use set -o pipefail. Returns JSON {exit_code, signal, stdout, stderr, duration_ms, timed_out, sandbox}; a non-zero exit, a signal or a timeout is a tool error with code command_failed or timed_out and the same fields. On a failure, sandbox is {denied, hint}: denied lists the paths outside the graft the sandbox refused writes to (macOS), so a failure the sandbox caused is not mistaken for a bug; hint says how to allow them.",
             json!({
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": NAME},
                     "command": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Program and arguments, e.g. [\"cargo\", \"test\"]."},
-                    "timeout_secs": {"type": "integer", "minimum": 1, "maximum": 86400, "description": "Kill it after this many seconds (default 600)."}
+                    "timeout_secs": {"type": "integer", "minimum": 1, "maximum": 86400, "description": "Kill it after this many seconds (default 600)."},
+                    "write": {"type": "array", "items": {"type": "string"}, "description": "Absolute paths outside the graft to make writable for this run only, e.g. a tool's cache."},
+                    "dev_caches": {"type": "boolean", "description": "Also make toolchain caches writable: on macOS the per-user cache and temp directories (clang module cache, xcrun) and SwiftPM's caches; on Linux ~/.cache. Shared with other runs, so off by default."}
                 },
                 "required": ["name", "command"],
                 "additionalProperties": false
@@ -431,7 +433,19 @@ pub fn invocation(name: &str, args: &JsonObject) -> Result<Invocation, String> {
         }
         "graft_diff" => a.extend(["diff".to_owned(), required(args, "name")?]),
         "graft_run" => {
-            a.extend(["run".to_owned(), required(args, "name")?, "--".to_owned()]);
+            a.extend(["run".to_owned(), required(args, "name")?]);
+            if args.contains_key("write") {
+                for p in strings(args, "write")? {
+                    if !p.starts_with('/') {
+                        return Err("write paths must be absolute".to_owned());
+                    }
+                    a.push(format!("--write={p}"));
+                }
+            }
+            if flag(args, "dev_caches")? {
+                a.push("--dev-caches".to_owned());
+            }
+            a.push("--".to_owned());
             a.extend(strings(args, "command")?);
             if let Some(t) = args.get("timeout_secs") {
                 let secs = t
@@ -557,6 +571,14 @@ mod tests {
             ["ls", "--json"]
         );
         assert_eq!(
+            call(
+                "graft_run",
+                json!({"name": "a", "command": ["swift", "test"], "write": ["/x/cache"], "dev_caches": true})
+            )
+            .unwrap(),
+            ["run", "a", "--write=/x/cache", "--dev-caches", "--", "swift", "test"]
+        );
+        assert_eq!(
             call("graft_radar", json!({"check": true})).unwrap(),
             ["radar", "--json", "--check"]
         );
@@ -630,6 +652,11 @@ mod tests {
                 "graft_new",
                 json!({"name": "a", "clone_ignored": ["a,b"]}),
                 "must not contain ','",
+            ),
+            (
+                "graft_run",
+                json!({"name": "a", "command": ["x"], "write": ["rel"]}),
+                "must be absolute",
             ),
             (
                 "graft_run",

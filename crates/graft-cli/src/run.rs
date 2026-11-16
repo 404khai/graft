@@ -28,6 +28,13 @@ pub(crate) struct RunArgs {
     /// Also allow writes below this absolute path, for this run only.
     #[arg(long, value_name = "PATH")]
     write: Vec<PathBuf>,
+    /// Also allow writes to the toolchain caches outside the graft that
+    /// compilers and package managers need: on macOS the per-user cache
+    /// and temp directories (clang's module cache, xcrun's database) and
+    /// `SwiftPM`'s caches; on Linux `$XDG_CACHE_HOME` (`~/.cache`). Other
+    /// grafts' runs can write there too, so it is off by default.
+    #[arg(long)]
+    dev_caches: bool,
     /// The command and its arguments.
     #[arg(last = true, required = true, value_name = "COMMAND")]
     command: Vec<OsString>,
@@ -75,10 +82,207 @@ pub(crate) fn run(args: &RunArgs, env: &Environment) -> anyhow::Result<(Output, 
         );
     }
     let mut out = Output::default();
+    let mut write = args.write.clone();
+    if args.dev_caches {
+        write.extend(dev_cache_paths());
+    }
     let started = std::time::Instant::now();
-    let status = run_in(&ctx, &record, &args.write, &args.command, &mut out)?;
-    crate::agent::report_run(status, started.elapsed());
-    Ok((out, exit_code(status)))
+    let ended = run_in(&ctx, &record, &write, &args.command, &mut out)?;
+    let took = started.elapsed();
+    let sandbox = (!ended.status.success()).then(|| explain_failure(&ended, &args.command, took));
+    if let Some(s) = &sandbox {
+        out.warnings.extend(s.note());
+    }
+    crate::agent::report_run(ended.status, took, sandbox.as_ref());
+    Ok((out, exit_code(ended.status)))
+}
+
+/// How a confined command ended.
+pub(crate) struct Ended {
+    pub(crate) status: std::process::ExitStatus,
+    /// The tag its sandbox denials are logged with, where the platform
+    /// logs them.
+    tag: Option<String>,
+}
+
+/// What the sandbox may have had to do with a failed run.
+#[derive(Debug, Default)]
+pub(crate) struct SandboxReport {
+    /// Paths the sandbox refused writes to during the run (macOS).
+    pub(crate) denied: Vec<String>,
+    /// The next step to suggest, if any.
+    pub(crate) hint: Option<String>,
+}
+
+impl SandboxReport {
+    /// The lines `graft run` prints on stderr.
+    fn note(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        if !self.denied.is_empty() {
+            lines.push(format!(
+                "the sandbox refused {} write(s) outside the graft during this run: {}",
+                self.denied.len(),
+                shown(&self.denied)
+            ));
+        }
+        lines.extend(self.hint.clone());
+        lines
+    }
+}
+
+/// The first few of `paths`, joined.
+fn shown(paths: &[String]) -> String {
+    const SHOWN: usize = 5;
+    let mut s = paths
+        .iter()
+        .take(SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if paths.len() > SHOWN {
+        s.push_str(", ...");
+    }
+    s
+}
+
+/// The writable paths `--dev-caches` adds: those that exist.
+fn dev_cache_paths() -> Vec<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut paths: Vec<PathBuf> = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        // clang's module cache and xcrun's database live in these, found
+        // with confstr(3), not $TMPDIR.
+        for name in ["DARWIN_USER_CACHE_DIR", "DARWIN_USER_TEMP_DIR"] {
+            if let Ok(o) = Command::new("/usr/bin/getconf").arg(name).output()
+                && o.status.success()
+            {
+                let dir = String::from_utf8_lossy(&o.stdout).trim().to_owned();
+                if dir.starts_with('/') {
+                    paths.push(PathBuf::from(dir));
+                }
+            }
+        }
+        if let Some(h) = &home {
+            for rel in [
+                "Library/Caches/org.swift.swiftpm",
+                "Library/org.swift.swiftpm",
+                ".swiftpm",
+                "Library/Developer/Xcode/DerivedData",
+            ] {
+                paths.push(h.join(rel));
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    match std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from) {
+        Some(p) if p.is_absolute() => paths.push(p),
+        _ => paths.extend(home.map(|h| h.join(".cache"))),
+    }
+    paths.retain(|p| p.is_dir());
+    paths
+}
+
+/// Looks for the sandbox's part in a failed run: the writes it denied
+/// (macOS logs them, tagged), and a hint for what to do about them.
+fn explain_failure(
+    ended: &Ended,
+    command: &[OsString],
+    took: std::time::Duration,
+) -> SandboxReport {
+    let denied = ended
+        .tag
+        .as_deref()
+        .map(|tag| logged_denials(tag, took))
+        .unwrap_or_default();
+    let mut hint = if denied.is_empty() {
+        None
+    } else {
+        Some(crate::agent::suggest(
+            "if the command needs them, rerun with --write PATH, --dev-caches for toolchain caches, or add them to [sandbox] write in graft.toml",
+            "if the command needs them, pass write: [PATH] or dev_caches: true to graft_run, or add them to [sandbox] write in graft.toml",
+        ).to_owned())
+    };
+    if cfg!(target_os = "macos") && runs_swiftpm(command) {
+        let swift = "SwiftPM sandboxes manifests and plugins itself, which macOS refuses inside graft run's sandbox (`sandbox_apply: Operation not permitted`): pass --disable-sandbox to swift (graft run still confines it), with dev caches allowed";
+        hint = Some(match hint {
+            Some(h) => format!("{h}; {swift}"),
+            None => swift.to_owned(),
+        });
+    }
+    SandboxReport { denied, hint }
+}
+
+/// Whether `command` runs `SwiftPM`: `swift`, `swift-build` and the like,
+/// directly, through `xcrun`, or as a word of a `sh -c` script.
+fn runs_swiftpm(command: &[OsString]) -> bool {
+    command.iter().any(|arg| {
+        arg.to_string_lossy().split_whitespace().any(|word| {
+            let base = word.rsplit('/').next().unwrap_or(word);
+            base == "swift" || base.starts_with("swift-")
+        })
+    })
+}
+
+/// Paths of the writes Seatbelt denied under `tag` in the last `took`
+/// (plus a margin), from the unified log; empty where there is no log.
+fn logged_denials(tag: &str, took: std::time::Duration) -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    {
+        // The kernel logs a denial as it happens, but `log show` may not
+        // see the last ones for a moment.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let secs = took.as_secs() + 5;
+        let out = Command::new("/usr/bin/log")
+            .args(["show", "--style", "ndjson", "--last"])
+            .arg(format!("{secs}s"))
+            .arg("--predicate")
+            .arg(format!("eventMessage CONTAINS \"{tag}\""))
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output();
+        match out {
+            Ok(o) if o.status.success() => parse_denials(&String::from_utf8_lossy(&o.stdout)),
+            Ok(_) | Err(_) => Vec::new(),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (tag, took);
+        Vec::new()
+    }
+}
+
+/// Denied paths from `log show --style ndjson` lines such as
+/// `Sandbox: touch(42) deny(1) file-write-create /a b/c\n<tag>`, unique,
+/// in order.
+// Only macOS has the log; the parser is unit-tested everywhere.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn parse_denials(ndjson: &str) -> Vec<String> {
+    let mut paths: Vec<String> = Vec::new();
+    for line in ndjson.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(msg) = v["eventMessage"].as_str() else {
+            continue;
+        };
+        let first = msg.lines().next().unwrap_or_default();
+        let Some(at) = first.find(" deny(") else {
+            continue;
+        };
+        let rest = &first[at + 1..];
+        // `deny(N) <operation> <path>`; the path may contain spaces.
+        let mut parts = rest.splitn(3, ' ');
+        let (_, op, path) = (parts.next(), parts.next(), parts.next());
+        if let (Some(op), Some(path)) = (op, path)
+            && op.starts_with("file-write")
+            && !paths.iter().any(|p| p == path)
+        {
+            paths.push(path.to_owned());
+        }
+    }
+    paths
 }
 
 /// Runs `command` confined to graft `record`, with its blueprint's
@@ -89,7 +293,7 @@ pub(crate) fn run_in(
     extra_write: &[PathBuf],
     command: &[OsString],
     out: &mut Output,
-) -> anyhow::Result<std::process::ExitStatus> {
+) -> anyhow::Result<Ended> {
     let name = &record.name;
     // Extra paths from graft.toml at the base must be approved.
     let spec = sandbox_at(&ctx.located.repo, &record.base_commit)?;
@@ -142,9 +346,9 @@ pub(crate) fn run_in(
     create_private_dir(&tmp)?;
     let mut writable = vec![graft_dir.clone(), tmp.clone()];
     writable.extend(extra);
-    let policy = Policy::new(&writable)?;
-
     let session = GraftId::random()?.to_string();
+    let policy = Policy::new(&writable)?.tagged(&format!("graft-run-{session}"));
+
     let cwd = std::env::current_dir()
         .ok()
         .and_then(|d| d.canonicalize().ok())
@@ -185,7 +389,10 @@ pub(crate) fn run_in(
                 .push(format!("could not clear the op log actor {actor}: {e}"));
         }
     }
-    Ok(status)
+    Ok(Ended {
+        status,
+        tag: policy.tag().map(str::to_owned),
+    })
 }
 
 /// Runs shell command `script` confined to scratch checkout `dir`, with
@@ -300,4 +507,43 @@ pub(crate) fn confine(args: &ConfineArgs) -> anyhow::Result<ExitCode> {
     let (program, rest) = args.command.split_first().context("no command")?;
     let err = Command::new(program).args(rest).exec();
     bail!("running {}: {err}", program.to_string_lossy())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn denials_are_parsed_from_the_unified_log() {
+        let log = [
+            r#"{"eventMessage":"Sandbox: touch(42) deny(1) file-write-create /Users/a/Library/Caches/x y\ngraft-run-t"}"#,
+            r#"{"eventMessage":"Sandbox: clang(43) deny(3) file-write-data /var/folders/c0/C/clang/ModuleCache\ngraft-run-t"}"#,
+            r#"{"eventMessage":"Sandbox: touch(44) deny(1) file-write-create /Users/a/Library/Caches/x y\ngraft-run-t"}"#,
+            r#"{"eventMessage":"Sandbox: cat(45) deny(1) file-read-data /secret\ngraft-run-t"}"#,
+            r#"{"eventMessage":"log run noninteractively"}"#,
+            "not json",
+        ]
+        .join("\n");
+        assert_eq!(
+            parse_denials(&log),
+            [
+                "/Users/a/Library/Caches/x y",
+                "/var/folders/c0/C/clang/ModuleCache"
+            ]
+        );
+    }
+
+    #[test]
+    fn swiftpm_commands_are_recognised() {
+        let cmd = |a: &[&str]| a.iter().map(OsString::from).collect::<Vec<_>>();
+        assert!(runs_swiftpm(&cmd(&["swift", "test"])));
+        assert!(runs_swiftpm(&cmd(&["xcrun", "swift-build"])));
+        assert!(runs_swiftpm(&cmd(&[
+            "sh",
+            "-c",
+            "cd pkg && /usr/bin/swift test | tail"
+        ])));
+        assert!(!runs_swiftpm(&cmd(&["cargo", "test", "swiftly"])));
+        assert!(!runs_swiftpm(&cmd(&["echo", "swifty"])));
+    }
 }

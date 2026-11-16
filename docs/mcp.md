@@ -115,13 +115,15 @@ Show a graft's changes as a unified diff. (read-only)
 
 ### `graft_run`
 
-Run a command confined to a graft: it can only write inside the graft (and its private TMPDIR), with the graft's blueprint environment. The command is an argument list, not a shell line. Returns JSON {exit_code, signal, stdout, stderr, duration_ms, timed_out}; a non-zero exit, a signal or a timeout is a tool error with code command_failed or timed_out and the same fields.
+Run a command confined to a graft: it can only write inside the graft (and its private TMPDIR), with the graft's blueprint environment. The command is an argument list, not a shell line; in ["sh", "-c", ...] a pipeline's status is its last command's, so use set -o pipefail. Returns JSON {exit_code, signal, stdout, stderr, duration_ms, timed_out, sandbox}; a non-zero exit, a signal or a timeout is a tool error with code command_failed or timed_out and the same fields. On a failure, sandbox is {denied, hint}: denied lists the paths outside the graft the sandbox refused writes to (macOS), so a failure the sandbox caused is not mistaken for a bug; hint says how to allow them.
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `command` | array of string | yes | Program and arguments, e.g. ["cargo", "test"]. |
+| `dev_caches` | boolean | no | Also make toolchain caches writable: on macOS the per-user cache and temp directories (clang module cache, xcrun) and SwiftPM's caches; on Linux ~/.cache. Shared with other runs, so off by default. |
 | `name` | string | yes | Graft name: lowercase letters, digits and hyphens, at most 40 characters. |
 | `timeout_secs` | integer | no | Kill it after this many seconds (default 600). |
+| `write` | array of string | no | Absolute paths outside the graft to make writable for this run only, e.g. a tool's cache. |
 
 ### `graft_bud`
 
