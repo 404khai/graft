@@ -31,7 +31,9 @@ history.
   checkout, `cargo install --locked --path crates/graft-cli` and
   `--path crates/graft-daemon` (graftd serves virtual grafts).
 
-`graft doctor` reports what this machine supports.
+`graft doctor` reports what this machine supports. When reporting a bug,
+attach the file `graft doctor --report` writes (read it first: it names
+paths on your machine).
 
 ## Try it
 

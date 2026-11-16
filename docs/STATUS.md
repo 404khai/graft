@@ -242,10 +242,12 @@ Follow-up from the Astrid field report (`reports/graft_report_astrid.md`): `graf
 
 Follow-up from the Astrid field report (`reports/graft_report_astrid.md`, ADR 0029): a failed `graft run` on macOS names the writes the sandbox refused (`sandbox: {denied, hint}` in `graft_run`), read from Seatbelt's log by a per-run tag; `--dev-caches` (`dev_caches`) makes toolchain caches writable; `graft_run` takes `write`; a failed SwiftPM run explains that SwiftPM's own sandbox cannot nest and suggests `--disable-sandbox`. A Swift package's `swift test` now passes inside `graft run`.
 
+Diagnostics (ADR 0030, `feat/diagnostics-report`): `graft doctor --json`; `graft doctor --report` (`--report-to FILE`) writes one redacted JSON bundle for bug reports (findings, Roots with schema version and integrity, graftd status and log tail, crash files); `graft` and `graftd` write panics to `$GRAFT_HOME/crashes/`; `graft_doctor` exposes both over MCP. Follow-ups: request IDs across CLI, graftd and op log; graftd log rotation; `graft fsck`; `graft stats`.
+
 - [x] An MCP client test harness can run the full cycle: plan → new → run → radar → integrate → prune.
   - `an_agent_runs_the_whole_cycle_over_mcp` drives `graft mcp` with raw JSON-RPC over stdio: plan, two grafts, `graft_run` edits (and a refused write outside the graft), Radar as a tool, a resource and a subscription (`notifications/resources/updated` arrives), a dry-run and a real integrate, and prunes.
 - [x] Tool schemas are documented and covered by snapshot tests.
-  - `tool_schemas_are_stable` (insta) pins all fourteen schemas; `docs/mcp.md` is generated from them.
+  - `tool_schemas_are_stable` (insta) pins every tool schema; `docs/mcp.md` is generated from them.
 - [x] Destructive tools refuse without confirmation.
   - `graft_integrate` (unless `dry_run`) and `graft_prune` with `force` return a tool error asking for `confirm: true`; unit tests and the end-to-end cycle check both.
 
