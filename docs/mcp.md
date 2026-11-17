@@ -97,6 +97,14 @@ The absolute path of a graft's working tree, as JSON {name, path}. Run shell com
 | --- | --- | --- | --- |
 | `name` | string | yes | Graft name: lowercase letters, digits and hyphens, at most 40 characters. |
 
+### `graft_doctor`
+
+Check whether this machine can run grafts, as JSON {version, healthy, platform, repository, repository_filesystem, reflink, graft_home, config, fuse, nfs_client, sandbox, ...}: call it first when a tool fails in a way its error does not explain (a backend that will not mount, copies instead of reflinks, a sandbox that will not start). healthy is false only when Graft cannot work at all, and then the call is a tool error with the same JSON. With report: true it also writes a diagnostics bundle for a bug report (doctor's findings, Roots and their integrity, graftd's status and recent log lines, crash files; secret-looking values redacted) under Graft's home and returns its path as report: give that path to the user, do not paste its contents, since it names paths on their machine. (idempotent)
+
+| Parameter | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `report` | boolean | no | Also write a diagnostics bundle and return its path. |
+
 ### `graft_status`
 
 Show what changed in a graft since its base, as JSON {root, version, grafts: [...]}, each with its changes ({kind: A|M|D|..., path}). Without name, every graft. (read-only)

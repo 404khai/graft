@@ -8,6 +8,7 @@
 mod agent;
 mod blueprints;
 mod daemon;
+mod diagnostics;
 mod doctor;
 mod grafts;
 mod integrate;
@@ -195,6 +196,9 @@ fn run() -> anyhow::Result<ExitCode> {
     let cli = Cli::parse();
     let env = Environment::load();
     init_logging(env.config.as_ref().and_then(|c| c.as_ref().ok()));
+    if let Ok(home) = &env.home {
+        graft_core::crash::install_panic_hook(home, "graft", env!("CARGO_PKG_VERSION"));
+    }
 
     let ok = |r: anyhow::Result<Output>| r.map(|o| (o, ExitCode::SUCCESS));
     let (output, code) = match cli.command {
@@ -241,10 +245,7 @@ fn run() -> anyhow::Result<ExitCode> {
             graft_mcp::serve_stdio(bin, cwd).map_err(|e| anyhow::anyhow!("MCP server: {e}"))?;
             (Output::default(), ExitCode::SUCCESS)
         }
-        Command::Doctor(args) => {
-            let (stdout, code) = doctor::run(&args, &env);
-            (Output::stdout(stdout), code)
-        }
+        Command::Doctor(args) => doctor::run(&args, &env)?,
     };
     {
         let mut stderr = std::io::stderr().lock();

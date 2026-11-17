@@ -103,6 +103,20 @@ pub fn tools() -> Vec<Tool> {
             read_only(),
         ),
         tool(
+            "graft_doctor",
+            "Diagnose Graft",
+            "Check whether this machine can run grafts, as JSON {version, healthy, platform, repository, repository_filesystem, reflink, graft_home, config, fuse, nfs_client, sandbox, ...}: call it first when a tool fails in a way its error does not explain (a backend that will not mount, copies instead of reflinks, a sandbox that will not start). healthy is false only when Graft cannot work at all, and then the call is a tool error with the same JSON. With report: true it also writes a diagnostics bundle for a bug report (doctor's findings, Roots and their integrity, graftd's status and recent log lines, crash files; secret-looking values redacted) under Graft's home and returns its path as report: give that path to the user, do not paste its contents, since it names paths on their machine.",
+            json!({
+                "type": "object",
+                "properties": {"report": {"type": "boolean", "description": "Also write a diagnostics bundle and return its path."}},
+                "additionalProperties": false
+            }),
+            ToolAnnotations::new()
+                .read_only(false)
+                .destructive(false)
+                .idempotent(true),
+        ),
+        tool(
             "graft_status",
             "Show a graft's changes",
             "Show what changed in a graft since its base, as JSON {root, version, grafts: [...]}, each with its changes ({kind: A|M|D|..., path}). Without name, every graft.",
@@ -408,6 +422,12 @@ pub fn invocation(name: &str, args: &JsonObject) -> Result<Invocation, String> {
             "--json".to_owned(),
             required(args, "name")?,
         ]),
+        "graft_doctor" => {
+            a.extend(["doctor".to_owned(), "--json".to_owned()]);
+            if flag(args, "report")? {
+                a.push("--report".to_owned());
+            }
+        }
         "graft_new" => {
             a.extend(["new".to_owned(), required(args, "name")?]);
             option(a, "--from", word(args, "from")?);
@@ -558,6 +578,14 @@ mod tests {
             ["run", "a", "--", "sh", "-c", "echo $HOME"]
         );
         assert_eq!(call("graft_init", json!({})).unwrap(), ["init", "--json"]);
+        assert_eq!(
+            call("graft_doctor", json!({})).unwrap(),
+            ["doctor", "--json"]
+        );
+        assert_eq!(
+            call("graft_doctor", json!({"report": true})).unwrap(),
+            ["doctor", "--json", "--report"]
+        );
         assert_eq!(
             call("graft_path", json!({"name": "a"})).unwrap(),
             ["path", "--json", "a"]

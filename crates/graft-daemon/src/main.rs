@@ -33,6 +33,7 @@ fn run() -> anyhow::Result<ExitCode> {
         Some(p) => GraftHome::from_path(p)?,
         None => GraftHome::resolve()?,
     };
+    graft_core::crash::install_panic_hook(&home, "graftd", env!("CARGO_PKG_VERSION"));
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
