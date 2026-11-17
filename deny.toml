@@ -9,7 +9,13 @@ all-features = true
 # only with a linked justification.
 unmaintained = "all"
 yanked = "deny"
-ignore = []
+ignore = [
+  # chrono is unmaintained (no vulnerability). Only rmcp, the official MCP
+  # SDK, uses it, unconditionally (and through schemars); there is no
+  # release without it and no fixed version. Remove when rmcp drops chrono:
+  # https://github.com/chronotope/chrono/issues/1768
+  { id = "RUSTSEC-2026-0543", reason = "unmaintained, not vulnerable; only via rmcp, no alternative yet" },
+]
 
 [licenses]
 # Permissive licenses only. Anything else needs a deliberate decision.
