@@ -203,6 +203,7 @@ fn an_agent_runs_the_whole_cycle_over_mcp() {
             "graft_doctor",
             "graft_fsck",
             "graft_stats",
+            "graft_telemetry",
             "graft_status",
             "graft_diff",
             "graft_run",
@@ -841,4 +842,26 @@ fn stats_over_mcp_without_a_daemon() {
     let mut c = Client::start(home.path(), repo.path());
     let v: Value = serde_json::from_str(&c.ok("graft_stats", json!({}))).unwrap();
     assert_eq!(v, json!({"running": false}));
+}
+
+/// An agent can read and turn off telemetry, and turn it on only with
+/// `confirm` (the user asked).
+#[test]
+fn telemetry_over_mcp_needs_confirmation_to_turn_on() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = git_repo();
+    let mut c = Client::start(home.path(), repo.path());
+    let v: Value = serde_json::from_str(&c.ok("graft_telemetry", json!({}))).unwrap();
+    assert_eq!(v["consent"], false, "{v}");
+    let e = error_of(&mut c, "graft_telemetry", json!({"action": "on"}));
+    assert_eq!(e["code"], "confirm_required", "{e}");
+    assert!(!home.path().join("telemetry/consent").exists());
+    let v: Value =
+        serde_json::from_str(&c.ok("graft_telemetry", json!({"action": "on", "confirm": true})))
+            .unwrap();
+    assert_eq!(v["consent"], true, "{v}");
+    assert!(v["collects"].as_str().unwrap().contains("Never arguments"));
+    let v: Value =
+        serde_json::from_str(&c.ok("graft_telemetry", json!({"action": "off"}))).unwrap();
+    assert_eq!(v["consent"], false, "{v}");
 }

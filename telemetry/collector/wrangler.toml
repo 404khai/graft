@@ -1,0 +1,14 @@
+# Graft's telemetry collector (ADR 0035). Deploy steps: README.md.
+name = "graft-telemetry"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+
+# Never keep request logs: they would hold IP addresses.
+[observability]
+enabled = false
+
+[[d1_databases]]
+binding = "DB"
+database_name = "graft-telemetry"
+# Filled in from `wrangler d1 create graft-telemetry` (README step 3).
+database_id = "REPLACE_WITH_YOUR_DATABASE_ID"

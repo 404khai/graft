@@ -35,6 +35,12 @@ history.
 attach the file `graft doctor --report` writes (read it first: it names
 paths on your machine).
 
+Graft sends no telemetry unless you opt in with `graft telemetry on`, and
+even then only to an endpoint you set in `config.toml`; there is no
+default. `graft telemetry show` prints exactly what would be sent:
+command names, outcomes and error codes, coarse durations, version and
+platform. Never arguments, names, paths or identifiers.
+
 ## Try it
 
 ```sh

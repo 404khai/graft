@@ -12,6 +12,11 @@
 //! # Backend for new grafts: "reflink", "fuse" (Linux) or "nfs" (macOS). `$GRAFT_FS` and
 //! # `graft new --backend` override it.
 //! backend = "reflink"
+//!
+//! [telemetry]
+//! # Where opted-in usage events are sent (ADR 0034). There is no default:
+//! # without it, nothing is ever sent, even after `graft telemetry on`.
+//! endpoint = "https://telemetry.example.com/v1/events"
 //! ```
 
 use std::io::ErrorKind;
@@ -34,6 +39,18 @@ pub struct Config {
     pub log: LogConfig,
     /// Filesystem backend settings.
     pub fs: FsConfig,
+    /// Opt-in telemetry settings.
+    pub telemetry: TelemetryConfig,
+}
+
+/// The `[telemetry]` table. Sending also needs the user's opt-in
+/// (`graft telemetry on`); this only says where to.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TelemetryConfig {
+    /// URL that receives batches of events. `https`, or `http` to a
+    /// loopback address. `None`: nothing is sent.
+    pub endpoint: Option<String>,
 }
 
 /// The `[fs]` table.
