@@ -1,6 +1,6 @@
 # On-disk format
 
-**Format version: 16** (metadata schema v10)
+**Format version: 17** (metadata schema v10)
 
 This file describes everything Graft persists. Any change to a structure
 below bumps the format version, adds a migration, and updates this file in
@@ -21,6 +21,12 @@ path never creates anything; only commands that write state do.
 ```
 $GRAFT_HOME/
 ├── config.toml                 optional user config
+├── telemetry/                  only after `graft telemetry on` (ADR 0034)
+│   ├── consent                 present while opted in
+│   ├── queue.jsonl             queued events, one JSON object per line
+│   ├── sending.jsonl           a batch being uploaded
+│   ├── last-sent               time of the last upload attempt
+│   └── send.lock               held by the one sender
 ├── crashes/                    a text file per panic of graft or graftd,
 │                               newest 20 kept (ADR 0030)
 ├── reports/                    mode 0700, `graft doctor --report` bundles,
@@ -92,6 +98,7 @@ Entries in `roots/` whose name is not a valid Root ID, or that contain no
 | 14 | Adds `mounts/.trash-<graft-id>/` (a pruned reflink graft's tree awaiting background deletion) and `trash.lock` (ADR 0028) | None: additive; v13 never created them, and older binaries never list `mounts/`, so they leave them in place |
 | 15 | Adds `crashes/<binary>-<ms>-<pid>.txt` (panic details) and `reports/report-<ms>.json` (diagnostics bundles; ADR 0030) | None: additive; Graft only reads them back to build a new report, and either directory may be deleted at any time |
 | 16 | Adds `run/graftd.log.1` (ADR 0031) | None: additive; never read by Graft except into a report |
+| 17 | Adds `telemetry/` (ADR 0034) | None: additive; created only on opt-in, deleted on opt-out |
 
 ## `config.toml`
 
