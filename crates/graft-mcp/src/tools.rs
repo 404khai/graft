@@ -117,6 +117,17 @@ pub fn tools() -> Vec<Tool> {
                 .idempotent(true),
         ),
         tool(
+            "graft_fsck",
+            "Check Root's stored state",
+            "Check this Root's stored state without changing anything: the database, that each virtual graft's op log replays to its delta exactly, that referenced blobs exist and match their hashes, that layers and reflink working trees exist, and that mounts/ holds nothing stray. Returns JSON {root, ok, checked, findings: [{severity: error|warning, check, graft, message, hint}]}; any error makes it a tool error with code fsck_failed and the same JSON in output. Call it when a graft's files, status or diff look wrong; before pruning or integrating a graft it flags, tell the user.",
+            json!({
+                "type": "object",
+                "properties": {"quick": {"type": "boolean", "description": "Check that blobs exist without re-hashing them (faster on large deltas)."}},
+                "additionalProperties": false
+            }),
+            read_only(),
+        ),
+        tool(
             "graft_status",
             "Show a graft's changes",
             "Show what changed in a graft since its base, as JSON {root, version, grafts: [...]}, each with its changes ({kind: A|M|D|..., path}). Without name, every graft.",
@@ -428,6 +439,12 @@ pub fn invocation(name: &str, args: &JsonObject) -> Result<Invocation, String> {
                 a.push("--report".to_owned());
             }
         }
+        "graft_fsck" => {
+            a.extend(["fsck".to_owned(), "--json".to_owned()]);
+            if flag(args, "quick")? {
+                a.push("--quick".to_owned());
+            }
+        }
         "graft_new" => {
             a.extend(["new".to_owned(), required(args, "name")?]);
             option(a, "--from", word(args, "from")?);
@@ -578,6 +595,10 @@ mod tests {
             ["run", "a", "--", "sh", "-c", "echo $HOME"]
         );
         assert_eq!(call("graft_init", json!({})).unwrap(), ["init", "--json"]);
+        assert_eq!(
+            call("graft_fsck", json!({"quick": true})).unwrap(),
+            ["fsck", "--json", "--quick"]
+        );
         assert_eq!(
             call("graft_doctor", json!({})).unwrap(),
             ["doctor", "--json"]

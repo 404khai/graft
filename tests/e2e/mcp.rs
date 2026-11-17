@@ -201,6 +201,7 @@ fn an_agent_runs_the_whole_cycle_over_mcp() {
             "graft_list",
             "graft_path",
             "graft_doctor",
+            "graft_fsck",
             "graft_status",
             "graft_diff",
             "graft_run",
@@ -817,4 +818,16 @@ fn failures_carry_a_request_id() {
     let id = v["request_id"].as_str().unwrap_or_default();
     assert!(id.starts_with("mcp-"), "{v}");
     assert!(id.parse::<graft_core::RequestId>().is_ok(), "{id}");
+}
+
+/// An agent can check Root's stored state.
+#[test]
+fn fsck_over_mcp() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = git_repo();
+    let mut c = Client::start(home.path(), repo.path());
+    c.ok("graft_init", json!({}));
+    let v: Value = serde_json::from_str(&c.ok("graft_fsck", json!({}))).unwrap();
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(v["findings"], json!([]));
 }

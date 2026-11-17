@@ -333,6 +333,24 @@ pub(crate) fn diffs_over(
     .diffs()
 }
 
+/// The delta that replaying `records` (a graft's whole op log, oldest
+/// first) over `base` with `layers` produces, for `graft fsck` to compare
+/// with the stored delta.
+///
+/// # Errors
+///
+/// If the base commit cannot be read.
+pub fn replayed_delta(
+    objects: &ObjectStore,
+    base: &CommitId,
+    layers: Vec<LayerMount>,
+    records: &[graft_store::delta::Record],
+) -> Result<Delta, ChangesError> {
+    let tree = objects.commit_tree(base)?.tree;
+    let lower = LowerTree::new(objects.clone(), tree, layers);
+    Ok(Delta::replay(records, &lower))
+}
+
 /// As [`virtual_diffs`], without the contents.
 ///
 /// # Errors

@@ -258,6 +258,13 @@ mod fuse {
             .assert()
             .success()
             .stdout(predicate::str::contains("-hello\n+changed\n"));
+        // The journaled writes replay to the stored delta (ADR 0032).
+        graft_d(home.path())
+            .current_dir(repo.path())
+            .arg("fsck")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("no problems found"));
         graft_d(home.path())
             .current_dir(repo.path())
             .args(["log", "v"])

@@ -9,6 +9,7 @@
 mod blueprints;
 mod cli;
 mod doctor;
+mod fsck;
 mod grafts;
 mod integrate;
 mod layers;
