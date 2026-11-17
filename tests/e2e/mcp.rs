@@ -202,6 +202,7 @@ fn an_agent_runs_the_whole_cycle_over_mcp() {
             "graft_path",
             "graft_doctor",
             "graft_fsck",
+            "graft_stats",
             "graft_status",
             "graft_diff",
             "graft_run",
@@ -830,4 +831,14 @@ fn fsck_over_mcp() {
     let v: Value = serde_json::from_str(&c.ok("graft_fsck", json!({}))).unwrap();
     assert_eq!(v["ok"], true, "{v}");
     assert_eq!(v["findings"], json!([]));
+}
+
+/// `graft_stats` says when there is no daemon to ask, instead of starting one.
+#[test]
+fn stats_over_mcp_without_a_daemon() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = git_repo();
+    let mut c = Client::start(home.path(), repo.path());
+    let v: Value = serde_json::from_str(&c.ok("graft_stats", json!({}))).unwrap();
+    assert_eq!(v, json!({"running": false}));
 }

@@ -35,6 +35,7 @@ mod lower;
 #[cfg(target_os = "macos")]
 mod nfs;
 mod reflink;
+pub mod stats;
 #[allow(unsafe_code)] // FFI to statfs, clonefile and ioctl; see each SAFETY comment.
 mod sys;
 mod usage;

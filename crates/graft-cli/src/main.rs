@@ -20,6 +20,7 @@ mod radar;
 mod rings;
 mod root;
 mod run;
+mod stats;
 mod timing;
 mod virtual_grafts;
 
@@ -110,6 +111,8 @@ enum Command {
     Mcp(McpArgs),
     /// Report platform, filesystem, reflink and FUSE/NFS support.
     Doctor(doctor::Args),
+    /// Show what graftd has served: operations, latency, cache, memory.
+    Stats(stats::Args),
     /// Check this Root's stored state: database, op log replay, blobs,
     /// layers and working trees. Read-only.
     Fsck(fsck::Args),
@@ -272,6 +275,7 @@ fn run() -> anyhow::Result<ExitCode> {
         }
         Command::Doctor(args) => doctor::run(&args, &env)?,
         Command::Fsck(args) => fsck::run(&args, &env)?,
+        Command::Stats(args) => ok(stats::run(&args, &env))?,
     };
     {
         let mut stderr = std::io::stderr().lock();

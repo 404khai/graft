@@ -82,3 +82,17 @@ fn log_lines_carry_the_request_id() {
     let stderr = String::from_utf8(out).unwrap();
     assert!(stderr.contains("ignoring GRAFT_REQUEST_ID"), "{stderr}");
 }
+
+#[test]
+fn stats_without_a_daemon_says_so() {
+    let home = tempfile::tempdir().unwrap();
+    graft(home.path())
+        .arg("stats")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("graftd is not running"));
+    assert!(
+        !home.path().join("run").exists(),
+        "stats must not start graftd"
+    );
+}

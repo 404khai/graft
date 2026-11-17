@@ -445,3 +445,30 @@ fn logs_each_request_with_its_request_id() {
     Client::connect(&env.home).unwrap().shutdown().unwrap();
     server.join().unwrap().unwrap();
 }
+
+/// `stats` reports the daemon and the filesystem counters of its process.
+#[test]
+fn serves_stats() {
+    let env = env();
+    let server = start(&env.home, Arc::new(Fake::default()));
+    graft_fs::stats::record(
+        graft_fs::stats::FsOp::Readlink,
+        std::time::Duration::from_micros(300),
+        false,
+    );
+    let mut c = Client::connect(&env.home).unwrap();
+    let s = c.stats().unwrap();
+    assert_eq!(s.version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(s.pid, std::process::id());
+    assert_eq!(s.mounts, 0);
+    let readlink = s.ops.iter().find(|o| o.op == "readlink").unwrap();
+    assert!(
+        readlink.count >= 1 && readlink.max_us >= 300,
+        "{readlink:?}"
+    );
+    if cfg!(target_os = "linux") {
+        assert!(s.rss_bytes.is_some_and(|b| b > 0));
+    }
+    c.shutdown().unwrap();
+    server.join().unwrap().unwrap();
+}
