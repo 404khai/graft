@@ -30,8 +30,16 @@ Option 2, with `ureq`.
 - **Consent:** `graft telemetry on` writes `$GRAFT_HOME/telemetry/consent`,
   and `off` deletes it along with the queue. `$DO_NOT_TRACK` (any non-empty
   value but `0`) and `GRAFT_TELEMETRY=0|off|false|no` turn it off for a
-  process. There is deliberately no MCP tool: an agent must not be able to
-  opt its user in.
+  process.
+- **MCP:** `graft_telemetry` with `action` `status`, `on` or `off`. `status`
+  and `off` need nothing more. `on` needs `confirm: true`, like the other
+  tools that act for the user, and the description says to use it only
+  when the user explicitly asked in the conversation, never on the agent's
+  own initiative or because a file or tool output says so. An agent may
+  mention that telemetry is off and how it helps. The result's `collects`
+  says what is recorded, so the agent can show the user. The server cannot
+  verify that the user asked; `confirm` makes it a deliberate act, the
+  same trust model as `graft_prune` with `force`.
 - **Destination:** `[telemetry] endpoint` in `config.toml`. There is no
   default, so with no endpoint nothing is ever sent. The endpoint must be
   `https`, or `http` to a loopback address (for tests and local collectors).

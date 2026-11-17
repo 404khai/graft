@@ -46,6 +46,21 @@ const STALE_LOCK: Duration = Duration::from_secs(600);
 pub(crate) struct Args {
     #[command(subcommand)]
     action: Action,
+    /// For status, on and off: print the resulting state as JSON.
+    #[arg(long, global = true)]
+    json: bool,
+}
+
+/// The state `status`, `on` and `off` report as JSON.
+fn state_json(home: &GraftHome, url: Option<&str>) -> Value {
+    json!({
+        "consent": consent_file(home).is_file(),
+        "recording": recording(home),
+        "overridden_by": overridden(),
+        "endpoint": url,
+        "queued": queued(home).len(),
+        "collects": WHAT,
+    })
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -422,7 +437,7 @@ pub(crate) fn run(args: &Args, env: &Environment) -> anyhow::Result<Output> {
             }
         }
         Action::Send => {
-            let Some(u) = url else {
+            let Some(u) = url.clone() else {
                 bail!(
                     "no [telemetry] endpoint is set in config.toml, so there is nowhere to send to"
                 );
@@ -434,7 +449,8 @@ pub(crate) fn run(args: &Args, env: &Environment) -> anyhow::Result<Output> {
             let _ = writeln!(out, "sent {n} event(s) to {u}");
         }
     }
-    Ok(Output::stdout(out))
+    let json = matches!(args.action, Action::Status | Action::On | Action::Off) && args.json;
+    Ok(Output::stdout(out).json_if(json, || state_json(home, url.as_deref())))
 }
 
 #[cfg(test)]
