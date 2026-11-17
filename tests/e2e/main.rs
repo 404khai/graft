@@ -20,6 +20,7 @@ mod radar;
 mod repo_policy;
 mod root;
 mod run;
+mod telemetry;
 mod virtual_grafts;
 
 use std::path::Path;

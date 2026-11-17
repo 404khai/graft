@@ -3,6 +3,15 @@
 
 [graph]
 all-features = true
+# Check what Graft builds: Linux and macOS (AGENTS.md §4). Crates only other
+# platforms pull in (e.g. webpki-root-certs via rustls-platform-verifier,
+# CDLA-Permissive-2.0) are never compiled or shipped.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+]
 
 [advisories]
 # Fail on any vulnerability, unmaintained or unsound advisory. Ignore one

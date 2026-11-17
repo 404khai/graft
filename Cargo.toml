@@ -51,6 +51,8 @@ tree-sitter-rust = "0.24.2"
 tree-sitter-typescript = "0.23.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# Opt-in telemetry upload (ADR 0034): rustls with ring, OS trust store.
+ureq = { version = "3.5.2", default-features = false, features = ["rustls-no-provider", "_ring", "platform-verifier"] }
 
 # Test-only.
 assert_cmd = "2.2.2"

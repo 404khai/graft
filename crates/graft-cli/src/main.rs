@@ -21,6 +21,7 @@ mod rings;
 mod root;
 mod run;
 mod stats;
+mod telemetry;
 mod timing;
 mod virtual_grafts;
 
@@ -113,6 +114,11 @@ enum Command {
     Doctor(doctor::Args),
     /// Show what graftd has served: operations, latency, cache, memory.
     Stats(stats::Args),
+    /// Opt in to, inspect or opt out of anonymous usage telemetry.
+    Telemetry(telemetry::Args),
+    /// Internal: send queued telemetry in the background.
+    #[command(name = "__telemetry-send", hide = true)]
+    TelemetrySend,
     /// Check this Root's stored state: database, op log replay, blobs,
     /// layers and working trees. Read-only.
     Fsck(fsck::Args),
@@ -228,36 +234,89 @@ fn run() -> anyhow::Result<ExitCode> {
     graft_daemon::client::set_request_id(&request);
     let _span = tracing::info_span!("graft", request = %request).entered();
 
+    let name = telemetry_name();
+    let started = std::time::Instant::now();
+    let result = execute(cli.command, &env);
+    if let Some(name) = name {
+        telemetry::after_command(&env, name, &result, started.elapsed());
+    }
+    result
+}
+
+/// The subcommand to record in telemetry, if any: a public command other
+/// than `telemetry` itself and the long-running `mcp` server (whose tool
+/// calls are recorded one by one). Global flags cannot precede it.
+fn telemetry_name() -> Option<&'static str> {
+    let given = std::env::args().nth(1)?;
+    KNOWN_COMMANDS.iter().copied().find(|k| *k == given)
+}
+
+/// Every public subcommand, as telemetry names it.
+const KNOWN_COMMANDS: &[&str] = &[
+    "init",
+    "root",
+    "new",
+    "ls",
+    "path",
+    "env",
+    "status",
+    "diff",
+    "log",
+    "prune",
+    "materialize",
+    "import",
+    "bud",
+    "ring",
+    "rewind",
+    "plan",
+    "claim",
+    "claims",
+    "radar",
+    "run",
+    "integrate",
+    "queue",
+    "rebase",
+    "trust",
+    "gc",
+    "daemon",
+    "doctor",
+    "stats",
+    "fsck",
+];
+
+/// Runs one parsed command and prints its output.
+#[allow(clippy::too_many_lines)] // one arm per command, read top to bottom
+fn execute(command: Command, env: &Environment) -> anyhow::Result<ExitCode> {
     let ok = |r: anyhow::Result<Output>| r.map(|o| (o, ExitCode::SUCCESS));
-    let (output, code) = match cli.command {
-        Command::Init(args) => ok(root::init(&args, &env))?,
-        Command::Root(args) => ok(root::show(&args, &env).map(Output::stdout))?,
-        Command::New(args) => ok(grafts::new(&args, &env))?,
-        Command::Ls(args) => ok(grafts::ls(&args, &env))?,
-        Command::Path(args) => ok(grafts::path(&args, &env))?,
-        Command::Status(args) => ok(grafts::status(&args, &env))?,
-        Command::Env(args) => ok(blueprints::env(&args, &env))?,
-        Command::Diff(args) => ok(grafts::diff(&args, &env))?,
-        Command::Log(args) => ok(grafts::log(&args, &env))?,
-        Command::Prune(args) => ok(grafts::prune(&args, &env))?,
-        Command::Materialize(args) => ok(materialize::materialize(&args, &env))?,
-        Command::Import(args) => ok(materialize::import(&args, &env))?,
-        Command::Bud(args) => ok(rings::bud(&args, &env))?,
-        Command::Ring(args) => ok(rings::ring(&args, &env))?,
-        Command::Rewind(args) => ok(rings::rewind(&args, &env))?,
-        Command::Plan(args) => ok(plan::run_plan(&args, &env))?,
-        Command::Claim(args) => plan::claim(&args, &env)?,
-        Command::Claims(args) => ok(plan::claims(&args, &env))?,
-        Command::Radar(args) => ok(radar::radar(&args, &env))?,
-        Command::Run(args) => run::run(&args, &env)?,
+    let (output, code) = match command {
+        Command::Init(args) => ok(root::init(&args, env))?,
+        Command::Root(args) => ok(root::show(&args, env).map(Output::stdout))?,
+        Command::New(args) => ok(grafts::new(&args, env))?,
+        Command::Ls(args) => ok(grafts::ls(&args, env))?,
+        Command::Path(args) => ok(grafts::path(&args, env))?,
+        Command::Status(args) => ok(grafts::status(&args, env))?,
+        Command::Env(args) => ok(blueprints::env(&args, env))?,
+        Command::Diff(args) => ok(grafts::diff(&args, env))?,
+        Command::Log(args) => ok(grafts::log(&args, env))?,
+        Command::Prune(args) => ok(grafts::prune(&args, env))?,
+        Command::Materialize(args) => ok(materialize::materialize(&args, env))?,
+        Command::Import(args) => ok(materialize::import(&args, env))?,
+        Command::Bud(args) => ok(rings::bud(&args, env))?,
+        Command::Ring(args) => ok(rings::ring(&args, env))?,
+        Command::Rewind(args) => ok(rings::rewind(&args, env))?,
+        Command::Plan(args) => ok(plan::run_plan(&args, env))?,
+        Command::Claim(args) => plan::claim(&args, env)?,
+        Command::Claims(args) => ok(plan::claims(&args, env))?,
+        Command::Radar(args) => ok(radar::radar(&args, env))?,
+        Command::Run(args) => run::run(&args, env)?,
         Command::Confine(args) => (Output::default(), run::confine(&args)?),
-        Command::Integrate(args) => integrate::integrate(&args, &env)?,
-        Command::Queue(args) => ok(integrate::queue(&args, &env))?,
-        Command::Rebase(args) => ok(integrate::rebase(&args, &env))?,
-        Command::Trust(args) => ok(layers::trust(&args, &env))?,
-        Command::Gc(args) => ok(layers::gc(&args, &env))?,
-        Command::EmptyTrash => ok(grafts::empty_trash(&env))?,
-        Command::Daemon(args) => ok(daemon::run(&args, &env))?,
+        Command::Integrate(args) => integrate::integrate(&args, env)?,
+        Command::Queue(args) => ok(integrate::queue(&args, env))?,
+        Command::Rebase(args) => ok(integrate::rebase(&args, env))?,
+        Command::Trust(args) => ok(layers::trust(&args, env))?,
+        Command::Gc(args) => ok(layers::gc(&args, env))?,
+        Command::EmptyTrash => ok(grafts::empty_trash(env))?,
+        Command::Daemon(args) => ok(daemon::run(&args, env))?,
         Command::Mcp(args) => {
             if let Some(root) = &args.root {
                 std::env::set_current_dir(root)
@@ -273,9 +332,11 @@ fn run() -> anyhow::Result<ExitCode> {
             graft_mcp::serve_stdio(bin, cwd).map_err(|e| anyhow::anyhow!("MCP server: {e}"))?;
             (Output::default(), ExitCode::SUCCESS)
         }
-        Command::Doctor(args) => doctor::run(&args, &env)?,
-        Command::Fsck(args) => fsck::run(&args, &env)?,
-        Command::Stats(args) => ok(stats::run(&args, &env))?,
+        Command::Doctor(args) => doctor::run(&args, env)?,
+        Command::Fsck(args) => fsck::run(&args, env)?,
+        Command::Stats(args) => ok(stats::run(&args, env))?,
+        Command::Telemetry(args) => ok(telemetry::run(&args, env))?,
+        Command::TelemetrySend => (Output::default(), telemetry::background_send(env)),
     };
     {
         let mut stderr = std::io::stderr().lock();
@@ -310,5 +371,23 @@ fn main() -> ExitCode {
             }
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Telemetry's list stays in step with the CLI.
+    #[test]
+    fn known_commands_are_the_public_subcommands() {
+        use clap::CommandFactory;
+        let public: Vec<String> = Cli::command()
+            .get_subcommands()
+            .filter(|c| !c.is_hide_set())
+            .map(|c| c.get_name().to_owned())
+            .filter(|n| !matches!(n.as_str(), "telemetry" | "mcp"))
+            .collect();
+        assert_eq!(public, KNOWN_COMMANDS);
     }
 }
