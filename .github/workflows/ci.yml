@@ -26,6 +26,16 @@ jobs:
       - run: rustup toolchain install
       - run: cargo fmt --all --check
 
+  collector:
+    # The telemetry collector Worker (telemetry/collector, ADR 0035). The
+    # runner's preinstalled Node runs its tests; no packages are installed.
+    name: telemetry collector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: node --version && node --test test/
+        working-directory: telemetry/collector
+
   clippy:
     name: clippy (${{ matrix.os }})
     strategy:
