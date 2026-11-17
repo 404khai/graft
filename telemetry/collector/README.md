@@ -122,7 +122,7 @@ their events for the next day.
 ## Tests
 
 ```sh
-node --test test/    # or: bun test
+node --test    # or: bun test
 ```
 
 The tests use a stand-in for D1, so they need no account or network.

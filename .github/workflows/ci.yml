@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: node --version && node --test test/
+      - run: node --version && node --test
         working-directory: telemetry/collector
 
   clippy:
