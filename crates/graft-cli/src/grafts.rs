@@ -1130,6 +1130,9 @@ fn spawn_trash_sweeper(ctx: &Ctx) -> bool {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if let Some(id) = graft_daemon::client::request_id() {
+        cmd.env(graft_core::REQUEST_ID_ENV, id);
+    }
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     match cmd.spawn() {

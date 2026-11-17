@@ -28,6 +28,8 @@ fn run() -> anyhow::Result<ExitCode> {
             EnvFilter::try_from_env("GRAFT_LOG").unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .with_writer(std::io::stderr)
+        // graftd's stderr is normally run/graftd.log: no colour codes.
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .init();
     let home = match args.home {
         Some(p) => GraftHome::from_path(p)?,

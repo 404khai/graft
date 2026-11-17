@@ -91,10 +91,47 @@ pub fn graftd_binary() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("graftd"))
 }
 
+/// Size at which `graftd.log` is moved to `graftd.log.1` when graftd
+/// starts.
+pub const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Moves `path` to `<path>.1` (replacing it) if it is at least `max` bytes.
+/// Called only before starting graftd, when no daemon holds the file open.
+/// Best effort: a failure leaves the log growing, which is logged.
+pub fn rotate_log(path: &Path, max: u64) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    if meta.len() < max {
+        return;
+    }
+    let mut old = path.as_os_str().to_owned();
+    old.push(".1");
+    if let Err(e) = std::fs::rename(path, &old) {
+        tracing::warn!(path = %path.display(), error = %e, "cannot rotate graftd's log");
+    }
+}
+
 fn log_tail(path: &Path) -> String {
     let text = std::fs::read_to_string(path).unwrap_or_default();
     let lines: Vec<_> = text.lines().rev().take(5).collect();
     lines.into_iter().rev().collect::<Vec<_>>().join("\n")
+}
+
+/// The request ID sent with every call from this process.
+static REQUEST_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Sets the request ID every [`Client`] in this process sends. The first
+/// call wins; later ones are ignored.
+pub fn set_request_id(id: &graft_core::RequestId) {
+    let _ = REQUEST_ID.set(id.to_string());
+}
+
+/// The request ID set by [`set_request_id`], to pass on to child `graft`
+/// processes as `$GRAFT_REQUEST_ID`.
+#[must_use]
+pub fn request_id() -> Option<&'static str> {
+    REQUEST_ID.get().map(String::as_str)
 }
 
 impl Client {
@@ -132,6 +169,7 @@ impl Client {
         let run = paths::run_dir(home);
         crate::server::ensure_run_dir(&run).map_err(|e| start_err(e.to_string()))?;
         let log_path = paths::log_file(home);
+        rotate_log(&log_path, MAX_LOG_BYTES);
         let log = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -196,6 +234,7 @@ impl Client {
             method: method.to_owned(),
             params: serde_json::to_value(params)
                 .map_err(|e| ClientError::Protocol(e.to_string()))?,
+            request_id: REQUEST_ID.get().cloned(),
         };
         let io_err = |source| ClientError::Io {
             socket: self.socket.clone(),
@@ -339,5 +378,28 @@ fn graft_ref(root: &RootId, graft: &GraftName) -> GraftRef {
     GraftRef {
         root: root.to_string(),
         graft: graft.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rotates_only_a_log_at_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("graftd.log");
+        let old = dir.path().join("graftd.log.1");
+        std::fs::write(&log, "small").unwrap();
+        rotate_log(&log, 10);
+        assert!(log.exists() && !old.exists());
+
+        std::fs::write(&old, "older").unwrap();
+        std::fs::write(&log, "0123456789").unwrap();
+        rotate_log(&log, 10);
+        assert!(!log.exists());
+        assert_eq!(std::fs::read_to_string(&old).unwrap(), "0123456789");
+
+        rotate_log(&log, 10); // missing: nothing to do
     }
 }
