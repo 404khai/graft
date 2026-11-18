@@ -151,7 +151,7 @@ graft/
 
 ### On-disk layout
 
-- `$GRAFT_HOME` defaults to the platform data dir (`~/.local/share/graft` on Linux, `~/Library/Application Support/graft` on macOS), overridable by env var.
+- `$GRAFT_HOME` defaults to the platform data dir (`~/.local/share/graft` on Linux, `~/.graft` on macOS, or `~/Library/Application Support/graft` there if it already exists; ADR 0037), overridable by env var.
 - Per Root: `$GRAFT_HOME/roots/<root-id>/`
   - `graft.db` — SQLite: grafts, op log, claims, queue
   - `blobs/` — content-addressed delta blobs (`blake3` hex, sharded by first two chars)

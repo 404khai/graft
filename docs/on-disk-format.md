@@ -13,7 +13,8 @@ Resolved in this order:
 1. `$GRAFT_HOME`, if set and non-empty. It must be an absolute path.
 2. Linux and other Unix: `$XDG_DATA_HOME/graft` if `$XDG_DATA_HOME` is an
    absolute path, else `$HOME/.local/share/graft`.
-3. macOS: `$HOME/Library/Application Support/graft`.
+3. macOS: `$HOME/Library/Application Support/graft` if that directory
+   exists (the default before ADR 0037), else `$HOME/.graft`.
 
 Graft creates directories under `$GRAFT_HOME` with mode `0700`. Resolving the
 path never creates anything; only commands that write state do.

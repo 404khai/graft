@@ -1,5 +1,5 @@
 # 0022: Keeping the macOS default `$GRAFT_HOME` (with a space)
-Status: accepted
+Status: superseded by 0037
 
 ## Context
 

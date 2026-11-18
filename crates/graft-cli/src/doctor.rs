@@ -259,6 +259,7 @@ fn report_home(out: &mut Report, home: &GraftHome, repo: Option<&Path>) {
     let source = match home.source() {
         HomeSource::Env => "from $GRAFT_HOME",
         HomeSource::PlatformDefault => "default",
+        HomeSource::LegacyDefault => "default before 0.2, kept because it exists",
     };
     let exists = if home.path().is_dir() {
         "exists"
