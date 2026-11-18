@@ -815,3 +815,25 @@ fn a_background_git_dir_builds_without_being_asked() {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }
+
+/// A file is "unchanged" (its kernel page cache may be kept across opens)
+/// only while it is exactly the base tree's: writing it, holding it open
+/// for writing, `.git` and new files are not.
+#[test]
+fn only_base_files_are_unchanged() {
+    let env = Env::new();
+    let v = env.view_with(true, false);
+    let readme = ino(&v, "README.md");
+    assert!(v.is_unchanged_file(readme));
+
+    let fh = v.open(readme, W).unwrap();
+    assert!(!v.is_unchanged_file(readme), "open for writing");
+    v.write(fh, 0, b"changed").unwrap();
+    v.release(fh).unwrap();
+    assert!(!v.is_unchanged_file(readme), "written");
+
+    put(&v, "", "new.txt", b"new");
+    assert!(!v.is_unchanged_file(ino(&v, "new.txt")), "new file");
+    assert!(!v.is_unchanged_file(ino(&v, ".git")), ".git");
+    assert!(!v.is_unchanged_file(ROOT_INO), "a directory");
+}

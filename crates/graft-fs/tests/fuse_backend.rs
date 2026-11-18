@@ -374,3 +374,64 @@ fn unmounts_lazily_when_a_file_is_open() {
     assert_eq!(backend.unmount(&g.name).unwrap(), None);
     backend.remove_mount_point(&g.name).unwrap();
 }
+
+/// The kernel keeps cached pages of a file as in the base tree across opens
+/// (`FOPEN_KEEP_CACHE`). A write in the graft must still be visible to every
+/// later reader of that graft at once, and never in Root or another graft.
+#[test]
+fn kept_page_cache_never_hides_a_write() {
+    use std::io::Read as _;
+    require_fuse();
+    let tmp = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new_in(tmp.path());
+    let backend = backend_in(tmp.path());
+    let mount = |n: &str| {
+        let name: graft_core::GraftName = n.parse().unwrap();
+        let id = graft_core::GraftId::random().unwrap();
+        let spec = GraftSpec {
+            id,
+            name: &name,
+            base: &fixture.base,
+        };
+        (
+            backend.mount(&fixture.root(), &spec, Vec::new()).unwrap(),
+            name,
+            id,
+        )
+    };
+    let (a, a_name, a_id) = mount("kept-a");
+    let (b, b_name, b_id) = mount("kept-b");
+    let original = std::fs::read(fixture.dir.path().join("README.md")).unwrap();
+    // Warm the page cache through several opens.
+    for _ in 0..3 {
+        assert_eq!(std::fs::read(a.join("README.md")).unwrap(), original);
+    }
+    // A reader that opened the file before the write.
+    let mut early = std::fs::File::open(a.join("README.md")).unwrap();
+    std::fs::write(a.join("README.md"), b"rewritten in a\n").unwrap();
+    assert_eq!(
+        std::fs::read(a.join("README.md")).unwrap(),
+        b"rewritten in a\n"
+    );
+    let mut seen = Vec::new();
+    early.read_to_end(&mut seen).unwrap();
+    assert_eq!(seen, b"rewritten in a\n", "an open reader saw stale pages");
+    for _ in 0..3 {
+        assert_eq!(
+            std::fs::read(a.join("README.md")).unwrap(),
+            b"rewritten in a\n"
+        );
+    }
+    assert_eq!(
+        std::fs::read(b.join("README.md")).unwrap(),
+        original,
+        "another graft saw it"
+    );
+    assert_eq!(
+        std::fs::read(fixture.dir.path().join("README.md")).unwrap(),
+        original,
+        "Root saw it"
+    );
+    backend.prune(&a_name, a_id).unwrap();
+    backend.prune(&b_name, b_id).unwrap();
+}
