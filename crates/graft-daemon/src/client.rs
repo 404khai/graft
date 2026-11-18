@@ -161,6 +161,11 @@ impl Client {
                 ) => {}
             Err(source) => return Err(ClientError::Io { socket, source }),
         }
+        // No socket but the lock held: a graftd is shutting down (it removes
+        // its socket, unmounts, then releases the lock). A new one started
+        // now would find the lock taken and exit, and the stopping one would
+        // take its mounts with it; wait for it to finish first.
+        let _ = Self::wait_until_stopped(home, STOPPING_WAIT);
         let graftd = graftd_binary();
         let start_err = |reason: String| ClientError::Start {
             graftd: graftd.clone(),
@@ -380,6 +385,47 @@ impl Client {
     /// As for [`Client::call`].
     pub fn shutdown(&mut self) -> Result<(), ClientError> {
         self.call("shutdown", &())
+    }
+}
+
+/// How long [`Client::connect_or_start`] waits for a stopping graftd.
+const STOPPING_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl Client {
+    /// Waits up to `limit` until no graftd holds this home's lock, that is,
+    /// until a graftd asked to shut down has unmounted everything and
+    /// exited. Returns whether none is left running.
+    #[must_use = "a graftd may still be running"]
+    pub fn wait_until_stopped(home: &GraftHome, limit: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + limit;
+        loop {
+            if !lock_held(home) {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+}
+
+/// Whether a graftd holds the lock of `home` (the file is only locked
+/// while one runs).
+fn lock_held(home: &GraftHome) -> bool {
+    let Ok(file) = std::fs::OpenOptions::new()
+        .write(true)
+        .open(paths::lock_file(home))
+    else {
+        return false;
+    };
+    match file.try_lock() {
+        Ok(()) => {
+            let _ = file.unlock();
+            false
+        }
+        Err(std::fs::TryLockError::WouldBlock) => true,
+        Err(std::fs::TryLockError::Error(_)) => false,
     }
 }
 
