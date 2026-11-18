@@ -598,8 +598,10 @@ impl GraftView {
         // runs `git status` right after creating a graft, and would
         // otherwise wait for the whole index build (5.5 s on a 10k-file
         // repo). Mounting still returns at once, and a graft whose `.git`
-        // is built already finds it and stops.
-        if let Some(git) = &view.git {
+        // is built already finds it and stops. A graft registered as a git
+        // worktree keeps building its index on first use (ADR 0036): that
+        // index lives in Root's `.git`, which is only written when asked.
+        if let Some(git) = view.git.as_ref().filter(|g| !g.link) {
             git.start();
         }
         view.blobs = Some(journal.blobs);
