@@ -793,3 +793,25 @@ fn a_registered_graft_serves_git_as_a_read_only_link() {
         assert!(files.contains("README.md"), "{files}");
     }
 }
+
+/// Where `.git` is built in the background (NFS), the build starts when the
+/// view is created, not on first use, so a `git status` right after
+/// `graft new` finds it built (or nearly). Nothing touches `.git` here.
+#[test]
+fn a_background_git_dir_builds_without_being_asked() {
+    let env = Env::new();
+    let _view = env.view_with(true, true);
+    let head = env
+        .root_dir
+        .join("grafts")
+        .join(env.graft.to_string())
+        .join("git/HEAD");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !head.is_file() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            ".git was not built in the background"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}

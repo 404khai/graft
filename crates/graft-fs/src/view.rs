@@ -410,6 +410,22 @@ impl GitDir {
         }
     }
 
+    /// In background mode, starts building `.git` on its own thread if no
+    /// build has started yet. Returns at once.
+    fn start(&self) {
+        if self.background && !self.inner.started.swap(true, Ordering::AcqRel) {
+            let inner = Arc::clone(&self.inner);
+            let spawned = std::thread::Builder::new()
+                .name("graft-git-init".to_owned())
+                .spawn(move || {
+                    let _ = inner.ready.set(inner.build());
+                });
+            if let Err(e) = spawned {
+                let _ = self.inner.ready.set(Err(e.to_string()));
+            }
+        }
+    }
+
     /// Creates the directory if it was not yet. In background mode, returns
     /// `EAGAIN` while it is being built.
     pub(crate) fn ensure(&self) -> Result<&Path, Errno> {
@@ -417,17 +433,7 @@ impl GitDir {
             if let Some(r) = self.inner.ready.get() {
                 r
             } else {
-                if !self.inner.started.swap(true, Ordering::AcqRel) {
-                    let inner = Arc::clone(&self.inner);
-                    let spawned = std::thread::Builder::new()
-                        .name("graft-git-init".to_owned())
-                        .spawn(move || {
-                            let _ = inner.ready.set(inner.build());
-                        });
-                    if let Err(e) = spawned {
-                        let _ = self.inner.ready.set(Err(e.to_string()));
-                    }
-                }
+                self.start();
                 return match self.inner.ready.get() {
                     Some(r) => r
                         .as_ref()
@@ -588,6 +594,16 @@ impl GraftView {
         view.git = journal
             .git_init
             .map(|init| GitDir::new(git_path, init, journal.git_in_background, link));
+        // Where `.git` is built in the background (NFS), start now: an agent
+        // runs `git status` right after creating a graft, and would
+        // otherwise wait for the whole index build (5.5 s on a 10k-file
+        // repo). Mounting still returns at once, and a graft whose `.git`
+        // is built already finds it and stops. A graft registered as a git
+        // worktree keeps building its index on first use (ADR 0036): that
+        // index lives in Root's `.git`, which is only written when asked.
+        if let Some(git) = view.git.as_ref().filter(|g| !g.link) {
+            git.start();
+        }
         view.blobs = Some(journal.blobs);
         view.admission = journal.admission;
         view.writer = Some(Mutex::new(Writer {
