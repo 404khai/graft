@@ -232,22 +232,33 @@ fn runs_swiftpm(command: &[OsString]) -> bool {
 fn logged_denials(tag: &str, took: std::time::Duration) -> Vec<String> {
     #[cfg(target_os = "macos")]
     {
-        // The kernel logs a denial as it happens, but `log show` may not
-        // see the last ones for a moment.
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        let secs = took.as_secs() + 5;
-        let out = Command::new("/usr/bin/log")
-            .args(["show", "--style", "ndjson", "--last"])
-            .arg(format!("{secs}s"))
-            .arg("--predicate")
-            .arg(format!("eventMessage CONTAINS \"{tag}\""))
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output();
-        match out {
-            Ok(o) if o.status.success() => parse_denials(&String::from_utf8_lossy(&o.stdout)),
-            Ok(_) | Err(_) => Vec::new(),
+        // The kernel logs a denial as it happens, but `log show` sees it
+        // only once logd has stored it: about a second on a loaded CI
+        // runner. Ask again with growing pauses (2 s in all, and only after
+        // a failed run) until it shows up.
+        let secs = took.as_secs() + 10;
+        for pause_ms in [300, 700, 1000] {
+            std::thread::sleep(std::time::Duration::from_millis(pause_ms));
+            let out = Command::new("/usr/bin/log")
+                .args(["show", "--style", "ndjson", "--last"])
+                .arg(format!("{secs}s"))
+                .arg("--predicate")
+                .arg(format!("eventMessage CONTAINS \"{tag}\""))
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output();
+            match out {
+                Ok(o) if o.status.success() => {
+                    let denied = parse_denials(&String::from_utf8_lossy(&o.stdout));
+                    if !denied.is_empty() {
+                        return denied;
+                    }
+                }
+                // No usable log: asking again will not help.
+                Ok(_) | Err(_) => return Vec::new(),
+            }
         }
+        Vec::new()
     }
     #[cfg(not(target_os = "macos"))]
     {
