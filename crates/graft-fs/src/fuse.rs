@@ -241,8 +241,17 @@ impl Filesystem for FuseFs {
 
     fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
         let mode = OpenMode::from_flags(flags.0);
+        // A file as in the base tree never changes while mounted: keep the
+        // kernel's cached pages, so `rg` or a build reading it again does
+        // not go through graftd. Any other open drops them (the default).
+        let keep = !mode.write && !mode.truncate && self.view.is_unchanged_file(ino.0);
+        let open_flags = if keep {
+            FopenFlags::FOPEN_KEEP_CACHE
+        } else {
+            FopenFlags::empty()
+        };
         match stats::timed(FsOp::Open, || self.view.open(ino.0, mode)) {
-            Ok(fh) => reply.opened(FileHandle(fh), FopenFlags::empty()),
+            Ok(fh) => reply.opened(FileHandle(fh), open_flags),
             Err(e) => reply.error(errno(e)),
         }
     }

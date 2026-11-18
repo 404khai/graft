@@ -701,6 +701,28 @@ impl GraftView {
         })
     }
 
+    /// Whether `ino` is a file exactly as in the base tree: not written in
+    /// this graft (no delta entry) and not open for writing. Its contents
+    /// cannot change while the graft is mounted, so a reader may keep the
+    /// kernel's cached pages across opens. Once it is written it stops
+    /// being unchanged, and opening it drops those pages.
+    #[must_use]
+    pub fn is_unchanged_file(&self, ino: Ino) -> bool {
+        let Ok(path) = self.path_of(ino) else {
+            return false;
+        };
+        if self.git_rel(&path).is_some() || lock(&self.staged).contains_key(&ino) {
+            return false;
+        }
+        matches!(
+            self.resolve_node(&path),
+            Some(Node::File {
+                content: Content::Lower(_),
+                ..
+            })
+        )
+    }
+
     pub(crate) fn resolve_node(&self, path: &[u8]) -> Option<Node> {
         self.delta
             .read()
