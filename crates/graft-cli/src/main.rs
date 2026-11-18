@@ -74,7 +74,8 @@ enum Command {
     Import(materialize::ImportArgs),
     /// Fork a graft in constant time: same base, a copy of its delta.
     Bud(rings::BudArgs),
-    /// Checkpoint a graft's delta as a named ring, or list its rings.
+    /// Checkpoint a graft's delta as a ring (named, or `ring-<n>`);
+    /// `--list` lists its rings instead.
     Ring(rings::RingArgs),
     /// Return a graft to one of its rings (reversible: it rings first).
     Rewind(rings::RewindArgs),
