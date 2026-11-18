@@ -43,6 +43,13 @@ pub(crate) fn run(args: &Args, env: &Environment) -> anyhow::Result<Output> {
         }
         Action::Stop => {
             client.shutdown()?;
+            drop(client);
+            // Return once it has unmounted everything and exited, so the
+            // next command starts a fresh graftd instead of reaching the
+            // stopping one (#58).
+            if !Client::wait_until_stopped(home, std::time::Duration::from_secs(30)) {
+                anyhow::bail!("graftd was asked to stop but is still running after 30 s");
+            }
             Ok(Output::stdout("Stopped graftd\n".to_owned()))
         }
     }

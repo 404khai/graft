@@ -334,7 +334,7 @@ pub(crate) fn daemon(home: &GraftHome, out: &mut Output) -> anyhow::Result<Clien
         let old = ping.version.clone();
         client.shutdown()?;
         drop(client);
-        wait_for_daemon_exit(home);
+        let _ = Client::wait_until_stopped(home, std::time::Duration::from_secs(10));
         client = Client::connect_or_start(home)?;
         ping = client.ping()?;
         if ping.version == ours {
@@ -352,15 +352,6 @@ pub(crate) fn daemon(home: &GraftHome, out: &mut Output) -> anyhow::Result<Clien
         ));
     }
     Ok(client)
-}
-
-/// Waits up to 5 s for a graftd that was asked to shut down to stop
-/// answering.
-fn wait_for_daemon_exit(home: &GraftHome) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while Client::connect(home).is_ok() && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
 }
 
 /// Creates a graft.

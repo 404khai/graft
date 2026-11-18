@@ -327,6 +327,43 @@ mod fuse {
         assert!(!repo.path().join(".git/worktrees").exists());
     }
 
+    /// `graft daemon stop` returns only once graftd has unmounted and
+    /// exited, so the next command starts a fresh graftd that remounts the
+    /// graft, instead of reaching the one still stopping (#58).
+    #[test]
+    fn daemon_stop_returns_once_graftd_has_exited() {
+        require_fuse();
+        let home = tempfile::tempdir().unwrap();
+        let _daemon = Daemon(home.path());
+        let repo = crate::git_repo();
+        init(home.path(), repo.path());
+        let path = new_fuse(home.path(), repo.path(), "v");
+        for _ in 0..5 {
+            graft_d(home.path())
+                .args(["daemon", "stop"])
+                .assert()
+                .success();
+            let lock = std::fs::OpenOptions::new()
+                .write(true)
+                .open(home.path().join("run/graftd.lock"))
+                .unwrap();
+            assert!(
+                lock.try_lock().is_ok(),
+                "graftd still holds its lock after `graft daemon stop` returned"
+            );
+            lock.unlock().unwrap();
+            graft_d(home.path())
+                .current_dir(repo.path())
+                .arg("ls")
+                .assert()
+                .success();
+            assert!(
+                std::fs::read_dir(&path).unwrap().next().is_some(),
+                "the graft was not remounted"
+            );
+        }
+    }
+
     /// graftd counted requests of each of `ops` (ADR 0033).
     fn assert_counted(home: &Path, ops: &[&str]) {
         let out = graft_d(home).args(["stats", "--json"]).output().unwrap();
