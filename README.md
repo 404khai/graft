@@ -54,9 +54,9 @@ graft diff auth           # as a unified diff
 graft prune auth          # refuses if work would be lost; --force to discard
 ```
 
-On macOS graft paths live under `~/Library/Application Support/graft`,
-which has a space: always quote them (`cd "$(graft path auth)"`), or set
-`GRAFT_HOME` to a path without one before creating grafts.
+On macOS graft paths live under `~/.graft`. Installs from before 0.2 keep
+using `~/Library/Application Support/graft`, which has a space: quote those
+paths (`cd "$(graft path auth)"`), or set `GRAFT_HOME`.
 
 Virtual grafts (`graft new --backend fuse` on Linux, `--backend nfs` on
 macOS) can also be forked and checkpointed, as metadata operations:

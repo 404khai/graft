@@ -6,7 +6,11 @@
 //! | Platform | Default |
 //! | --- | --- |
 //! | Linux and other Unix | `$XDG_DATA_HOME/graft`, else `~/.local/share/graft` |
-//! | macOS | `~/Library/Application Support/graft` |
+//! | macOS | `~/.graft`, or `~/Library/Application Support/graft` if that exists |
+//!
+//! Until ADR 0037, the macOS default was `~/Library/Application
+//! Support/graft`, whose space every graft path inherited. A home already
+//! there keeps being used, so no graft moves; new ones start in `~/.graft`.
 //!
 //! Resolution only computes a path; it never creates directories.
 
@@ -27,6 +31,9 @@ pub enum HomeSource {
     Env,
     /// Derived from the platform data directory.
     PlatformDefault,
+    /// The macOS default before ADR 0037 (`~/Library/Application
+    /// Support/graft`), used because it exists.
+    LegacyDefault,
 }
 
 /// The resolved `$GRAFT_HOME` directory.
@@ -73,7 +80,7 @@ impl GraftHome {
     ///
     /// As for [`GraftHome::resolve`].
     pub fn resolve_with(env: impl Fn(&str) -> Option<OsString>) -> Result<Self> {
-        resolve_for(Platform::current(), env)
+        resolve_for(Platform::current(), env, Path::is_dir)
     }
 
     /// Uses `path` as `$GRAFT_HOME` directly.
@@ -130,7 +137,12 @@ fn non_empty(value: Option<OsString>) -> Option<PathBuf> {
     value.filter(|v| !v.is_empty()).map(PathBuf::from)
 }
 
-fn resolve_for(platform: Platform, env: impl Fn(&str) -> Option<OsString>) -> Result<GraftHome> {
+/// `is_dir` says whether a directory exists, for the macOS legacy home.
+fn resolve_for(
+    platform: Platform,
+    env: impl Fn(&str) -> Option<OsString>,
+    is_dir: impl Fn(&Path) -> bool,
+) -> Result<GraftHome> {
     if let Some(path) = non_empty(env(GRAFT_HOME_ENV)) {
         return GraftHome::from_path(path);
     }
@@ -152,12 +164,21 @@ fn resolve_for(platform: Platform, env: impl Fn(&str) -> Option<OsString>) -> Re
             path: home,
         });
     }
-    let data = match platform {
-        Platform::MacOs => home.join("Library").join("Application Support"),
-        Platform::Xdg => home.join(".local").join("share"),
+    let path = match platform {
+        Platform::MacOs => {
+            let legacy = home.join("Library/Application Support/graft");
+            if is_dir(&legacy) {
+                return Ok(GraftHome {
+                    path: legacy,
+                    source: HomeSource::LegacyDefault,
+                });
+            }
+            home.join(".graft")
+        }
+        Platform::Xdg => home.join(".local/share/graft"),
     };
     Ok(GraftHome {
-        path: data.join("graft"),
+        path,
         source: HomeSource::PlatformDefault,
     })
 }
@@ -178,7 +199,7 @@ mod tests {
     fn graft_home_env_wins() {
         let vars = [("GRAFT_HOME", "/srv/graft"), ("HOME", "/home/u")];
         for platform in [Platform::MacOs, Platform::Xdg] {
-            let home = resolve_for(platform, env(&vars)).unwrap();
+            let home = resolve_for(platform, env(&vars), |_| false).unwrap();
             assert_eq!(home.path(), Path::new("/srv/graft"));
             assert_eq!(home.source(), HomeSource::Env);
         }
@@ -187,7 +208,7 @@ mod tests {
     #[test]
     fn relative_graft_home_is_rejected() {
         let vars = [("GRAFT_HOME", "graft"), ("HOME", "/home/u")];
-        let err = resolve_for(Platform::Xdg, env(&vars)).unwrap_err();
+        let err = resolve_for(Platform::Xdg, env(&vars), |_| false).unwrap_err();
         assert!(matches!(
             err,
             GraftError::RelativeHome {
@@ -200,7 +221,7 @@ mod tests {
     #[test]
     fn empty_graft_home_is_treated_as_unset() {
         let vars = [("GRAFT_HOME", ""), ("HOME", "/home/u")];
-        let home = resolve_for(Platform::Xdg, env(&vars)).unwrap();
+        let home = resolve_for(Platform::Xdg, env(&vars), |_| false).unwrap();
         assert_eq!(home.path(), Path::new("/home/u/.local/share/graft"));
         assert_eq!(home.source(), HomeSource::PlatformDefault);
     }
@@ -208,30 +229,48 @@ mod tests {
     #[test]
     fn linux_default_uses_xdg_data_home() {
         let vars = [("XDG_DATA_HOME", "/data"), ("HOME", "/home/u")];
-        let home = resolve_for(Platform::Xdg, env(&vars)).unwrap();
+        let home = resolve_for(Platform::Xdg, env(&vars), |_| false).unwrap();
         assert_eq!(home.path(), Path::new("/data/graft"));
     }
 
     #[test]
     fn linux_ignores_relative_xdg_data_home() {
         let vars = [("XDG_DATA_HOME", "data"), ("HOME", "/home/u")];
-        let home = resolve_for(Platform::Xdg, env(&vars)).unwrap();
+        let home = resolve_for(Platform::Xdg, env(&vars), |_| false).unwrap();
         assert_eq!(home.path(), Path::new("/home/u/.local/share/graft"));
     }
 
     #[test]
-    fn macos_default_ignores_xdg() {
+    fn macos_default_ignores_xdg_and_has_no_space() {
         let vars = [("XDG_DATA_HOME", "/data"), ("HOME", "/Users/u")];
-        let home = resolve_for(Platform::MacOs, env(&vars)).unwrap();
-        assert_eq!(
-            home.path(),
-            Path::new("/Users/u/Library/Application Support/graft")
-        );
+        let home = resolve_for(Platform::MacOs, env(&vars), |_| false).unwrap();
+        assert_eq!(home.path(), Path::new("/Users/u/.graft"));
+        assert_eq!(home.source(), HomeSource::PlatformDefault);
+    }
+
+    #[test]
+    fn macos_keeps_an_existing_application_support_home() {
+        let vars = [("HOME", "/Users/u")];
+        let legacy = Path::new("/Users/u/Library/Application Support/graft");
+        let home = resolve_for(Platform::MacOs, env(&vars), |p| p == legacy).unwrap();
+        assert_eq!(home.path(), legacy);
+        assert_eq!(home.source(), HomeSource::LegacyDefault);
+        // $GRAFT_HOME still wins over it.
+        let vars = [("HOME", "/Users/u"), ("GRAFT_HOME", "/g")];
+        let home = resolve_for(Platform::MacOs, env(&vars), |p| p == legacy).unwrap();
+        assert_eq!(home.path(), Path::new("/g"));
+    }
+
+    #[test]
+    fn linux_ignores_an_application_support_dir() {
+        let vars = [("HOME", "/home/u")];
+        let home = resolve_for(Platform::Xdg, env(&vars), |_| true).unwrap();
+        assert_eq!(home.path(), Path::new("/home/u/.local/share/graft"));
     }
 
     #[test]
     fn missing_home_is_an_error() {
-        let err = resolve_for(Platform::Xdg, env(&[])).unwrap_err();
+        let err = resolve_for(Platform::Xdg, env(&[]), |_| false).unwrap_err();
         assert!(matches!(err, GraftError::HomeNotFound));
     }
 
