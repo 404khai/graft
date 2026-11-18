@@ -9,6 +9,7 @@
 mod blueprints;
 mod cli;
 mod doctor;
+mod fsck;
 mod grafts;
 mod integrate;
 mod layers;
@@ -19,6 +20,7 @@ mod radar;
 mod repo_policy;
 mod root;
 mod run;
+mod telemetry;
 mod virtual_grafts;
 mod worktrees;
 

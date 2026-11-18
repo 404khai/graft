@@ -214,6 +214,135 @@ fn a_failing_gate_keeps_the_graft_live_and_root_unchanged() {
     f.assert_root_clean();
 }
 
+/// A missing target is an error that names `--create-branch`; with it,
+/// the branch starts at Root's HEAD, a dry run creates nothing, and later
+/// requests stack on the new branch.
+#[test]
+fn create_branch_makes_a_missing_target_at_roots_head() {
+    let f = Fixture::new("", &[("x.txt", "x\n"), ("y.txt", "y\n")]);
+    let a = f.new_graft("a");
+    let b = f.new_graft("b");
+    std::fs::write(a.join("x.txt"), "x changed\n").unwrap();
+    std::fs::write(b.join("y.txt"), "y changed\n").unwrap();
+    f.cmd()
+        .args(["integrate", "a", "--onto", "feat/new", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("no branch feat/new")
+                .and(predicate::str::contains("--create-branch")),
+        );
+
+    let dry = f.ok(&[
+        "integrate",
+        "a",
+        "--onto",
+        "feat/new",
+        "--create-branch",
+        "--dry-run",
+    ]);
+    assert!(dry.contains("checked  a → feat/new"), "{dry}");
+    assert_eq!(
+        out(f.repo.path(), &["branch", "--list", "feat/new"]),
+        "",
+        "a dry run created the branch"
+    );
+
+    let head = f.rev("HEAD");
+    let report = f.ok(&[
+        "integrate",
+        "a",
+        "b",
+        "--onto",
+        "feat/new",
+        "--create-branch",
+    ]);
+    assert!(
+        report.contains("landed   a → feat/new") && report.contains("landed   b → feat/new"),
+        "{report}"
+    );
+    assert_eq!(
+        f.rev("feat/new~2"),
+        head,
+        "the branch did not start at Root's HEAD"
+    );
+    assert_eq!(
+        out(f.repo.path(), &["show", "feat/new:x.txt"]),
+        "x changed\n"
+    );
+    assert_eq!(
+        out(f.repo.path(), &["show", "feat/new:y.txt"]),
+        "y changed\n"
+    );
+    assert_eq!(f.rev("HEAD"), head, "Root's checkout moved");
+    f.assert_root_clean();
+}
+
+/// `--test` gates one call with no `[integrate]` table and no `graft
+/// trust`, and replaces graft.toml's gate for that call.
+#[test]
+fn a_per_call_gate_needs_no_graft_toml() {
+    let f = Fixture::new("", &[("check.sh", CHECK)]);
+    let a = f.new_graft("a");
+    std::fs::write(a.join("broken"), "oops\n").unwrap();
+    let before = f.rev("land");
+    let o = f
+        .cmd()
+        .args([
+            "integrate",
+            "a",
+            "--onto",
+            "land",
+            "--test",
+            "sh check.sh",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(!o.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["gated"], true, "{v}");
+    assert_eq!(v["results"][0]["code"], "gate_failed", "{v}");
+    assert_eq!(
+        f.rev("land"),
+        before,
+        "Root received a commit that failed the gate"
+    );
+    assert!(f.ok(&["ls"]).contains(" live "), "graft not live");
+
+    std::fs::remove_file(a.join("broken")).unwrap();
+    std::fs::write(a.join("fixed.txt"), "ok\n").unwrap();
+    let report = f.ok(&["integrate", "a", "--onto", "land", "--test", "sh check.sh"]);
+    assert!(report.contains("landed   a → land"), "{report}");
+    assert!(!report.contains("no test gate ran"), "{report}");
+    f.assert_root_clean();
+}
+
+/// The caller's gate replaces an unapproved one from graft.toml: what the
+/// operator typed is not repository input, and graft.toml's is never run.
+#[test]
+fn a_per_call_gate_replaces_graft_tomls() {
+    let f = Fixture::new("", &[("x.txt", "x\n")]);
+    // A gate committed after `graft trust`, so it is not approved.
+    std::fs::write(
+        f.repo.path().join("graft.toml"),
+        "[integrate]\ntest = \"touch ran-toml-gate\"\n",
+    )
+    .unwrap();
+    git(f.repo.path(), &["commit", "-qam", "gate"]);
+    git(f.repo.path(), &["branch", "-f", "land"]);
+    let a = f.new_graft("a");
+    std::fs::write(a.join("x.txt"), "x changed\n").unwrap();
+    f.cmd()
+        .args(["integrate", "a", "--onto", "land"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("not approved"));
+    f.ok(&["integrate", "a", "--onto", "land", "--test", "true"]);
+    assert_eq!(out(f.repo.path(), &["show", "land:x.txt"]), "x changed\n");
+    assert!(!f.repo.path().join("ran-toml-gate").exists());
+}
+
 #[test]
 fn the_checked_out_branch_needs_update_checkout() {
     let f = Fixture::new("", &[("x.txt", "x\n")]);

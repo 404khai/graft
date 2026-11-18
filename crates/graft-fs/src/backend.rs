@@ -177,6 +177,9 @@ pub struct ReflinkBackend {
     mounts: PathBuf,
 }
 
+/// Prefix of a retired working tree in the mounts directory.
+const TRASH_PREFIX: &str = ".trash-";
+
 impl ReflinkBackend {
     /// A backend keeping grafts under `mounts` (`$GRAFT_HOME/roots/<id>/mounts`).
     #[must_use]
@@ -192,6 +195,71 @@ impl ReflinkBackend {
 
     fn tmp_path(&self, id: GraftId) -> PathBuf {
         self.mounts.join(format!(".tmp-{id}"))
+    }
+
+    fn trash_path(&self, id: GraftId) -> PathBuf {
+        self.mounts.join(format!("{TRASH_PREFIX}{id}"))
+    }
+
+    /// Moves graft `name`'s working tree out of the way in constant time,
+    /// to be deleted by [`Self::empty_trash`]: a rename to a hidden
+    /// sibling, so `name` is free again at once. `Ok(false)` if there was
+    /// no working tree.
+    ///
+    /// # Errors
+    ///
+    /// The mounts directory is a symlink or unreadable, or the rename
+    /// failed.
+    pub fn retire(&self, name: &GraftName, id: GraftId) -> Result<bool> {
+        let from = self.path(name);
+        match std::fs::symlink_metadata(&from) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(io_err("inspecting", &from)(e)),
+            Ok(_) => {}
+        }
+        self.checked_mounts()?;
+        let to = self.trash_path(id);
+        // A leftover from an interrupted prune of the same graft.
+        self.remove_child(&to)?;
+        std::fs::rename(&from, &to).map_err(io_err("renaming", &from))?;
+        self.remove_child(&self.tmp_path(id))?;
+        Ok(true)
+    }
+
+    /// Whether retired working trees are waiting to be deleted.
+    #[must_use]
+    pub fn has_trash(&self) -> bool {
+        self.trash().is_ok_and(|t| !t.is_empty())
+    }
+
+    fn trash(&self) -> Result<Vec<PathBuf>> {
+        let entries = match std::fs::read_dir(&self.mounts) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            r => r.map_err(io_err("listing", &self.mounts))?,
+        };
+        let mut out = Vec::new();
+        for e in entries {
+            let e = e.map_err(io_err("listing", &self.mounts))?;
+            if e.file_name().to_string_lossy().starts_with(TRASH_PREFIX) {
+                out.push(e.path());
+            }
+        }
+        Ok(out)
+    }
+
+    /// Deletes every working tree [`Self::retire`] moved aside, with the
+    /// same checks as prune: only direct children of the mounts directory,
+    /// never following symlinks.
+    ///
+    /// # Errors
+    ///
+    /// The first tree that could not be removed.
+    pub fn empty_trash(&self) -> Result<usize> {
+        let trash = self.trash()?;
+        for path in &trash {
+            self.remove_child(path)?;
+        }
+        Ok(trash.len())
     }
 
     pub(crate) fn ensure_mounts(&self) -> Result<PathBuf> {

@@ -33,6 +33,11 @@ body:
       render: text
     validations:
       required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Diagnostics bundle
+      description: Run `graft doctor --report` in the repository and attach the file it names (drag it here). Read it first; secret-looking values are redacted, but it names paths on your machine. Leave this empty if you would rather not share it.
   - type: dropdown
     id: backend
     attributes:

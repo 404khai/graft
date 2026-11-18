@@ -3,13 +3,28 @@
 
 [graph]
 all-features = true
+# Check what Graft builds: Linux and macOS (AGENTS.md §4). Crates only other
+# platforms pull in (e.g. webpki-root-certs via rustls-platform-verifier,
+# CDLA-Permissive-2.0) are never compiled or shipped.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+]
 
 [advisories]
 # Fail on any vulnerability, unmaintained or unsound advisory. Ignore one
 # only with a linked justification.
 unmaintained = "all"
 yanked = "deny"
-ignore = []
+ignore = [
+  # chrono is unmaintained (no vulnerability). Only rmcp, the official MCP
+  # SDK, uses it, unconditionally (and through schemars); there is no
+  # release without it and no fixed version. Remove when rmcp drops chrono:
+  # https://github.com/chronotope/chrono/issues/1768
+  { id = "RUSTSEC-2026-0543", reason = "unmaintained, not vulnerable; only via rmcp, no alternative yet" },
+]
 
 [licenses]
 # Permissive licenses only. Anything else needs a deliberate decision.

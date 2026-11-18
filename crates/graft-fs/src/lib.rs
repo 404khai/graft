@@ -35,6 +35,7 @@ mod lower;
 #[cfg(target_os = "macos")]
 mod nfs;
 mod reflink;
+pub mod stats;
 #[allow(unsafe_code)] // FFI to statfs, clonefile and ioctl; see each SAFETY comment.
 mod sys;
 mod usage;
@@ -46,8 +47,8 @@ mod write;
 pub use backend::{CreateReport, FsBackend, FsError, GraftSpec, ReflinkBackend, Result};
 pub use capabilities::{Availability, fuse_availability, nfs_client_availability};
 pub use changes::{
-    ChangesError, RebasedFile, layer_mounts, rebase_ops, virtual_changes, virtual_diffs,
-    virtual_disk_usage, without_ignored,
+    ChangesError, RebasedFile, layer_mounts, rebase_ops, replayed_delta, virtual_changes,
+    virtual_diffs, virtual_disk_usage, without_ignored,
 };
 pub use clone::{CloneReport, ReflinkCloner, clone_tree};
 pub use fstype::{FsType, available_bytes, filesystem_type, same_filesystem};

@@ -174,14 +174,17 @@ fn an_agent_runs_the_whole_cycle_over_mcp() {
     git(r, &["add", "lib.py"]);
     git(r, &["commit", "-qm", "lib"]);
     git(r, &["branch", "land"]);
-    let init = Command::new(env!("CARGO_BIN_EXE_graft"))
-        .arg("init")
-        .current_dir(r)
-        .env("GRAFT_HOME", home.path())
-        .status()
-        .unwrap();
-    assert!(init.success());
     let mut c = Client::start(home.path(), r);
+
+    // init: an unregistered repository says how to register it.
+    let e = error_of(&mut c, "graft_list", json!({}));
+    assert_eq!(e["code"], "not_registered", "{e}");
+    assert_eq!(e["hint"], "call graft_init", "{e}");
+    let init: Value = serde_json::from_str(&c.ok("graft_init", json!({}))).unwrap();
+    assert_eq!(init["registered"], true, "{init}");
+    let again: Value = serde_json::from_str(&c.ok("graft_init", json!({}))).unwrap();
+    assert_eq!(again["registered"], false, "{again}");
+    assert_eq!(again["root"], init["root"]);
 
     let tools = c.request("tools/list", json!({}));
     let names: Vec<&str> = tools["tools"]
@@ -193,8 +196,14 @@ fn an_agent_runs_the_whole_cycle_over_mcp() {
     assert_eq!(
         names,
         [
+            "graft_init",
             "graft_new",
             "graft_list",
+            "graft_path",
+            "graft_doctor",
+            "graft_fsck",
+            "graft_stats",
+            "graft_telemetry",
             "graft_status",
             "graft_diff",
             "graft_run",
@@ -390,7 +399,7 @@ fn root_can_be_given_explicitly() {
 }
 
 #[test]
-fn mcp_refuses_to_start_outside_a_root() {
+fn mcp_refuses_to_start_outside_a_git_repository() {
     let home = tempfile::tempdir().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_graft"))
@@ -512,7 +521,12 @@ fn failures_have_codes_and_mcp_hints() {
     assert_eq!(list[0]["name"], "a", "{list}");
     assert_eq!(list[0]["backend"], "reflink", "{list}");
     assert_eq!(list[0]["changed"], 0, "{list}");
-    assert!(list[0]["disk_bytes"].is_u64(), "{list}");
+    // Disk use is opt-in: walking a large build tree takes seconds.
+    assert!(list[0]["disk_bytes"].is_null(), "{list}");
+    assert_eq!(list[0]["note"], "disk not measured", "{list}");
+    let measured: Value = serde_json::from_str(&c.ok("graft_list", json!({"disk": true}))).unwrap();
+    assert!(measured["grafts"][0]["disk_bytes"].is_u64(), "{measured}");
+    assert!(measured["grafts"][0]["note"].is_null(), "{measured}");
     assert!(
         list[0]["path"].as_str().unwrap().ends_with("/mounts/a"),
         "{list}"
@@ -773,4 +787,81 @@ fn refusals_have_codes_and_dry_runs_predict_them() {
     .unwrap();
     assert_eq!(pruned, json!({"name": "b", "pruned": true}));
     c.ok("graft_prune", json!({"name": "a"}));
+}
+
+/// An agent can diagnose the machine and hand the user a bug-report bundle.
+#[test]
+fn doctor_over_mcp_reports_and_writes_a_bundle() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = git_repo();
+    let mut c = Client::start(home.path(), repo.path());
+    let v: Value = serde_json::from_str(&c.ok("graft_doctor", json!({}))).unwrap();
+    assert_eq!(v["healthy"], true);
+    assert!(v["reflink"].is_string(), "{v}");
+    assert!(v.get("report").is_none());
+
+    let v: Value = serde_json::from_str(&c.ok("graft_doctor", json!({"report": true}))).unwrap();
+    let path = std::path::PathBuf::from(v["report"].as_str().unwrap());
+    assert!(path.starts_with(home.path().join("reports")), "{path:?}");
+    let b: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(b["doctor"]["healthy"], true);
+}
+
+/// A failed call names its request ID, to match against graftd's log.
+#[test]
+fn failures_carry_a_request_id() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = git_repo();
+    let mut c = Client::start(home.path(), repo.path());
+    c.ok("graft_init", json!({}));
+    let (text, err) = c.call("graft_path", json!({"name": "missing"}));
+    assert!(err, "{text}");
+    let v: Value = serde_json::from_str(&text).unwrap();
+    let id = v["request_id"].as_str().unwrap_or_default();
+    assert!(id.starts_with("mcp-"), "{v}");
+    assert!(id.parse::<graft_core::RequestId>().is_ok(), "{id}");
+}
+
+/// An agent can check Root's stored state.
+#[test]
+fn fsck_over_mcp() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = git_repo();
+    let mut c = Client::start(home.path(), repo.path());
+    c.ok("graft_init", json!({}));
+    let v: Value = serde_json::from_str(&c.ok("graft_fsck", json!({}))).unwrap();
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(v["findings"], json!([]));
+}
+
+/// `graft_stats` says when there is no daemon to ask, instead of starting one.
+#[test]
+fn stats_over_mcp_without_a_daemon() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = git_repo();
+    let mut c = Client::start(home.path(), repo.path());
+    let v: Value = serde_json::from_str(&c.ok("graft_stats", json!({}))).unwrap();
+    assert_eq!(v, json!({"running": false}));
+}
+
+/// An agent can read and turn off telemetry, and turn it on only with
+/// `confirm` (the user asked).
+#[test]
+fn telemetry_over_mcp_needs_confirmation_to_turn_on() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = git_repo();
+    let mut c = Client::start(home.path(), repo.path());
+    let v: Value = serde_json::from_str(&c.ok("graft_telemetry", json!({}))).unwrap();
+    assert_eq!(v["consent"], false, "{v}");
+    let e = error_of(&mut c, "graft_telemetry", json!({"action": "on"}));
+    assert_eq!(e["code"], "confirm_required", "{e}");
+    assert!(!home.path().join("telemetry/consent").exists());
+    let v: Value =
+        serde_json::from_str(&c.ok("graft_telemetry", json!({"action": "on", "confirm": true})))
+            .unwrap();
+    assert_eq!(v["consent"], true, "{v}");
+    assert!(v["collects"].as_str().unwrap().contains("Never arguments"));
+    let v: Value =
+        serde_json::from_str(&c.ok("graft_telemetry", json!({"action": "off"}))).unwrap();
+    assert_eq!(v["consent"], false, "{v}");
 }

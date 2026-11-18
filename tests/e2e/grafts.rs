@@ -221,11 +221,12 @@ fn prune_leaves_nothing_behind() {
         .stdout("Pruned graft gone\n");
 
     assert!(!path.exists(), "working tree left behind");
+    // The tree was moved aside and is deleted in the background.
     let mounts = path.parent().unwrap();
-    assert_eq!(
-        std::fs::read_dir(mounts).unwrap().count(),
-        0,
-        "mounts dir not empty"
+    assert!(
+        empties(mounts),
+        "mounts dir not empty: {:?}",
+        entries(mounts)
     );
     assert!(
         s.store().grafts().unwrap().is_empty(),
@@ -242,6 +243,161 @@ fn prune_leaves_nothing_behind() {
     s.run(&["prune", "gone"])
         .failure()
         .stderr(predicate::str::contains("no graft named gone"));
+}
+
+fn entries(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Whether `dir` becomes empty within 20 s.
+fn empties(dir: &Path) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        if entries(dir).is_empty() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    false
+}
+
+/// `--wait` deletes before returning; the name is free again at once.
+#[test]
+fn prune_wait_deletes_before_returning_and_frees_the_name() {
+    let s = Setup::new();
+    s.run(&["new", "w"]).success();
+    let path = s.path("w");
+    std::fs::create_dir_all(path.join("target/debug")).unwrap();
+    for i in 0..200 {
+        std::fs::write(path.join(format!("target/debug/f{i}")), "x").unwrap();
+    }
+    s.run(&["prune", "w", "--force", "--wait"]).success();
+    assert_eq!(entries(path.parent().unwrap()), Vec::<String>::new());
+    s.run(&["new", "w"]).success();
+    s.run(&["prune", "w"]).success();
+    s.run(&["new", "w"]).success();
+    assert!(s.path("w").join("src/lib.rs").exists());
+}
+
+/// A background delete that never ran (here: a retired tree planted by
+/// hand) is finished by `graft gc`, which only touches `.trash-*` entries.
+#[test]
+fn gc_finishes_an_interrupted_prune() {
+    let s = Setup::new();
+    s.run(&["new", "keep"]).success();
+    let mounts = s.path("keep").parent().unwrap().to_owned();
+    let left = mounts.join(".trash-00000000000000000000000000000000");
+    std::fs::create_dir_all(left.join("a/b")).unwrap();
+    std::fs::write(left.join("a/b/c"), "x").unwrap();
+    s.run(&["gc"])
+        .success()
+        .stdout(predicate::str::contains("Removed 1 pruned working tree(s)"));
+    assert!(!left.exists());
+    assert_eq!(entries(&mounts), ["keep"]);
+}
+
+#[test]
+fn ls_no_disk_skips_measuring() {
+    let s = Setup::new();
+    s.run(&["new", "a"]).success();
+    let ls = s.stdout(&["ls", "--no-disk"]);
+    let row = ls.lines().nth(1).unwrap();
+    assert!(row.trim_end().ends_with(" -"), "{ls}");
+    let v: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["ls", "--json", "--no-disk"])).unwrap();
+    assert!(v["grafts"][0]["disk_bytes"].is_null(), "{v}");
+    assert_eq!(v["grafts"][0]["note"], "disk not measured", "{v}");
+    let v: serde_json::Value = serde_json::from_str(&s.stdout(&["ls", "--json"])).unwrap();
+    assert!(v["grafts"][0]["disk_bytes"].is_u64(), "{v}");
+}
+
+/// `--clone-ignored` brings Root's ignored build outputs into a new graft
+/// as they are, with no build; they stay private and never block prune.
+#[test]
+fn clone_ignored_brings_roots_build_outputs() {
+    let s = Setup::new();
+    let r = s.repo.path();
+    std::fs::write(r.join(".gitignore"), "/target/\nweb/node_modules\n").unwrap();
+    git(r, &["add", ".gitignore"]);
+    git(r, &["commit", "-qm", "ignore"]);
+    std::fs::create_dir_all(r.join("target/debug/deps")).unwrap();
+    std::fs::write(r.join("target/debug/deps/app"), "binary").unwrap();
+    std::fs::create_dir_all(r.join("web/node_modules/left-pad")).unwrap();
+    std::fs::write(
+        r.join("web/node_modules/left-pad/index.js"),
+        "module.exports = 1\n",
+    )
+    .unwrap();
+
+    let out = s.stdout(&[
+        "new",
+        "a",
+        "--clone-ignored",
+        "target,web/node_modules/",
+        "--json",
+    ]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["cloned"][0]["path"], "target", "{v}");
+    assert_eq!(v["cloned"][1]["path"], "web/node_modules", "{v}");
+    let total =
+        v["cloned"][0]["reflinked"].as_u64().unwrap() + v["cloned"][0]["copied"].as_u64().unwrap();
+    assert_eq!(total, 1, "{v}");
+    let a = s.path("a");
+    assert_eq!(
+        std::fs::read_to_string(a.join("target/debug/deps/app")).unwrap(),
+        "binary"
+    );
+    assert!(a.join("web/node_modules/left-pad/index.js").is_file());
+
+    // Private: a write in the graft does not reach Root.
+    std::fs::write(a.join("target/debug/deps/app"), "rebuilt").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(r.join("target/debug/deps/app")).unwrap(),
+        "binary"
+    );
+    // Ignored, so not a change and no reason to refuse prune.
+    let status = s.stdout(&["status", "a"]);
+    assert!(status.contains("nothing changed since base"), "{status}");
+    s.run(&["prune", "a"]).success();
+    assert!(
+        r.join("target/debug/deps/app").is_file(),
+        "prune touched Root"
+    );
+}
+
+#[test]
+fn clone_ignored_refuses_what_it_should_not_copy() {
+    let s = Setup::new();
+    let r = s.repo.path();
+    std::fs::write(r.join(".gitignore"), "/out\n/link\n").unwrap();
+    git(r, &["add", ".gitignore"]);
+    git(r, &["commit", "-qm", "ignore"]);
+    std::fs::create_dir_all(r.join("out/x")).unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), r.join("link")).unwrap();
+    for (arg, needle) in [
+        ("src", "not ignored by git"),
+        ("missing", "not in Root's working tree"),
+        ("../etc", "must not contain . or .."),
+        ("/etc", "must be relative"),
+        (".git", "inside .git"),
+        ("link", "not a directory"),
+        ("out,out/x", "inside out"),
+    ] {
+        s.run(&["new", "x", "--clone-ignored", arg])
+            .failure()
+            .stderr(predicate::str::contains(needle));
+    }
+    // Nothing was created by any refused call.
+    s.run(&["ls"])
+        .success()
+        .stdout(predicate::str::contains("No grafts"));
+    s.run(&["new", "x", "--clone-ignored", "out", "--backend", "fuse"])
+        .failure()
+        .stderr(predicate::str::contains("needs a reflink graft"));
 }
 
 #[test]

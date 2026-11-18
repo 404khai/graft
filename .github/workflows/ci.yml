@@ -26,6 +26,16 @@ jobs:
       - run: rustup toolchain install
       - run: cargo fmt --all --check
 
+  collector:
+    # The telemetry collector Worker (telemetry/collector, ADR 0035). The
+    # runner's preinstalled Node runs its tests; no packages are installed.
+    name: telemetry collector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: node --version && node --test
+        working-directory: telemetry/collector
+
   clippy:
     name: clippy (${{ matrix.os }})
     strategy:
@@ -157,6 +167,10 @@ jobs:
         run: ls -l /dev/fuse "$(command -v fusermount3)"
       - run: cargo build --workspace --locked
       - run: cargo test --locked -p graft-fs --features fuse-tests --test fuse_backend
+      # Debian and Fedora default to umask 002; Ubuntu runners use 022.
+      # Grafts must list the same modes as Root under both.
+      - name: FUSE tree matches Root under umask 002
+        run: umask 002 && cargo test --locked -p graft-fs --features fuse-tests --test fuse_backend tools_see_the_same_tree_as_root
       - run: cargo test --locked -p graft-cli --features fuse-tests --test e2e virtual_grafts
       - name: Medium fixture builds and tests inside a virtual graft
         run: scripts/virtual-medium-fixture.sh "$RUNNER_TEMP/medium"

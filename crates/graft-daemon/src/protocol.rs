@@ -28,6 +28,10 @@ pub struct Request {
     /// Method parameters; `null` when there are none.
     #[serde(default)]
     pub params: serde_json::Value,
+    /// The calling `graft` invocation's request ID, logged with the
+    /// request (ADR 0031). Optional, so older clients still work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 /// A response: exactly one of `result` and `error` is set.
@@ -124,6 +128,47 @@ pub struct MountInfo {
     pub graft: String,
     /// The mount point.
     pub path: std::path::PathBuf,
+}
+
+/// Result of `stats`: graftd's counters since it started (ADR 0033).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Stats {
+    /// The daemon's version.
+    pub version: String,
+    /// The daemon's process ID.
+    pub pid: u32,
+    /// How long it has run.
+    pub uptime_ms: u64,
+    /// Grafts mounted now.
+    pub mounts: usize,
+    /// Its resident memory, where the platform reports it cheaply (Linux).
+    pub rss_bytes: Option<u64>,
+    /// Filesystem operations served at least once.
+    pub ops: Vec<OpStats>,
+    /// Content cache hits.
+    pub cache_hits: u64,
+    /// Content cache misses.
+    pub cache_misses: u64,
+}
+
+/// One filesystem operation's totals in [`Stats`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpStats {
+    /// The operation, e.g. `read`.
+    pub op: String,
+    /// Requests served.
+    pub count: u64,
+    /// Requests that returned an error (including expected ones, such as a
+    /// lookup of a missing name).
+    pub errors: u64,
+    /// Mean latency, µs.
+    pub mean_us: u64,
+    /// Estimated median latency (a power-of-two bucket bound), µs.
+    pub p50_us: u64,
+    /// Estimated 99th percentile latency, µs.
+    pub p99_us: u64,
+    /// Slowest request, µs.
+    pub max_us: u64,
 }
 
 /// Params of `set_actor`.

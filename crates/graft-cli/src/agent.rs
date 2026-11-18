@@ -67,12 +67,25 @@ pub(crate) fn code_of(e: &anyhow::Error) -> &'static str {
         if cause.downcast_ref::<InvalidGraftName>().is_some() {
             return "invalid_name";
         }
+        if not_registered(cause) {
+            return "not_registered";
+        }
     }
     "failed"
 }
 
+fn not_registered(cause: &(dyn std::error::Error + 'static)) -> bool {
+    matches!(
+        cause.downcast_ref::<graft_store::StoreError>(),
+        Some(graft_store::StoreError::NotRegistered { .. })
+    )
+}
+
 /// The hint of the first [`Coded`] in `e`'s chain.
 fn hint_of(e: &anyhow::Error) -> Option<&str> {
+    if e.chain().any(not_registered) {
+        return Some(suggest("run `graft init`", "call graft_init"));
+    }
     e.chain()
         .find_map(|c| c.downcast_ref::<Coded>())
         .and_then(|c| c.hint.as_deref())
@@ -111,7 +124,11 @@ pub(crate) fn report_failure(code: &str, message: &str, hint: Option<&str>) {
 
 /// Under `graft mcp`, writes how a `graft run` command ended to stderr as
 /// `{"run":{"exit_code","signal","duration_ms"}}`, for `graft_run`'s result.
-pub(crate) fn report_run(status: std::process::ExitStatus, took: std::time::Duration) {
+pub(crate) fn report_run(
+    status: std::process::ExitStatus,
+    took: std::time::Duration,
+    sandbox: Option<&crate::run::SandboxReport>,
+) {
     if !is_mcp() {
         return;
     }
@@ -124,6 +141,7 @@ pub(crate) fn report_run(status: std::process::ExitStatus, took: std::time::Dura
             "exit_code": status.code(),
             "signal": signal,
             "duration_ms": u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
+            "sandbox": sandbox.map(|s| serde_json::json!({"denied": s.denied, "hint": s.hint})),
         }
     });
     let _ = writeln!(std::io::stderr(), "{v}");

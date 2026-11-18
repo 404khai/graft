@@ -5,18 +5,20 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use graft_core::{GraftHome, GraftName, GraftState, RootId};
+use graft_core::{GraftHome, GraftName, GraftState, RequestId, RootId};
 use graft_fs::view::LayerMount;
 use graft_root::Repo;
 use graft_store::{GraftRecord, Store};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Notify;
+use tracing::Instrument;
 
 use crate::paths;
 use crate::protocol::{
     ActorParams, GRAFT_ERROR, GraftRef, INVALID_PARAMS, INVALID_REQUEST, JSONRPC, METHOD_NOT_FOUND,
-    MountInfo, Mounted, PARSE_ERROR, Ping, Request, Response, RootRef, Swept, Unmounted,
+    MountInfo, Mounted, OpStats, PARSE_ERROR, Ping, Request, Response, RootRef, Stats, Swept,
+    Unmounted,
 };
 
 /// What `graftd` needs from a filesystem backend. Implemented over
@@ -186,6 +188,7 @@ struct State {
     home: GraftHome,
     mounter: Arc<dyn Mounter>,
     shutdown: Notify,
+    started: std::time::Instant,
 }
 
 fn parse_ref(r: &GraftRef) -> Result<(RootId, GraftName), String> {
@@ -409,12 +412,48 @@ async fn handle(
                 .collect();
             value(&list)
         }
+        "stats" => value(&stats(state)),
         "shutdown" => {
             state.shutdown.notify_one();
             value(&())
         }
         other => Err((METHOD_NOT_FOUND, format!("no method {other:?}"))),
     }
+}
+
+fn stats(state: &State) -> Stats {
+    let micros = |d: std::time::Duration| u64::try_from(d.as_micros()).unwrap_or(u64::MAX);
+    let snap = graft_fs::stats::snapshot();
+    Stats {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        pid: std::process::id(),
+        uptime_ms: u64::try_from(state.started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        mounts: state.mounter.mounts().len(),
+        rss_bytes: rss_bytes(),
+        ops: snap
+            .ops
+            .iter()
+            .map(|o| OpStats {
+                op: o.op.name().to_owned(),
+                count: o.count,
+                errors: o.errors,
+                mean_us: micros(o.mean),
+                p50_us: micros(o.p50),
+                p99_us: micros(o.p99),
+                max_us: micros(o.max),
+            })
+            .collect(),
+        cache_hits: snap.cache_hits,
+        cache_misses: snap.cache_misses,
+    }
+}
+
+/// Resident memory from `/proc/self/status` (Linux); `None` elsewhere.
+fn rss_bytes() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
+    let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kib * 1024)
 }
 
 async fn dispatch(state: &Arc<State>, line: &str) -> Response {
@@ -429,9 +468,28 @@ async fn dispatch(state: &Arc<State>, line: &str) -> Response {
     if request.jsonrpc != JSONRPC {
         return Response::err(Some(request.id), INVALID_REQUEST, "jsonrpc must be \"2.0\"");
     }
-    match handle(state, &request.method, request.params).await {
-        Ok(v) => Response::ok(request.id, v),
-        Err((code, message)) => Response::err(Some(request.id), code, message),
+    // Only a valid ID reaches the log, so a client cannot forge log lines.
+    let request_id = match request.request_id.as_deref().map(str::parse::<RequestId>) {
+        None => "-".to_owned(),
+        Some(Ok(id)) => id.to_string(),
+        Some(Err(_)) => "invalid".to_owned(),
+    };
+    let span = tracing::info_span!("rpc", request = %request_id, method = %request.method);
+    let started = std::time::Instant::now();
+    let result = handle(state, &request.method, request.params)
+        .instrument(span.clone())
+        .await;
+    let _entered = span.enter();
+    let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    match result {
+        Ok(v) => {
+            tracing::debug!(ms, "handled");
+            Response::ok(request.id, v)
+        }
+        Err((code, message)) => {
+            tracing::warn!(ms, code, error = %message, "request failed");
+            Response::err(Some(request.id), code, message)
+        }
     }
 }
 
@@ -520,6 +578,7 @@ pub async fn serve(home: GraftHome, mounter: Arc<dyn Mounter>) -> Result<(), Ser
         home,
         mounter,
         shutdown: Notify::new(),
+        started: std::time::Instant::now(),
     });
     let s = Arc::clone(&state);
     let remounted = blocking(move || Ok(remount_all(&s))).await.unwrap_or(0);

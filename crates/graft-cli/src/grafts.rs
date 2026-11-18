@@ -42,8 +42,14 @@ pub(crate) struct NewArgs {
     /// a failed build's output is shown).
     #[arg(long, short)]
     verbose: bool,
+    /// Reflink these git-ignored directories from Root's working tree into
+    /// the graft (e.g. `target,web/node_modules`), with no build: a graft
+    /// starts with Root's build outputs and dependencies as they are.
+    /// Reflink grafts only.
+    #[arg(long, value_name = "PATHS", value_delimiter = ',')]
+    clone_ignored: Vec<String>,
     /// Print JSON: `{name, path, base, backend, layers: [{path, status,
-    /// key}]}`.
+    /// key}], cloned: [{path, reflinked, copied}]}`.
     #[arg(long)]
     json: bool,
 }
@@ -66,6 +72,7 @@ impl NewArgs {
             backend,
             blueprint: None,
             verbose: false,
+            clone_ignored: Vec::new(),
             json: false,
         }
     }
@@ -93,6 +100,16 @@ pub(crate) struct NameArgs {
     name: String,
 }
 
+/// Arguments for `graft path`.
+#[derive(Debug, clap::Args)]
+pub(crate) struct PathArgs {
+    /// The graft's name.
+    name: String,
+    /// Print JSON: `{name, path}`.
+    #[arg(long)]
+    json: bool,
+}
+
 /// Arguments for `graft status`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct StatusArgs {
@@ -111,6 +128,10 @@ pub(crate) struct LsArgs {
     /// null when unknown, with the reason in `note`).
     #[arg(long)]
     json: bool,
+    /// Skip measuring disk use, which walks every file (slow for a large
+    /// build tree such as `target/`). `disk_bytes` is then null.
+    #[arg(long)]
+    no_disk: bool,
 }
 
 /// Arguments for `graft prune`.
@@ -125,6 +146,11 @@ pub(crate) struct PruneArgs {
     /// Print JSON: `{name, pruned}`.
     #[arg(long)]
     json: bool,
+    /// Delete the working tree before returning. By default it is moved
+    /// aside at once and deleted in the background (`graft gc` finishes
+    /// the job if that is interrupted).
+    #[arg(long)]
+    wait: bool,
 }
 
 impl PruneArgs {
@@ -135,6 +161,7 @@ impl PruneArgs {
             name,
             force: true,
             json: false,
+            wait: false,
         }
     }
 }
@@ -299,6 +326,13 @@ pub(crate) fn daemon(home: &GraftHome, out: &mut Output) -> anyhow::Result<Clien
 pub(crate) fn new(args: &NewArgs, env: &Environment) -> anyhow::Result<Output> {
     let name = parse_name(&args.name)?;
     let kind = choose_backend(args, env)?;
+    if kind.is_virtual() && !args.clone_ignored.is_empty() {
+        return Err(crate::agent::coded(
+            "backend_unsupported",
+            format!("--clone-ignored needs a reflink graft, not {kind}"),
+            Some("drop --clone-ignored, or declare the directory as a layer in graft.toml".into()),
+        ));
+    }
     let mut out = timing::time("graft new", || {
         if kind.is_virtual() {
             new_virtual(args, env, &name, kind)
@@ -374,6 +408,7 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
             blueprint.as_ref().and_then(|b| b.layers.as_deref()),
         )
     })?;
+    let seeds = check_clone_ignored(&located.record.path, &args.clone_ignored)?;
 
     // The record reserves the name before any files exist.
     let record = located
@@ -408,9 +443,12 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
                 true,
                 args.build_output(),
             )?;
-            Ok((report, applied))
+            let cloned = timing::time("clone ignored", || {
+                clone_ignored(&located.record.path, &report.path, &seeds)
+            })?;
+            Ok((report, applied, cloned))
         });
-    let (report, applied) = match created {
+    let (report, applied, cloned) = match created {
         Ok(created) => created,
         Err(e) => {
             let _ = backend.prune(name, record.id);
@@ -436,6 +474,7 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
         report.clone.reflinked, report.clone.copied, c.written
     );
     report_layers(&applied, &mut out);
+    report_cloned(&cloned, report.clone.fallback.is_some(), &mut out);
     if let Some(reason) = &report.clone.fallback {
         out.warnings.push(format!(
             "copied {} files instead of reflinking them: {reason}. This graft uses its full size on disk.",
@@ -456,8 +495,135 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
         ));
     }
     Ok(out.json_if(args.json, || {
-        created_json(name, &report.path, &base, BackendKind::Reflink, &applied)
+        let mut v = created_json(name, &report.path, &base, BackendKind::Reflink, &applied);
+        v["cloned"] = cloned_json(&cloned);
+        v
     }))
+}
+
+/// A git-ignored directory `--clone-ignored` brought in from Root.
+struct Cloned {
+    path: std::path::PathBuf,
+    reflinked: u64,
+    copied: u64,
+    fallback: Option<String>,
+}
+
+/// One line per cloned directory, and a warning for one that was copied
+/// (unless the whole tree was, which has its own warning).
+fn report_cloned(cloned: &[Cloned], tree_copied: bool, out: &mut Output) {
+    for c in cloned {
+        let _ = writeln!(
+            out.stdout,
+            "  {} cloned from Root: {} files reflinked, {} copied",
+            c.path.display(),
+            c.reflinked,
+            c.copied
+        );
+        if !tree_copied && let Some(reason) = &c.fallback {
+            out.warnings.push(format!(
+                "copied {} instead of reflinking it: {reason}. It uses its full size on disk.",
+                c.path.display()
+            ));
+        }
+    }
+}
+
+fn cloned_json(cloned: &[Cloned]) -> serde_json::Value {
+    cloned
+        .iter()
+        .map(|c| serde_json::json!({"path": c.path, "reflinked": c.reflinked, "copied": c.copied}))
+        .collect()
+}
+
+/// Checks `--clone-ignored` before anything is created: each path is
+/// relative with plain components, a real directory in Root's working
+/// tree (not reached through a symlink), ignored by git there, and not
+/// inside another one.
+fn check_clone_ignored(root: &Path, raw: &[String]) -> anyhow::Result<Vec<std::path::PathBuf>> {
+    let mut paths = Vec::new();
+    for r in raw {
+        let p = graft_blueprint::safe_relative(r.trim_end_matches('/'))
+            .map_err(|why| anyhow::anyhow!("--clone-ignored {r}: the path {why}"))?;
+        paths.push(p);
+    }
+    if paths.is_empty() {
+        return Ok(paths);
+    }
+    let top = root
+        .canonicalize()
+        .with_context(|| format!("resolving {}", root.display()))?;
+    for p in &paths {
+        let src = root.join(p);
+        let meta = std::fs::symlink_metadata(&src).with_context(|| {
+            format!(
+                "--clone-ignored {}: not in Root's working tree",
+                p.display()
+            )
+        })?;
+        if !meta.is_dir() {
+            bail!("--clone-ignored {}: not a directory in Root", p.display());
+        }
+        if src.canonicalize()? != top.join(p) {
+            bail!(
+                "--clone-ignored {}: reached through a symlink in Root",
+                p.display()
+            );
+        }
+        if let Some(outer) = paths.iter().find(|o| *o != p && p.starts_with(o)) {
+            bail!(
+                "--clone-ignored {}: inside {}, which is already cloned",
+                p.display(),
+                outer.display()
+            );
+        }
+    }
+    // A child probe makes every real component a directory for git's
+    // matching, so dir-only patterns such as `/target/` apply.
+    let probes: Vec<_> = paths.iter().map(|p| p.join(".graft-probe")).collect();
+    let ignored = GraftRepo::open(root)?.ignored(&probes)?;
+    for (p, probe) in paths.iter().zip(&probes) {
+        if !ignored.contains(probe) {
+            bail!(
+                "--clone-ignored {}: not ignored by git in Root; its tracked files are in the graft already",
+                p.display()
+            );
+        }
+    }
+    Ok(paths)
+}
+
+/// Reflinks each checked path from Root into the new graft at `graft`.
+fn clone_ignored(
+    root: &Path,
+    graft: &Path,
+    paths: &[std::path::PathBuf],
+) -> anyhow::Result<Vec<Cloned>> {
+    let mut out = Vec::new();
+    for p in paths {
+        let dst = graft.join(p);
+        if std::fs::symlink_metadata(&dst).is_ok() {
+            bail!(
+                "--clone-ignored {}: already in the graft (a layer of graft.toml?)",
+                p.display()
+            );
+        }
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        let cloner = graft_fs::ReflinkCloner::new();
+        graft_fs::clone_tree(&root.join(p), &dst, &cloner)
+            .with_context(|| format!("cloning {} from Root", p.display()))?;
+        let r = cloner.report();
+        out.push(Cloned {
+            path: p.clone(),
+            reflinked: r.reflinked,
+            copied: r.copied,
+            fallback: r.fallback,
+        });
+    }
+    Ok(out)
 }
 
 /// Creates a FUSE graft: a record, a pin and layer references, then graftd
@@ -624,6 +790,7 @@ fn measure(
     g: &GraftRecord,
     path: &std::path::Path,
     mounted: Option<&[GraftName]>,
+    want_disk: bool,
     warnings: &mut Vec<String>,
 ) -> (Option<usize>, Option<u64>, Option<String>) {
     let Ctx {
@@ -639,10 +806,14 @@ fn measure(
             let changed = crate::virtual_grafts::diffs(home, located, &root_dir, path, g, warnings)
                 .map(|d| d.len())
                 .map_err(|e| format!("error: {e:#}"));
-            let disk = crate::virtual_grafts::disk(located, &root_dir, g)
-                .map_err(|e| format!("error: {e:#}"));
+            let disk = if want_disk {
+                crate::virtual_grafts::disk(located, &root_dir, g).map(Some)
+            } else {
+                Ok(None)
+            }
+            .map_err(|e| format!("error: {e:#}"));
             let note = changed.as_ref().err().or(disk.as_ref().err()).cloned();
-            (changed.ok(), disk.ok(), note)
+            (changed.ok(), disk.ok().flatten(), note)
         } else {
             (None, None, Some("unmounted".to_owned()))
         }
@@ -651,11 +822,14 @@ fn measure(
             .diff(&g.name, &g.base_commit)
             .map(|c| c.len())
             .map_err(|e| format!("error: {e}"));
-        let disk = backend
-            .disk_usage(&g.name)
-            .map_err(|e| format!("error: {e}"));
+        let disk = if want_disk {
+            backend.disk_usage(&g.name).map(Some)
+        } else {
+            Ok(None)
+        }
+        .map_err(|e| format!("error: {e}"));
         let note = changed.as_ref().err().or(disk.as_ref().err()).cloned();
-        (changed.ok(), disk.ok(), note)
+        (changed.ok(), disk.ok().flatten(), note)
     } else {
         (None, None, Some("missing".to_owned()))
     }
@@ -717,7 +891,14 @@ pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
     ]];
     for g in &grafts {
         let path = backend.path(&g.name);
-        let (changed, disk, note) = measure(&ctx, g, &path, mounted.as_deref(), &mut out.warnings);
+        let (changed, disk, note) = measure(
+            &ctx,
+            g,
+            &path,
+            mounted.as_deref(),
+            !args.no_disk,
+            &mut out.warnings,
+        );
         // A registered graft's index lives in Root's `.git` (ADR 0027).
         let registration = located.repo.registration(&g.name, &path);
         let disk = disk.map(|d| {
@@ -731,7 +912,11 @@ pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
             short(g).to_owned(),
             g.state.to_string(),
             changed.map_or_else(|| "-".to_owned(), |c| c.to_string()),
-            shown(disk.map(human_bytes)),
+            if args.no_disk {
+                "-".to_owned()
+            } else {
+                shown(disk.map(human_bytes))
+            },
         ]);
         listed.push(serde_json::json!({
             "name": g.name.as_str(),
@@ -741,7 +926,7 @@ pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
             "path": path,
             "changed": changed,
             "disk_bytes": disk,
-            "note": note,
+            "note": note.clone().or_else(|| args.no_disk.then(|| "disk not measured".to_owned())),
             "git_worktree": registration.is_some(),
         }));
     }
@@ -773,16 +958,17 @@ pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
 }
 
 /// Prints a graft's working-tree path.
-pub(crate) fn path(args: &NameArgs, env: &Environment) -> anyhow::Result<Output> {
+pub(crate) fn path(args: &PathArgs, env: &Environment) -> anyhow::Result<Output> {
     let name = parse_name(&args.name)?;
     let Ctx {
         located, backend, ..
     } = open(env)?;
     find(&located.store, &name)?;
-    Ok(Output::stdout(format!(
-        "{}\n",
-        backend.path(&name).display()
-    )))
+    let path = backend.path(&name);
+    Ok(Output::stdout(format!("{}\n", path.display())).json_if(
+        args.json,
+        || serde_json::json!({"name": name.to_string(), "path": path}),
+    ))
 }
 
 /// What `graft status` reports for one graft.
@@ -1042,8 +1228,15 @@ pub(crate) fn prune(args: &PruneArgs, env: &Environment) -> anyhow::Result<Outpu
     }
     let mut out = Output::default();
     crate::blueprints::release(&mut ctx, &record, &mut out)?;
-    ctx.backend.prune(&name, record.id)?;
+    // The registration names the working tree's path, so it goes first,
+    // while the tree is still where it names (ADR 0027).
     unregister(&ctx, &name, checked, &mut out)?;
+    // Deleting a large build tree takes seconds: move it aside, then
+    // delete it after returning.
+    let retired = ctx.backend.retire(&name, record.id)?;
+    if retired && (args.wait || !spawn_trash_sweeper(&ctx)) {
+        sweep_trash(&ctx, true)?;
+    }
     remove_tmp(&ctx, record.id)?;
     ctx.located.repo.unpin(record.id)?;
     ctx.located.store.delete_graft(record.id)?;
@@ -1052,6 +1245,60 @@ pub(crate) fn prune(args: &PruneArgs, env: &Environment) -> anyhow::Result<Outpu
         args.json,
         || serde_json::json!({"name": name.as_str(), "pruned": true}),
     ))
+}
+
+/// Starts `graft __empty-trash` for this Root, detached, with no stdio
+/// (so `graft mcp` does not wait for it). `false` if it could not start.
+fn spawn_trash_sweeper(ctx: &Ctx) -> bool {
+    use std::process::{Command, Stdio};
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let mut cmd = Command::new(exe);
+    cmd.arg("__empty-trash")
+        .current_dir(&ctx.located.record.path)
+        .env("GRAFT_HOME", ctx.home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(id) = graft_daemon::client::request_id() {
+        cmd.env(graft_core::REQUEST_ID_ENV, id);
+    }
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    match cmd.spawn() {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, "starting the background delete");
+            false
+        }
+    }
+}
+
+/// `graft __empty-trash`: deletes the working trees prune moved aside,
+/// unless another sweeper already is.
+pub(crate) fn empty_trash(env: &Environment) -> anyhow::Result<Output> {
+    sweep_trash(&open(env)?, false)?;
+    Ok(Output::default())
+}
+
+/// Empties the trash under `trash.lock`, waiting for it if `wait`, else
+/// leaving it to the sweeper that holds it. How many trees went.
+pub(crate) fn sweep_trash(ctx: &Ctx, wait: bool) -> anyhow::Result<usize> {
+    let path = ctx.root_dir().join("trash.lock");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    if wait {
+        lock.lock()
+            .with_context(|| format!("locking {}", path.display()))?;
+    } else if lock.try_lock().is_err() {
+        return Ok(0);
+    }
+    Ok(ctx.backend.empty_trash()?)
 }
 
 /// Removes the graft's `graft run` temp dir, `$GRAFT_HOME/roots/<root-id>/tmp/<graft-id>/`.

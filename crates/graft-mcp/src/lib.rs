@@ -75,7 +75,8 @@ pub struct GraftServer {
     cwd: PathBuf,
     watcher: Mutex<Option<tokio::task::JoinHandle<()>>>,
     subscriptions: Arc<Mutex<BTreeSet<String>>>,
-    next_task: AtomicU64,
+    /// Numbers tool calls, for task files and request IDs.
+    next_call: AtomicU64,
 }
 
 impl std::fmt::Debug for GraftServer {
@@ -92,6 +93,8 @@ struct Ran {
     ok: bool,
     stdout: String,
     stderr: String,
+    /// The `$GRAFT_REQUEST_ID` the command ran with (ADR 0031).
+    request_id: String,
 }
 
 impl GraftServer {
@@ -104,14 +107,14 @@ impl GraftServer {
             cwd,
             watcher: Mutex::new(None),
             subscriptions: Arc::new(Mutex::new(BTreeSet::new())),
-            next_task: AtomicU64::new(1),
+            next_call: AtomicU64::new(1),
         }
     }
 
     async fn run(&self, inv: &Invocation) -> Result<Ran, String> {
         let task_file = match &inv.task_text {
             Some(text) => {
-                let n = self.next_task.fetch_add(1, Ordering::Relaxed);
+                let n = self.next_call.fetch_add(1, Ordering::Relaxed);
                 let path = std::env::temp_dir()
                     .join(format!("graft-mcp-task-{}-{n}.md", std::process::id()));
                 std::fs::write(&path, text).map_err(|e| format!("writing the task: {e}"))?;
@@ -127,9 +130,16 @@ impl GraftServer {
                 _ => a.clone(),
             })
             .collect();
+        let request_id = format!(
+            "mcp-{}-{}",
+            std::process::id(),
+            self.next_call.fetch_add(1, Ordering::Relaxed)
+        );
+        let started = std::time::Instant::now();
         let child = Command::new(&self.bin)
             .args(&args)
             .env(AGENT_ENV, "1")
+            .env(graft_core::REQUEST_ID_ENV, &request_id)
             .current_dir(&self.cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -143,6 +153,7 @@ impl GraftServer {
                     ok: out.status.success(),
                     stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
                     stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+                    request_id: request_id.clone(),
                 }),
                 Ok(Err(e)) => Err(format!("running graft: {e}")),
                 Err(_) => Err(format!(
@@ -156,6 +167,9 @@ impl GraftServer {
         if let Some(p) = task_file {
             let _ = std::fs::remove_file(p);
         }
+        let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let ok = matches!(&result, Ok(r) if r.ok);
+        tracing::info!(command = %args[0], request = %request_id, ok, ms, "tool call");
         result
     }
 
@@ -262,7 +276,7 @@ fn text_result(text: String, error: bool) -> CallToolResponse {
 /// `message` and `hint` in its last stderr line; anything else it printed
 /// is `output`. A command that ends without that line (a `graft_run`
 /// command, or a queue entry that failed its gate) is `failed`.
-fn error_result(stdout: &str, stderr: &str) -> CallToolResponse {
+fn error_result(stdout: &str, stderr: &str, request_id: &str) -> CallToolResponse {
     let mut reported: Option<Value> = None;
     let mut rest: Vec<&str> = Vec::new();
     for line in stderr.lines() {
@@ -290,6 +304,8 @@ fn error_result(stdout: &str, stderr: &str) -> CallToolResponse {
         || serde_json::json!({"code": "failed", "message": "the command failed", "hint": null}),
     );
     err["output"] = Value::String(output.trim_end().to_owned());
+    // Ties the failure to graftd's log, for a bug report (ADR 0031).
+    err["request_id"] = Value::String(request_id.to_owned());
     text_result(err.to_string(), true)
 }
 
@@ -343,7 +359,7 @@ fn run_result(ran: &Ran) -> CallToolResponse {
         }
     }
     let Some(ended) = ended else {
-        return error_result(&ran.stdout, &ran.stderr);
+        return error_result(&ran.stdout, &ran.stderr, &ran.request_id);
     };
     let mut result = ended;
     result["stdout"] = Value::String(ran.stdout.clone());
@@ -360,7 +376,9 @@ fn run_result(ran: &Ran) -> CallToolResponse {
     };
     result["code"] = Value::String("command_failed".to_owned());
     result["message"] = Value::String(format!("the command {how}"));
-    result["hint"] = Value::Null;
+    // Set when the sandbox refused writes, or for SwiftPM on macOS.
+    result["hint"] = result["sandbox"]["hint"].clone();
+    result["request_id"] = Value::String(ran.request_id.clone());
     text_result(result.to_string(), true)
 }
 
@@ -440,7 +458,7 @@ impl ServerHandler for GraftServer {
                 };
                 text_result(with_warnings(stdout, &ran.stderr), false)
             }
-            Ok(ran) => error_result(&ran.stdout, &ran.stderr),
+            Ok(ran) => error_result(&ran.stdout, &ran.stderr, &ran.request_id),
             Err(why) => failure(&why),
         })
     }

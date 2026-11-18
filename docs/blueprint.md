@@ -86,6 +86,12 @@ Like layer commands, each path must be approved once with `graft trust`;
 the graft's base commit, so an agent cannot widen its own sandbox by
 editing `graft.toml` in its graft. For one run, the operator can add a
 path with `graft run <name> --write <path> -- <command>`.
+`--dev-caches` adds the toolchain caches compilers and package managers
+write to (macOS: the per-user cache and temp directories and SwiftPM's
+caches; Linux: `~/.cache`). When a run fails on macOS, `graft run` lists
+the writes the sandbox refused. SwiftPM cannot start its own sandbox
+inside Graft's, so run it as `swift test --disable-sandbox`
+([ADR 0029](decisions/0029-sandbox-denials-and-dev-caches.md)).
 
 ## `[blueprint.<name>]`
 
@@ -206,6 +212,10 @@ branch = "main"               # the target, if not Root's current branch
 `graft trust` approves the gate and the resolver; an unapproved one stops
 the integration instead of being skipped. The table is read at the
 target's head.
+For one call, `graft integrate --test COMMAND` replaces `test` without a
+commit or `graft trust` (it is the operator's command, not the
+repository's), and `--create-branch` creates a missing target at Root's
+HEAD ([ADR 0027](decisions/0027-per-call-integrate-options.md)).
 
 Each file the graft changed is merged in turn: the side that changed it
 wins, then `git merge-file`, then Mergiraf (`$GRAFT_MERGIRAF` or

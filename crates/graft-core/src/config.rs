@@ -17,6 +17,11 @@
 //! # Register new grafts as git worktrees of Root, so `git worktree list`,
 //! # editors and git clients list them (ADR 0027). Off by default.
 //! worktrees = true
+//!
+//! [telemetry]
+//! # Where opted-in usage events are sent (ADR 0034). There is no default:
+//! # without it, nothing is ever sent, even after `graft telemetry on`.
+//! endpoint = "https://telemetry.example.com/v1/events"
 //! ```
 
 use std::io::ErrorKind;
@@ -41,6 +46,8 @@ pub struct Config {
     pub fs: FsConfig,
     /// How grafts appear to git.
     pub git: GitConfig,
+    /// Opt-in telemetry settings.
+    pub telemetry: TelemetryConfig,
 }
 
 /// The `[git]` table.
@@ -50,6 +57,16 @@ pub struct GitConfig {
     /// Register new grafts as linked worktrees of Root (ADR 0027). Grafts
     /// that exist already keep their layout.
     pub worktrees: bool,
+}
+
+/// The `[telemetry]` table. Sending also needs the user's opt-in
+/// (`graft telemetry on`); this only says where to.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TelemetryConfig {
+    /// URL that receives batches of events. `https`, or `http` to a
+    /// loopback address. `None`: nothing is sent.
+    pub endpoint: Option<String>,
 }
 
 /// The `[fs]` table.

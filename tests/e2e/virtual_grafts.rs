@@ -320,6 +320,22 @@ mod fuse {
         assert!(!repo.path().join(".git/worktrees").exists());
     }
 
+    /// graftd counted requests of each of `ops` (ADR 0033).
+    fn assert_counted(home: &Path, ops: &[&str]) {
+        let out = graft_d(home).args(["stats", "--json"]).output().unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["running"], true, "{v}");
+        let seen: Vec<&str> = v["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["op"].as_str().unwrap())
+            .collect();
+        for op in ops {
+            assert!(seen.contains(op), "no {op} counted in {v}");
+        }
+    }
+
     #[test]
     fn full_lifecycle_leaves_nothing_behind() {
         require_fuse();
@@ -364,6 +380,14 @@ mod fuse {
             .assert()
             .success()
             .stdout(predicate::str::contains("-hello\n+changed\n"));
+        // The journaled writes replay to the stored delta (ADR 0032).
+        graft_d(home.path())
+            .current_dir(repo.path())
+            .arg("fsck")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("no problems found"));
+        assert_counted(home.path(), &["write", "lookup"]);
         graft_d(home.path())
             .current_dir(repo.path())
             .args(["log", "v"])

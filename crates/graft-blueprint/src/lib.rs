@@ -376,8 +376,13 @@ impl Locator<'_> {
     }
 }
 
-/// A relative path made only of normal components, none of them `.git`.
-fn safe_relative(raw: &str) -> Result<PathBuf, &'static str> {
+/// A relative path made only of normal components, none of them `.git`,
+/// as layer paths must be.
+///
+/// # Errors
+///
+/// Why `raw` is not one, e.g. `"must not contain . or .. components"`.
+pub fn safe_relative(raw: &str) -> Result<PathBuf, &'static str> {
     if raw.is_empty() {
         return Err("must not be empty");
     }

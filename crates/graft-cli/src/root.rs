@@ -8,7 +8,7 @@ use graft_core::GraftState;
 use graft_root::Repo;
 use graft_store::{Registration, registry};
 
-use crate::Environment;
+use crate::{Environment, Output};
 
 /// Arguments for `graft init`.
 #[derive(Debug, clap::Args)]
@@ -16,6 +16,10 @@ pub(crate) struct InitArgs {
     /// A path inside the repository to register. Defaults to the current
     /// directory.
     path: Option<PathBuf>,
+    /// Print JSON: `{root, path, registered}` (`registered` is false when
+    /// the repository already was a Root).
+    #[arg(long)]
+    json: bool,
 }
 
 /// Arguments for `graft root`.
@@ -35,12 +39,13 @@ fn row(out: &mut String, label: &str, value: impl std::fmt::Display) {
 }
 
 /// Registers the repository as a Root. Running it again is a no-op.
-pub(crate) fn init(args: &InitArgs, env: &Environment) -> anyhow::Result<String> {
+pub(crate) fn init(args: &InitArgs, env: &Environment) -> anyhow::Result<Output> {
     let home = env.require_home()?;
     let repo = discover(args.path.as_ref())?;
     let (record, _store, registration) =
         registry::register(home, &repo).context("registering the Root")?;
-    Ok(match registration {
+    let created = matches!(registration, Registration::Created);
+    let text = match registration {
         Registration::Created => format!(
             "Registered Root {} for {}\n",
             record.id,
@@ -51,7 +56,14 @@ pub(crate) fn init(args: &InitArgs, env: &Environment) -> anyhow::Result<String>
             record.path.display(),
             record.id
         ),
-    })
+    };
+    Ok(Output::stdout(text).json_if(args.json, || {
+        serde_json::json!({
+            "root": record.id.to_string(),
+            "path": record.path,
+            "registered": created,
+        })
+    }))
 }
 
 /// Prints the Root for the repository.

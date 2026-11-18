@@ -1,6 +1,6 @@
 # On-disk format
 
-**Format version: 14** (metadata schema v10)
+**Format version: 18** (metadata schema v10)
 
 This file describes everything Graft persists. Any change to a structure
 below bumps the format version, adds a migration, and updates this file in
@@ -21,10 +21,22 @@ path never creates anything; only commands that write state do.
 ```
 $GRAFT_HOME/
 ├── config.toml                 optional user config
+├── telemetry/                  only after `graft telemetry on` (ADR 0034)
+│   ├── consent                 present while opted in
+│   ├── queue.jsonl             queued events, one JSON object per line
+│   ├── sending.jsonl           a batch being uploaded
+│   ├── last-sent               time of the last upload attempt
+│   └── send.lock               held by the one sender
+├── crashes/                    a text file per panic of graft or graftd,
+│                               newest 20 kept (ADR 0030)
+├── reports/                    mode 0700, `graft doctor --report` bundles,
+│                               each mode 0600 (ADR 0030)
 ├── run/                        mode 0700, graftd's runtime files (ADR 0007)
 │   ├── graftd.sock             JSON-RPC socket, mode 0600 (see `run/` below)
 │   ├── graftd.lock             OS file lock held by the running graftd
-│   └── graftd.log              graftd's stderr when started by the CLI
+│   ├── graftd.log              graftd's stderr when started by the CLI
+│   └── graftd.log.1            the previous log, moved aside at 8 MiB when
+│                               graftd starts (ADR 0031)
 └── roots/
     └── <root-id>/              one directory per Root, mode 0700
         ├── graft.db            SQLite metadata (+ graft.db-wal, graft.db-shm)
@@ -35,13 +47,15 @@ $GRAFT_HOME/
         │   └── <graft-id>/
         │       ├── work/<n>    staging files of files open for writing
         │       ├── git/        the graft's .git, created on first use
-        │       └── dotgit          (v14) instead of git/, for a graft
+        │       └── dotgit          (v18) instead of git/, for a graft
         │                           registered as a git worktree
         ├── integrate/          mode 0700, Integrate's scratch checkouts
         │                       (ADR 0017); one may serve several requests
         │                       of a queue run (ADR 0021), all removed
         │                       when the run ends
         ├── integrate.lock      OS file lock held while the queue is worked
+        ├── trash.lock          OS file lock held while retired working
+        │                       trees are deleted (v14, ADR 0028)
         ├── radar/              mode 0700, Radar's scratch checkouts (ADR 0016);
         │                       each is removed when its check ends
         ├── tmp/                mode 0700, created by `graft run` (ADR 0014)
@@ -58,7 +72,9 @@ $GRAFT_HOME/
         └── mounts/             mode 0700
             ├── <name>/         a reflink graft's working tree, or a FUSE
             │                   graft's mount point (see "Grafts" below)
-            └── .tmp-<graft-id>/  a graft being built; renamed to <name>/
+            ├── .tmp-<graft-id>/  a graft being built; renamed to <name>/
+            └── .trash-<graft-id>/ a pruned reflink graft's working tree,
+                                being deleted in the background (v14)
 ```
 
 Entries in `roots/` whose name is not a valid Root ID, or that contain no
@@ -81,7 +97,11 @@ Entries in `roots/` whose name is not a valid Root ID, or that contain no
 | 11 | Adds `integrate/` (scratch checkouts), `integrate.lock`, schema v9 (`integrations`) and transient `refs/graft/integrating/<graft-id>` refs in Root (ADR 0017) | Schema v8 → v9 runs automatically on open; a table only added |
 | 12 | Schema v10: `claims` and `admissions` (ADR 0018) | Schema v9 → v10 runs automatically on open; tables only added |
 | 13 | Adds `logs/layer-<layer-key>.log` (layer build output); an `integrate/` scratch checkout may outlive one request within a queue run (ADR 0021) | None: additive; layers built before v13 simply have no log, and Graft never reads the logs |
-| 14 | Adds `git.worktrees` to `config.toml`; grafts created with it on are git worktrees of Root: a registration in Root's `.git/worktrees/graft-<name>/`, a `refs/heads/graft-live/<name>` branch, `extensions.worktreeConfig` in Root's config, and `grafts/<graft-id>/dotgit` for virtual grafts (ADR 0027) | None: additive and opt-in; a graft's layout is read from disk, so grafts from earlier formats keep their private repositories |
+| 14 | Adds `mounts/.trash-<graft-id>/` (a pruned reflink graft's tree awaiting background deletion) and `trash.lock` (ADR 0028) | None: additive; v13 never created them, and older binaries never list `mounts/`, so they leave them in place |
+| 15 | Adds `crashes/<binary>-<ms>-<pid>.txt` (panic details) and `reports/report-<ms>.json` (diagnostics bundles; ADR 0030) | None: additive; Graft only reads them back to build a new report, and either directory may be deleted at any time |
+| 16 | Adds `run/graftd.log.1` (ADR 0031) | None: additive; never read by Graft except into a report |
+| 17 | Adds `telemetry/` (ADR 0034) | None: additive; created only on opt-in, deleted on opt-out |
+| 18 | Adds `git.worktrees` to `config.toml`; grafts created with it on are git worktrees of Root: a registration in Root's `.git/worktrees/graft-<name>/`, a `refs/heads/graft-live/<name>` branch, `extensions.worktreeConfig` in Root's config, and `grafts/<graft-id>/dotgit` for virtual grafts (ADR 0027) | None: additive and opt-in; a graft's layout is read from disk, so grafts from earlier formats keep their private repositories |
 
 ## `config.toml`
 
@@ -91,7 +111,7 @@ TOML. Optional; a missing file means defaults. Unknown keys are an error.
 | --- | --- | --- | --- |
 | `log.filter` | string | `"warn"` | `tracing` filter directive. `$GRAFT_LOG` overrides it. |
 | `fs.backend` | string | `"reflink"` | Backend for new grafts: `reflink`, `fuse` (Linux) or `nfs` (macOS). `$GRAFT_FS` and `graft new --backend` override it. |
-| `git.worktrees` | bool | `false` | (v14) Register grafts created from now on as git worktrees of Root, so `git worktree list`, editors and git clients list them (ADR 0027). Existing grafts keep their layout. |
+| `git.worktrees` | bool | `false` | (v18) Register grafts created from now on as git worktrees of Root, so `git worktree list`, editors and git clients list them (ADR 0027). Existing grafts keep their layout. |
 
 ## Identifiers
 
@@ -413,7 +433,7 @@ Each graft is a standalone git repository at `mounts/<name>/`
 Objects the graft creates (its own commits) live in the graft's own
 `.git/objects/`. Roots that set `core.worktree` are refused.
 
-### Grafts registered as git worktrees (v14)
+### Grafts registered as git worktrees (v18)
 
 With `git.worktrees = true`, a new graft is also a linked worktree of
 Root ([ADR 0027](decisions/0027-grafts-as-git-worktrees.md)). Its git
@@ -486,7 +506,7 @@ and refuses it if it is a symlink, is owned by anyone other than
 | Ref | Points at | Lifetime |
 | --- | --- | --- |
 | `refs/graft/<graft-id>` | The graft's base commit | `graft new` to `graft prune`; keeps the base reachable so `git gc` cannot prune it |
-| `refs/heads/graft-live/<name>` | (v14) A registered graft's checked-out branch | `graft new` to `graft prune`; kept by prune when it holds commits on no other ref |
+| `refs/heads/graft-live/<name>` | (v18) A registered graft's checked-out branch | `graft new` to `graft prune`; kept by prune when it holds commits on no other ref |
 
 `graft integrate` pushes each landing commit to
 `refs/graft/integrating/<graft-id>` to copy its objects into Root, moves
@@ -516,8 +536,11 @@ then removes the empty mount point with `rmdir` (never recursively),
 `grafts/<graft-id>/`, the graft's `delta` and `staged` rows, and
 unreferenced blobs; the CLI then deletes the pin ref and the record.
 
-`graft prune` marks the row `pruned`, removes `mounts/<name>/` and any
-`mounts/.tmp-<id>/`, deletes `refs/graft/<id>`, and finally deletes the row
+`graft prune` marks the row `pruned`, renames `mounts/<name>/` to
+`mounts/.trash-<id>/` and starts a detached `graft __empty-trash`, which
+deletes every `.trash-*` under `trash.lock` (`--wait` deletes before
+returning; `graft gc` finishes a delete that was interrupted). It removes
+any `mounts/.tmp-<id>/`, deletes `refs/graft/<id>`, and finally deletes the row
 (which deletes its `layer_refs`). Layers stay in the cache until `graft gc`,
 which, holding each layer's lock, removes layers with no references and
 leftover `.tmp-*` installs. Lock files are left in place.
