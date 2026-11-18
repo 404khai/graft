@@ -1,0 +1,38 @@
+# A starter graft.toml for a Rust + pnpm monorepo (Cargo workspace plus
+# pnpm workspaces), such as Turborepo. Copy it to the top of your
+# repository, adjust, commit it, then approve its commands once:
+#
+#   graft trust
+#   graft new a --blueprint dev
+#
+# See docs/blueprint.md for every key.
+
+# Rust: `target/` is built once per Cargo.lock and toolchain, then shared by
+# every graft (reflinked, so each graft's rebuilds stay private). The first
+# `graft new` after a lockfile or toolchain change runs the build.
+[[layer]]
+path = "target"
+inputs = ["Cargo.lock", "rust-toolchain.toml"]
+build = "cargo build --workspace --locked"
+toolchain = "rustc --version"
+
+# pnpm: a workspace has a node_modules in every package, and a layer is a
+# single directory, so node_modules is not a layer. pnpm already keeps one
+# content-addressed store for every checkout; `setup` installs from it
+# without the network, which takes seconds once the store is warm. On APFS
+# and btrfs, package-import-method = "clone" in .npmrc makes the install
+# reflink files out of the store instead of copying them.
+[blueprint.dev]
+layers = ["target"]
+setup = ["pnpm install --frozen-lockfile --prefer-offline"]
+
+# The pnpm store and Cargo's registry are outside the graft: let commands
+# under `graft run` (and the setup above) write to them. Paths that do not
+# exist on this machine stay read-only, with a warning.
+[sandbox]
+write = [
+  "~/Library/pnpm/store",       # pnpm store on macOS
+  "~/.local/share/pnpm/store",  # pnpm store on Linux
+  "~/.cargo/registry",
+  "~/.cargo/git",
+]
