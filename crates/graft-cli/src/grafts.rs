@@ -48,6 +48,10 @@ pub(crate) struct NewArgs {
     /// Reflink grafts only.
     #[arg(long, value_name = "PATHS", value_delimiter = ',')]
     clone_ignored: Vec<String>,
+    /// Then run this command in the new graft, confined like `graft run`
+    /// (e.g. `graft new auth -- claude`). Its exit code is graft's.
+    #[arg(last = true, value_name = "COMMAND")]
+    command: Vec<std::ffi::OsString>,
     /// Print JSON: `{name, path, base, backend, layers: [{path, status,
     /// key}], cloned: [{path, reflinked, copied}]}`.
     #[arg(long)]
@@ -55,6 +59,16 @@ pub(crate) struct NewArgs {
 }
 
 impl NewArgs {
+    /// The graft's name as given.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The command to start in the new graft, if any.
+    pub(crate) fn command(&self) -> &[std::ffi::OsString] {
+        &self.command
+    }
+
     fn build_output(&self) -> layers::BuildOutput {
         if self.verbose {
             layers::BuildOutput::Stream
@@ -73,6 +87,7 @@ impl NewArgs {
             blueprint: None,
             verbose: false,
             clone_ignored: Vec::new(),
+            command: Vec::new(),
             json: false,
         }
     }
