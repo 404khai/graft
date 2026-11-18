@@ -62,7 +62,7 @@ pub(crate) struct IntegrateArgs {
     #[arg(long, value_name = "FILE")]
     task: Option<PathBuf>,
     /// Print JSON: `{"results": [{graft, target, state, code, commit,
-    /// output}], "gated": bool}`.
+    /// output}], "gated": bool, "radar": [overlaps involving them]}`.
     #[arg(long)]
     json: bool,
 }
@@ -1069,9 +1069,12 @@ fn finish(
     results: &[serde_json::Value],
     ungated: bool,
     first_failure: Option<&'static str>,
+    overlaps: &[serde_json::Value],
 ) {
     if args.json {
-        out.stdout = serde_json::json!({"results": results, "gated": !ungated}).to_string() + "\n";
+        out.stdout = serde_json::json!({"results": results, "gated": !ungated, "radar": overlaps})
+            .to_string()
+            + "\n";
     } else if ungated {
         out.stdout.push_str(
             "note: no test gate ran: set [integrate] test in graft.toml to test before landing\n",
@@ -1094,7 +1097,12 @@ fn finish(
 }
 
 /// Processes the queue in order, holding `integrate.lock`.
-fn process(ctx: &mut Ctx, args: &IntegrateArgs, out: &mut Output) -> anyhow::Result<bool> {
+fn process(
+    ctx: &mut Ctx,
+    args: &IntegrateArgs,
+    out: &mut Output,
+    overlaps: &[serde_json::Value],
+) -> anyhow::Result<bool> {
     let lock_path = ctx.root_dir().join("integrate.lock");
     let lock = std::fs::OpenOptions::new()
         .create(true)
@@ -1181,7 +1189,7 @@ fn process(ctx: &mut Ctx, args: &IntegrateArgs, out: &mut Output) -> anyhow::Res
     if let Some(s) = kept {
         s.remove()?;
     }
-    finish(args, out, &results, ungated, first_failure);
+    finish(args, out, &results, ungated, first_failure, overlaps);
     drop(lock);
     Ok(all_ok)
 }
@@ -1229,7 +1237,10 @@ pub(crate) fn integrate(
         )?;
     }
     let mut out = Output::default();
-    let ok = process(&mut ctx, args, &mut out)?;
+    // Flag overlapping live grafts before anything lands (Radar, ADR 0016).
+    let (overlaps, lines) = crate::radar::overlaps_involving(&mut ctx, &args.names, &mut out)?;
+    out.warnings.extend(lines);
+    let ok = process(&mut ctx, args, &mut out, &overlaps)?;
     let code = if ok {
         std::process::ExitCode::SUCCESS
     } else {

@@ -95,7 +95,8 @@ tests that fail only when combined. `graft radar --watch` keeps it current.
 Land finished grafts as ordinary git history: `graft integrate a b` merges
 each graft onto the target's head in a scratch checkout (line merge, then
 [Mergiraf](https://mergiraf.org) when it is installed), runs the
-`[integrate] test` gate, and commits only if it passes. `graft queue` shows
+`[integrate] test` gate, and commits only if it passes. Before landing it flags live grafts
+that overlap the ones it lands, as Radar sees them. `graft queue` shows
 what landed and why anything stopped; `graft rebase b` brings a live graft
 up to date.
 
