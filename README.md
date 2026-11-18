@@ -73,8 +73,13 @@ Linux, Seatbelt on macOS; tool caches can be allowed in
 [`graft.toml`](docs/blueprint.md#sandbox).
 
 ```sh
+graft new auth -- claude                  # create a graft and start an agent in it
 graft run auth -- claude                  # or codex, npm test, cargo build
+graft run auth                            # your $SHELL, confined to the graft
 ```
+
+This is the recommended way to start agents: they begin in the graft's
+directory with `GRAFT_NAME` set, and cannot write outside it.
 
 A Blueprint in `graft.toml` gives every graft its own ports, Postgres
 database, Docker volumes and `.env` files, so two agents can run the same

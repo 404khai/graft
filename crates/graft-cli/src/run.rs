@@ -35,9 +35,35 @@ pub(crate) struct RunArgs {
     /// grafts' runs can write there too, so it is off by default.
     #[arg(long)]
     dev_caches: bool,
-    /// The command and its arguments.
-    #[arg(last = true, required = true, value_name = "COMMAND")]
+    /// The command and its arguments. Without one, your `$SHELL` (else
+    /// `/bin/sh`), confined to the graft: start agents this way.
+    #[arg(last = true, value_name = "COMMAND")]
     command: Vec<OsString>,
+}
+
+impl RunArgs {
+    /// `graft run <name> -- <command>`, for `graft new <name> -- <command>`.
+    pub(crate) fn start(name: &str, command: Vec<OsString>) -> Self {
+        Self {
+            name: name.to_owned(),
+            write: Vec::new(),
+            dev_caches: false,
+            command,
+        }
+    }
+}
+
+/// The command to run: the one given, or the user's shell.
+fn command_or_shell(command: &[OsString]) -> Vec<OsString> {
+    if command.is_empty() {
+        vec![
+            std::env::var_os("SHELL")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| OsString::from("/bin/sh")),
+        ]
+    } else {
+        command.to_vec()
+    }
 }
 
 /// Arguments for the hidden `graft __confine` helper (Linux).
@@ -90,9 +116,10 @@ pub(crate) fn run(args: &RunArgs, env: &Environment) -> anyhow::Result<(Output, 
         write.extend(dev_cache_paths());
     }
     let started = std::time::Instant::now();
-    let ended = run_in(&ctx, &record, &write, &args.command, &mut out)?;
+    let command = command_or_shell(&args.command);
+    let ended = run_in(&ctx, &record, &write, &command, &mut out)?;
     let took = started.elapsed();
-    let sandbox = (!ended.status.success()).then(|| explain_failure(&ended, &args.command, took));
+    let sandbox = (!ended.status.success()).then(|| explain_failure(&ended, &command, took));
     if let Some(s) = &sandbox {
         out.warnings.extend(s.note());
     }

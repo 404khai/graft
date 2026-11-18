@@ -287,12 +287,43 @@ const KNOWN_COMMANDS: &[&str] = &[
 
 /// Runs one parsed command and prints its output.
 #[allow(clippy::too_many_lines)] // one arm per command, read top to bottom
+/// Prints a command's warnings on stderr and its output (or JSON) on
+/// stdout.
+fn emit(output: Output) -> anyhow::Result<()> {
+    {
+        let mut stderr = std::io::stderr().lock();
+        for warning in &output.warnings {
+            let _ = writeln!(stderr, "graft: warning: {warning}");
+        }
+    }
+    let text = match &output.json {
+        Some(v) => v.to_string() + "\n",
+        None => output.stdout,
+    };
+    let mut stdout = std::io::stdout().lock();
+    stdout
+        .write_all(text.as_bytes())
+        .and_then(|()| stdout.flush())
+        .context("writing to stdout")
+}
+
 fn execute(command: Command, env: &Environment) -> anyhow::Result<ExitCode> {
     let ok = |r: anyhow::Result<Output>| r.map(|o| (o, ExitCode::SUCCESS));
     let (output, code) = match command {
         Command::Init(args) => ok(root::init(&args, env))?,
         Command::Root(args) => ok(root::show(&args, env).map(Output::stdout))?,
-        Command::New(args) => ok(grafts::new(&args, env))?,
+        Command::New(args) => {
+            let created = grafts::new(&args, env)?;
+            match args.command() {
+                [] => (created, ExitCode::SUCCESS),
+                command => {
+                    // The summary first: the command may take over the
+                    // terminal (an agent, a shell).
+                    emit(created)?;
+                    run::run(&run::RunArgs::start(args.name(), command.to_vec()), env)?
+                }
+            }
+        }
         Command::Ls(args) => ok(grafts::ls(&args, env))?,
         Command::Path(args) => ok(grafts::path(&args, env))?,
         Command::Status(args) => ok(grafts::status(&args, env))?,
@@ -339,21 +370,7 @@ fn execute(command: Command, env: &Environment) -> anyhow::Result<ExitCode> {
         Command::Telemetry(args) => ok(telemetry::run(&args, env))?,
         Command::TelemetrySend => (Output::default(), telemetry::background_send(env)),
     };
-    {
-        let mut stderr = std::io::stderr().lock();
-        for warning in &output.warnings {
-            let _ = writeln!(stderr, "graft: warning: {warning}");
-        }
-    }
-    let text = match &output.json {
-        Some(v) => v.to_string() + "\n",
-        None => output.stdout,
-    };
-    let mut stdout = std::io::stdout().lock();
-    stdout
-        .write_all(text.as_bytes())
-        .and_then(|()| stdout.flush())
-        .context("writing to stdout")?;
+    emit(output)?;
     Ok(code)
 }
 

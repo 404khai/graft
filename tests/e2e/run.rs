@@ -362,11 +362,81 @@ fn run_refuses_unknown_and_missing_commands() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("no graft named nope"));
-    f.graft().args(["run", "a"]).assert().failure();
     if sandbox_usable() {
+        // No command starts $SHELL; one that does not exist fails.
+        f.graft()
+            .args(["run", "a"])
+            .env("SHELL", "/no/such/shell")
+            .assert()
+            .failure();
         f.graft()
             .args(["run", "a", "--", "/no/such/program"])
             .assert()
             .failure();
     }
+}
+
+/// `graft new <name> -- <command>` creates the graft, prints the summary,
+/// then runs the command in it, confined; its exit code is graft's.
+#[test]
+fn new_starts_a_command_in_the_new_graft() {
+    let f = Fixture::new();
+    if !sandbox_usable() {
+        return;
+    }
+    let out = f
+        .graft()
+        .args(["new", "b", "--backend", "reflink", "--", "sh", "-c"])
+        .arg("echo \"in $GRAFT_NAME\" && touch made-here")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8_lossy(&out);
+    let created = stdout.find("Created graft b").expect("summary printed");
+    let ran = stdout.find("in b").expect("command ran");
+    assert!(created < ran, "summary must come first: {stdout}");
+    let path = PathBuf::from(
+        String::from_utf8(f.graft().args(["path", "b"]).output().unwrap().stdout)
+            .unwrap()
+            .trim(),
+    );
+    assert!(path.join("made-here").is_file());
+
+    // Confined, and the exit code passes through; the graft stays.
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    let escape = home.join(format!("graft-new-exec-{}", std::process::id()));
+    let _cleanup = Cleanup(escape.clone());
+    f.graft()
+        .args(["new", "c", "--backend", "reflink", "--", "sh", "-c"])
+        .arg(format!(
+            "echo x > {} 2>/dev/null; exit 7",
+            sh_quote(&escape)
+        ))
+        .assert()
+        .code(7);
+    assert!(!escape.exists(), "the command ran unconfined");
+    f.graft()
+        .arg("ls")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("c "));
+}
+
+/// `graft run <name>` with no command starts `$SHELL` in the graft.
+#[test]
+fn run_without_a_command_starts_a_shell_in_the_graft() {
+    let f = Fixture::new();
+    let a = f.new_graft("a");
+    if !sandbox_usable() {
+        return;
+    }
+    f.graft()
+        .args(["run", "a"])
+        .env("SHELL", "/bin/sh")
+        .write_stdin("echo \"$GRAFT_NAME\" > who\n")
+        .assert()
+        .success();
+    assert_eq!(std::fs::read_to_string(a.join("who")).unwrap(), "a\n");
 }
