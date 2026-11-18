@@ -61,6 +61,12 @@ B, D, and a hint instead of C.
   a confined run can write into them; that is why they are opt-in. `$HOME`
   itself stays read-only (`write_and_dev_caches_widen_one_run`).
 - A failed confined run on macOS takes about a second longer.
+- The list is best effort. When macOS is overloaded, the unified log drops
+  kernel sandbox reports (seen at load averages of 25–55 on an 8-core
+  machine: even a plain `sandbox-exec` denial was not recorded), and the
+  list is empty although writes were refused. The test checks the log
+  with a plain `sandbox-exec` denial first and skips only the list check,
+  saying so, when the log records nothing.
 - Tests: `a_failed_run_names_the_writes_the_sandbox_refused` (macOS),
   `write_and_dev_caches_widen_one_run`, `denials_are_parsed_from_the_unified_log`,
   `swiftpm_commands_are_recognised`, `tagged_profiles_name_the_tag_in_each_denial`.
