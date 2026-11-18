@@ -701,3 +701,55 @@ fn a_dry_run_without_a_gate_says_none_ran() {
     assert_eq!(f.rev("land"), before);
     assert_eq!(f.scratch_dirs(), 0);
 }
+
+/// Integrate flags live grafts that overlap the ones it lands (Radar),
+/// before landing, without blocking: a warning, and `radar` in the JSON.
+#[test]
+fn integrate_flags_overlapping_live_grafts() {
+    let fx = Fixture::new("", &[("x.txt", "x\n"), ("y.txt", "y\n")]);
+    let ga = fx.new_graft("a");
+    let gb = fx.new_graft("b");
+    let gc = fx.new_graft("c");
+    std::fs::write(ga.join("x.txt"), "x from a\n").unwrap();
+    std::fs::write(gb.join("x.txt"), "x from b\n").unwrap();
+    std::fs::write(gc.join("y.txt"), "y from c\n").unwrap();
+
+    let out = fx
+        .cmd()
+        .args(["integrate", "a", "--onto", "land", "--dry-run", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("radar: a and b overlap at path level in x.txt"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(" c "), "c does not overlap: {stderr}");
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        json["radar"][0]["grafts"],
+        serde_json::json!(["a", "b"]),
+        "{json}"
+    );
+    assert_eq!(json["radar"].as_array().unwrap().len(), 1, "{json}");
+
+    // A graft nothing overlaps lands with no radar note.
+    let out = fx
+        .cmd()
+        .args(["integrate", "c", "--onto", "land", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("radar:"));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["radar"], serde_json::json!([]), "{json}");
+}

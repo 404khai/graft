@@ -584,6 +584,49 @@ fn print_report(r: &Report, json: bool) -> anyhow::Result<String> {
     Ok(s)
 }
 
+/// Radar's overlaps that involve any of `names`, for `graft integrate` to
+/// flag before landing: path and symbol overlaps, and behaviour check
+/// results already recorded (none are run here). As JSON rows and as
+/// one line each.
+pub(crate) fn overlaps_involving(
+    ctx: &mut Ctx,
+    names: &[String],
+    out: &mut Output,
+) -> anyhow::Result<(Vec<serde_json::Value>, Vec<String>)> {
+    let r = report(ctx, false, out)?;
+    let rows: Vec<&Row> = r
+        .overlaps
+        .iter()
+        .filter(|row| row.grafts.iter().any(|g| names.contains(g)))
+        .collect();
+    let json = rows
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<Result<_, _>>()?;
+    let lines = rows
+        .iter()
+        .map(|row| {
+            let at = row
+                .path
+                .as_ref()
+                .map(|p| format!(" in {}", p.display()))
+                .unwrap_or_default();
+            let what = if row.detail.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", row.detail)
+            };
+            format!(
+                "radar: {} and {} overlap at {} level{at}{what}",
+                row.grafts[0],
+                row.grafts[1],
+                row.level.as_str()
+            )
+        })
+        .collect();
+    Ok((json, lines))
+}
+
 /// `graft radar`.
 pub(crate) fn radar(args: &RadarArgs, env: &Environment) -> anyhow::Result<Output> {
     let mut ctx = open(env)?;
