@@ -1,4 +1,4 @@
-//! Grafts registered as git linked worktrees of Root (ADR 0027), checked
+//! Grafts registered as git linked worktrees of Root (ADR 0036), checked
 //! against real git.
 
 // Fixture helpers outside #[test] fns: panicking on setup failure is the point.

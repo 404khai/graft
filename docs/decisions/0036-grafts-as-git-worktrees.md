@@ -1,4 +1,4 @@
-# 0027: Grafts as git worktrees
+# 0036: Grafts as git worktrees
 Status: accepted
 
 ## Context

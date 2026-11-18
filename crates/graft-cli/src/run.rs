@@ -348,7 +348,7 @@ pub(crate) fn run_in(
     writable.extend(extra);
     // A graft registered as a git worktree keeps its git state in Root's
     // `.git`: commits need its registration, Root's object store and its
-    // own ref namespace, and nothing else there (ADR 0027).
+    // own ref namespace, and nothing else there (ADR 0036).
     if let Some(admin) = ctx.located.repo.registration(name, &graft_dir) {
         writable.extend(ctx.located.repo.registered_write_paths(&admin)?);
     }

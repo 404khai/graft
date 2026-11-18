@@ -655,7 +655,7 @@ fn materialize(
 pub fn exclude_paths(workdir: &Path, paths: &[&Path]) -> Result<()> {
     let dot_git = workdir.join(".git");
     if dot_git.is_file() {
-        // A graft registered as a git worktree (ADR 0027).
+        // A graft registered as a git worktree (ADR 0036).
         if paths.is_empty() {
             return Ok(());
         }
@@ -758,7 +758,7 @@ pub struct Unintegrated {
     /// The commit.
     pub commit: CommitId,
     /// Whether Root's object store has it, on no ref but the graft's own
-    /// (a graft registered as a git worktree, ADR 0027); otherwise Root
+    /// (a graft registered as a git worktree, ADR 0036); otherwise Root
     /// does not have it at all.
     pub in_root: bool,
 }
@@ -798,7 +798,7 @@ impl GraftRepo {
     }
 
     /// The graft's name if it is registered as a git worktree of Root
-    /// (ADR 0027), read from its worktree id `graft-<name>`.
+    /// (ADR 0036), read from its worktree id `graft-<name>`.
     #[must_use]
     pub fn registered_name(&self) -> Option<GraftName> {
         if self.repo.git_dir() == self.repo.common_dir() {

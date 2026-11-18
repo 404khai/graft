@@ -224,7 +224,7 @@ impl VirtualBackend {
             self.ensure_record(root, spec)?;
             let objects = ObjectStore::open(root);
             let dir = self.graft_dir(spec.id);
-            // A graft made before ADR 0027, or without `[git] worktrees`,
+            // A graft made before ADR 0036, or without `[git] worktrees`,
             // keeps its private `.git`; a registered one is served as a file.
             let registered = if dir.join("git").exists() {
                 None
@@ -327,7 +327,7 @@ fn git_init(objects: &ObjectStore, spec: &GraftSpec<'_>, layers: &[LayerMount]) 
 }
 
 /// Prepares a registered virtual graft's `.git` file and index on first
-/// use (ADR 0027).
+/// use (ADR 0036).
 fn git_link_init(objects: &ObjectStore, admin: &Path, spec: &GraftSpec<'_>) -> GitInit {
     let objects = objects.clone();
     let admin = admin.to_owned();

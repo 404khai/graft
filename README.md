@@ -120,7 +120,7 @@ straight away. Virtual grafts are listed as locked, so `git worktree
 remove` leaves them to `graft prune`. Because they are ordinary worktrees,
 git's rule applies: two worktrees cannot have the same branch checked out.
 Existing grafts keep their layout; see
-[ADR 0027](docs/decisions/0027-grafts-as-git-worktrees.md).
+[ADR 0036](docs/decisions/0036-grafts-as-git-worktrees.md).
 
 ### Use it from an agent (MCP)
 

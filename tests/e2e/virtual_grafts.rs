@@ -239,7 +239,7 @@ mod fuse {
         String::from_utf8(o.stdout).unwrap()
     }
 
-    /// ADR 0027: with `[git] worktrees = true`, a virtual graft is a locked
+    /// ADR 0036: with `[git] worktrees = true`, a virtual graft is a locked
     /// git worktree of Root whose `.git` is a file served by the mount.
     #[test]
     fn registered_virtual_graft_is_a_locked_git_worktree() {

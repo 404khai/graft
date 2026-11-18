@@ -121,7 +121,7 @@ pub(crate) fn work_at_risk(
 
 /// Whether virtual graft `record`, mounted at `mount`, has git state yet:
 /// its private `.git` (ADR 0008), or the index of its git worktree
-/// registration (ADR 0027). Both are built on first use.
+/// registration (ADR 0036). Both are built on first use.
 pub(crate) fn has_git(
     located: &Located,
     root_dir: &Path,

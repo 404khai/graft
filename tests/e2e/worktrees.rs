@@ -1,5 +1,5 @@
 //! Grafts registered as git worktrees of Root (`[git] worktrees = true`,
-//! ADR 0027), driven through the `graft` binary. Reflink grafts, so these
+//! ADR 0036), driven through the `graft` binary. Reflink grafts, so these
 //! run everywhere; registered virtual grafts are in `virtual_grafts`.
 
 use std::path::{Path, PathBuf};
@@ -222,7 +222,7 @@ fn git_worktree_remove_then_prune_cleans_up_and_keeps_work() {
 
 #[test]
 fn a_registered_graft_cannot_take_a_branch_another_worktree_has() {
-    // The trade-off of registering (ADR 0027): git's one-branch-per-worktree
+    // The trade-off of registering (ADR 0036): git's one-branch-per-worktree
     // rule applies, as for any worktree.
     let s = Setup::new(None);
     let a = s.new_graft("a");

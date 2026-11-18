@@ -427,7 +427,7 @@ impl GraftView {
         if let Some(rel) = self.git_rel(&path) {
             if (mode.write || mode.truncate) && self.git_is_link() {
                 // git owns the registration it names; nothing writes it
-                // through the mount (ADR 0027).
+                // through the mount (ADR 0036).
                 return Err(Errno::EACCES);
             }
             let real = self.git_path(rel)?;

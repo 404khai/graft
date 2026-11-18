@@ -101,7 +101,7 @@ Entries in `roots/` whose name is not a valid Root ID, or that contain no
 | 15 | Adds `crashes/<binary>-<ms>-<pid>.txt` (panic details) and `reports/report-<ms>.json` (diagnostics bundles; ADR 0030) | None: additive; Graft only reads them back to build a new report, and either directory may be deleted at any time |
 | 16 | Adds `run/graftd.log.1` (ADR 0031) | None: additive; never read by Graft except into a report |
 | 17 | Adds `telemetry/` (ADR 0034) | None: additive; created only on opt-in, deleted on opt-out |
-| 18 | Adds `git.worktrees` to `config.toml`; grafts created with it on are git worktrees of Root: a registration in Root's `.git/worktrees/graft-<name>/`, a `refs/heads/graft-live/<name>` branch, `extensions.worktreeConfig` in Root's config, and `grafts/<graft-id>/dotgit` for virtual grafts (ADR 0027) | None: additive and opt-in; a graft's layout is read from disk, so grafts from earlier formats keep their private repositories |
+| 18 | Adds `git.worktrees` to `config.toml`; grafts created with it on are git worktrees of Root: a registration in Root's `.git/worktrees/graft-<name>/`, a `refs/heads/graft-live/<name>` branch, `extensions.worktreeConfig` in Root's config, and `grafts/<graft-id>/dotgit` for virtual grafts (ADR 0036) | None: additive and opt-in; a graft's layout is read from disk, so grafts from earlier formats keep their private repositories |
 
 ## `config.toml`
 
@@ -111,7 +111,7 @@ TOML. Optional; a missing file means defaults. Unknown keys are an error.
 | --- | --- | --- | --- |
 | `log.filter` | string | `"warn"` | `tracing` filter directive. `$GRAFT_LOG` overrides it. |
 | `fs.backend` | string | `"reflink"` | Backend for new grafts: `reflink`, `fuse` (Linux) or `nfs` (macOS). `$GRAFT_FS` and `graft new --backend` override it. |
-| `git.worktrees` | bool | `false` | (v18) Register grafts created from now on as git worktrees of Root, so `git worktree list`, editors and git clients list them (ADR 0027). Existing grafts keep their layout. |
+| `git.worktrees` | bool | `false` | (v18) Register grafts created from now on as git worktrees of Root, so `git worktree list`, editors and git clients list them (ADR 0036). Existing grafts keep their layout. |
 
 ## Identifiers
 
@@ -436,7 +436,7 @@ Objects the graft creates (its own commits) live in the graft's own
 ### Grafts registered as git worktrees (v18)
 
 With `git.worktrees = true`, a new graft is also a linked worktree of
-Root ([ADR 0027](decisions/0027-grafts-as-git-worktrees.md)). Its git
+Root ([ADR 0036](decisions/0036-grafts-as-git-worktrees.md)). Its git
 state lives in Root's git directory, in git's own worktree layout:
 
 | Path (in Root's common git dir) | Contents |

@@ -1,4 +1,4 @@
-//! Grafts registered as git linked worktrees (ADR 0027).
+//! Grafts registered as git linked worktrees (ADR 0036).
 //!
 //! git, libgit2, `JGit` and gix all find a repository's worktrees by reading
 //! `$GIT_COMMON_DIR/worktrees/<id>/`: `HEAD`, `commondir`, `gitdir` and
@@ -284,7 +284,7 @@ impl Repo {
             gitdir.push(b'\n');
             write("gitdir", &gitdir)?;
             write("HEAD", format!("ref: {branch}\n").as_bytes())?;
-            let mut config = Vec::from(&b"# Written by graft (ADR 0027).\n"[..]);
+            let mut config = Vec::from(&b"# Written by graft (ADR 0036).\n"[..]);
             if layout == Layout::Virtual {
                 // The mount reports commit times and blob sizes; inodes are
                 // allocated lazily (ADR 0008).
@@ -301,7 +301,7 @@ impl Repo {
                 )?;
             }
             // `graft run` grants writes to the graft's own ref namespace,
-            // which must exist (ADR 0027).
+            // which must exist (ADR 0036).
             let logs = self.common_dir().join("logs/refs/heads/graft-live");
             std::fs::create_dir_all(&logs).map_err(io_err(&logs))?;
             if !layers.is_empty() {
@@ -589,7 +589,7 @@ pub(crate) fn exclude_layers(repo: &gix::Repository, admin: &Path, layers: &[&Pa
         // `core.excludesFile` replaces the global excludes file, so
         // start from its contents.
         let mut text =
-            Vec::from(&b"# Written by graft (ADR 0027): your global excludes, then layers.\n"[..]);
+            Vec::from(&b"# Written by graft (ADR 0036): your global excludes, then layers.\n"[..]);
         if let Some(global) = global_excludes_file(repo)
             && let Ok(bytes) = std::fs::read(&global)
         {
@@ -682,7 +682,7 @@ fn adopt_private_git(workdir: &Path, admin: &Path) -> Result<()> {
 }
 
 /// Prepares a registered virtual graft's git state on first use (ADR
-/// 0027): writes the index of `base` into `admin` if it is not there yet,
+/// 0036): writes the index of `base` into `admin` if it is not there yet,
 /// then `link`, the file the mount serves as `.git`. Opens no repository
 /// through the mount, so it is safe to call while serving it.
 ///

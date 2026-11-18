@@ -231,7 +231,7 @@ fn choose_backend(args: &NewArgs, env: &Environment) -> anyhow::Result<BackendKi
 }
 
 /// Whether new grafts are registered as git worktrees of Root (`[git]
-/// worktrees` in `config.toml`, ADR 0027).
+/// worktrees` in `config.toml`, ADR 0036).
 pub(crate) fn register_worktrees(env: &Environment) -> bool {
     env.config
         .as_ref()
@@ -240,7 +240,7 @@ pub(crate) fn register_worktrees(env: &Environment) -> bool {
 }
 
 /// Registers the new graft `name` at `workdir` as a git worktree of Root
-/// when `[git] worktrees` is on (ADR 0027). Returns whether it did, which
+/// when `[git] worktrees` is on (ADR 0036). Returns whether it did, which
 /// is what a failed create must undo with [`undo_register`].
 pub(crate) fn register_new(
     env: &Environment,
@@ -386,6 +386,18 @@ fn provision(
     Ok(())
 }
 
+/// [`register_new`] for a reflink graft, which has no layers to exclude
+/// yet.
+fn register_reflink(
+    env: &Environment,
+    repo: &graft_root::Repo,
+    name: &GraftName,
+    path: &Path,
+    base: &graft_core::CommitId,
+) -> anyhow::Result<bool> {
+    register_new(env, repo, name, path, base, Layout::Reflink, &[])
+}
+
 /// Creates a reflink graft: a real working tree (ADR 0003).
 fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::Result<Output> {
     let Ctx {
@@ -424,15 +436,7 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
         .map_err(anyhow::Error::from)
         .and_then(|report| {
             timing::time("pin base", || located.repo.pin(record.id, &base, name))?;
-            registered = register_new(
-                env,
-                &located.repo,
-                name,
-                &report.path,
-                &base,
-                Layout::Reflink,
-                &[],
-            )?;
+            registered = register_reflink(env, &located.repo, name, &report.path, &base)?;
             let applied = layers::apply(
                 &planned,
                 &cache,
@@ -845,6 +849,24 @@ fn listing_json(ctx: &Ctx, grafts: Vec<serde_json::Value>) -> serde_json::Value 
     })
 }
 
+/// Graft `g`'s registration as a git worktree, if any, and its disk use
+/// with the registration's (mostly its index, which lives in Root's
+/// `.git`; ADR 0036).
+fn with_registration(
+    repo: &graft_root::Repo,
+    g: &GraftRecord,
+    path: &Path,
+    disk: Option<u64>,
+) -> (Option<std::path::PathBuf>, Option<u64>) {
+    let registration = repo.registration(&g.name, path);
+    let disk = disk.map(|d| {
+        d + registration
+            .as_deref()
+            .map_or(0, graft_root::Repo::registration_bytes)
+    });
+    (registration, disk)
+}
+
 /// Lists grafts.
 pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
     let ctx = open(env)?;
@@ -891,21 +913,9 @@ pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
     ]];
     for g in &grafts {
         let path = backend.path(&g.name);
-        let (changed, disk, note) = measure(
-            &ctx,
-            g,
-            &path,
-            mounted.as_deref(),
-            !args.no_disk,
-            &mut out.warnings,
-        );
-        // A registered graft's index lives in Root's `.git` (ADR 0027).
-        let registration = located.repo.registration(&g.name, &path);
-        let disk = disk.map(|d| {
-            d + registration
-                .as_deref()
-                .map_or(0, graft_root::Repo::registration_bytes)
-        });
+        let (up, want_disk) = (mounted.as_deref(), !args.no_disk);
+        let (changed, disk, note) = measure(&ctx, g, &path, up, want_disk, &mut out.warnings);
+        let (registration, disk) = with_registration(&located.repo, g, &path, disk);
         let shown = |v: Option<String>| v.or_else(|| note.clone()).unwrap_or_default();
         rows.push([
             g.name.to_string(),
@@ -1229,7 +1239,7 @@ pub(crate) fn prune(args: &PruneArgs, env: &Environment) -> anyhow::Result<Outpu
     let mut out = Output::default();
     crate::blueprints::release(&mut ctx, &record, &mut out)?;
     // The registration names the working tree's path, so it goes first,
-    // while the tree is still where it names (ADR 0027).
+    // while the tree is still where it names (ADR 0036).
     unregister(&ctx, &name, checked, &mut out)?;
     // Deleting a large build tree takes seconds: move it aside, then
     // delete it after returning.

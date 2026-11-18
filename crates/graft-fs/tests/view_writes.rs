@@ -84,7 +84,7 @@ impl Env {
     }
 
     /// A view whose `.git` is a file naming the worktree registration at
-    /// `admin` (ADR 0027).
+    /// `admin` (ADR 0036).
     fn view_linked(&self, admin: &Path, git_in_background: bool) -> GraftView {
         let objects = ObjectStore::open(&self.fixture.root());
         let base = self.fixture.base.clone();
@@ -697,7 +697,7 @@ fn a_half_built_git_is_rebuilt_and_a_finished_one_kept() {
 }
 
 /// A registered virtual graft serves `.git` as a read-only file naming its
-/// worktree registration in Root (ADR 0027), built on first use, in the
+/// worktree registration in Root (ADR 0036), built on first use, in the
 /// foreground (FUSE) and in the background (NFS).
 #[test]
 fn a_registered_graft_serves_git_as_a_read_only_link() {

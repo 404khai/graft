@@ -1423,7 +1423,7 @@ fn rebase_virtual(
         git(&mount, &["reset", "-q", "--mixed", head.as_str()])?;
     } else if ctx.located.repo.registration(name, &mount).is_some() {
         // Registered, but its index is not built yet: it will be built
-        // from the new base, so its branch must be there too (ADR 0027).
+        // from the new base, so its branch must be there too (ADR 0036).
         ctx.located.repo.move_live_branch(name, head)?;
     }
     let _ = writeln!(

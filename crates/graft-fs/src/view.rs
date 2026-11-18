@@ -167,7 +167,7 @@ pub struct Journal {
     /// times out on slow calls).
     pub git_in_background: bool,
     /// Serve `.git` as a file (`dir/dotgit`) naming the graft's git
-    /// worktree registration in Root (ADR 0027), instead of a directory.
+    /// worktree registration in Root (ADR 0036), instead of a directory.
     /// `git_init` then prepares that file and the registration's index.
     pub git_link: bool,
     /// Decides whether a finished write may be journaled (claims, ADR
@@ -355,7 +355,7 @@ impl std::fmt::Debug for WriteLock<'_> {
 }
 
 /// The `.git` of a writable view: a real directory, or a real file naming
-/// a git worktree registration (ADR 0027), created on first use.
+/// a git worktree registration (ADR 0036), created on first use.
 pub(crate) struct GitDir {
     pub(crate) dir: PathBuf,
     /// `.git` is a file (`gitdir: ...`), read-only through the mount.

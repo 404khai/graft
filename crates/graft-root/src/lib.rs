@@ -10,7 +10,7 @@
 //! [`tree`] reads trees and blobs one at a time for virtual grafts.
 //!
 //! [`worktree`] registers grafts as git linked worktrees of Root, so every
-//! tool that lists worktrees lists them (opt-in, ADR 0027).
+//! tool that lists worktrees lists them (opt-in, ADR 0036).
 //!
 //! [`layer`] owns the layer cache: shared directory trees such as
 //! `node_modules`, keyed by the hash of their declared inputs.

@@ -15,7 +15,7 @@
 //!
 //! [git]
 //! # Register new grafts as git worktrees of Root, so `git worktree list`,
-//! # editors and git clients list them (ADR 0027). Off by default.
+//! # editors and git clients list them (ADR 0036). Off by default.
 //! worktrees = true
 //!
 //! [telemetry]
@@ -54,7 +54,7 @@ pub struct Config {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GitConfig {
-    /// Register new grafts as linked worktrees of Root (ADR 0027). Grafts
+    /// Register new grafts as linked worktrees of Root (ADR 0036). Grafts
     /// that exist already keep their layout.
     pub worktrees: bool,
 }
