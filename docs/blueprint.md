@@ -7,6 +7,10 @@ graft is created from, never from a working tree.
 > Status: complete for this release: `[[layer]]`, `[sandbox]` and
 > `[blueprint.<name>]`.
 
+Starter files, kept parseable by a test: [`examples/rust-pnpm/graft.toml`](../examples/rust-pnpm/graft.toml)
+for a Rust + pnpm monorepo (a shared `target/` layer, an offline pnpm
+install from the shared store, and the caches `graft run` may write).
+
 Unknown keys are errors. Every error names the file, line and column:
 `graft.toml:2:8: layer path must not contain . or .. components`.
 
