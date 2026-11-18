@@ -87,7 +87,7 @@ fn registered_grafts_are_listed_as_git_worktrees() {
     let a = s.new_graft("a");
     let b = s.new_graft("b");
     let list = s.root_git(&["worktree", "list", "--porcelain"]);
-    for (path, branch) in [(&a, "graft-live/a"), (&b, "graft-live/b")] {
+    for (path, branch) in [(&a, "graft-live/a/live"), (&b, "graft-live/b/live")] {
         let path = path.canonicalize().unwrap();
         assert!(
             list.contains(&format!("worktree {}\nHEAD ", path.display())),
@@ -104,7 +104,7 @@ fn registered_grafts_are_listed_as_git_worktrees() {
     assert_eq!(out(&a, &["status", "--porcelain"]), "");
     assert_eq!(
         out(&a, &["branch", "--show-current"]).trim(),
-        "graft-live/a"
+        "graft-live/a/live"
     );
     // graft sees it too, and knows it is registered.
     let ls: serde_json::Value = serde_json::from_str(&s.ok(&["ls", "--json"])).unwrap();
@@ -128,7 +128,7 @@ fn registered_graft_commits_land_on_its_branch_in_root() {
     std::fs::write(a.join("src/lib.rs"), "pub fn b() {}\n").unwrap();
     git(&a, &["commit", "-q", "-am", "feat: b"]);
     assert_eq!(
-        s.root_git(&["log", "-1", "--format=%s", "graft-live/a"])
+        s.root_git(&["log", "-1", "--format=%s", "graft-live/a/live"])
             .trim(),
         "feat: b"
     );
@@ -181,7 +181,7 @@ fn prune_refuses_commits_only_on_the_graft_branch() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "on graft-live/a is on no other branch in Root",
+            "on graft-live/a/live is on no other branch in Root",
         ))
         .stderr(predicate::str::contains("--force"));
     assert!(
@@ -189,7 +189,7 @@ fn prune_refuses_commits_only_on_the_graft_branch() {
         "a refused prune touches nothing"
     );
     // Once another branch has the work, nothing is lost.
-    s.root_git(&["branch", "keep", "graft-live/a"]);
+    s.root_git(&["branch", "keep", "graft-live/a/live"]);
     s.ok(&["prune", "a"]);
     let branches = s.root_git(&["branch", "--format=%(refname:short)"]);
     assert_eq!(branches, "keep\nmain\n");
@@ -213,10 +213,10 @@ fn git_worktree_remove_then_prune_cleans_up_and_keeps_work() {
     s.cmd(&["prune", "a"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("kept branch graft-live/a"));
+        .stderr(predicate::str::contains("kept branch graft-live/a/live"));
     s.ok(&["prune", "b"]);
     let branches = s.root_git(&["branch", "--format=%(refname:short)"]);
-    assert_eq!(branches, "graft-live/a\nmain\n");
+    assert_eq!(branches, "graft-live/a/live\nmain\n");
     assert_eq!(s.ok(&["ls", "--json"]).matches("\"name\"").count(), 0);
 }
 
@@ -245,21 +245,21 @@ fn a_registered_graft_cannot_take_a_branch_another_worktree_has() {
 #[test]
 fn a_refused_registration_leaves_what_was_in_the_way() {
     // Regression: a failed `graft new` must undo only what it made. A
-    // `graft-live/a` branch with work of its own (or another worktree
+    // `graft-live/a/live` branch with work of its own (or another worktree
     // with the id `graft-a`) is someone else's and is kept.
     let s = Setup::new(None);
-    git(s.repo.path(), &["branch", "graft-live/a"]);
-    git(s.repo.path(), &["checkout", "-q", "graft-live/a"]);
+    git(s.repo.path(), &["branch", "graft-live/a/live"]);
+    git(s.repo.path(), &["checkout", "-q", "graft-live/a/live"]);
     std::fs::write(s.repo.path().join("mine.txt"), "mine\n").unwrap();
     git(s.repo.path(), &["add", "mine.txt"]);
     git(s.repo.path(), &["commit", "-q", "-m", "mine"]);
     git(s.repo.path(), &["checkout", "-q", "main"]);
-    let mine = s.root_git(&["rev-parse", "graft-live/a"]);
+    let mine = s.root_git(&["rev-parse", "graft-live/a/live"]);
     s.cmd(&["new", "a", "--backend", "reflink"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("is on no other branch"));
-    assert_eq!(s.root_git(&["rev-parse", "graft-live/a"]), mine);
+    assert_eq!(s.root_git(&["rev-parse", "graft-live/a/live"]), mine);
     assert_eq!(s.ok(&["ls", "--json"]).matches("\"name\"").count(), 0);
 
     // git names a worktree's id after its directory.
@@ -397,7 +397,7 @@ fn run_in_a_registered_graft_can_commit_but_not_touch_root() {
         .assert()
         .success();
     assert_eq!(
-        s.root_git(&["log", "-1", "--format=%s", "graft-live/a"])
+        s.root_git(&["log", "-1", "--format=%s", "graft-live/a/live"])
             .trim(),
         "feat: f"
     );
@@ -406,6 +406,68 @@ fn run_in_a_registered_graft_can_commit_but_not_touch_root() {
     assert!(!s.repo.path().join("escape.txt").exists());
     assert_eq!(
         s.root_git(&["branch", "--format=%(refname:short)"]),
-        "graft-live/a\nmain\n"
+        "graft-live/a/live\nmain\n"
     );
+}
+
+/// A run in one registered graft cannot move or delete another graft's
+/// branch: each graft's branch has a ref directory of its own (ADR 0036).
+#[test]
+fn run_cannot_touch_another_grafts_branch() {
+    if !sandbox_usable() {
+        return;
+    }
+    let s = Setup::new(None);
+    s.new_graft("a");
+    s.new_graft("b");
+    let b_before = s.root_git(&["rev-parse", "graft-live/b/live"]);
+    let git_dir = s.repo.path().join(".git").canonicalize().unwrap();
+    let b_ref = git_dir.join("refs/heads/graft-live/b/live");
+    let script = format!(
+        "! git update-ref -d refs/heads/graft-live/b/live 2>/dev/null \
+         && ! git update-ref refs/heads/graft-live/b/live HEAD~0 2>/dev/null \
+         && ! (rm -f '{b}' 2>/dev/null && test ! -e '{b}') \
+         && ! git branch graft-live/c/live 2>/dev/null",
+        b = b_ref.display()
+    );
+    s.cmd(&["run", "a", "--", "sh", "-c", &script])
+        .assert()
+        .success();
+    assert!(b_ref.is_file(), "b's branch was removed");
+    assert_eq!(s.root_git(&["rev-parse", "graft-live/b/live"]), b_before);
+}
+
+/// A run adds objects to Root's object store but cannot remove or change
+/// the ones already there. Seatbelt can tell the two apart; Landlock
+/// cannot (see `graft_sandbox::Policy::with_create_only`).
+#[cfg(target_os = "macos")]
+#[test]
+fn run_cannot_remove_roots_objects() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let s = Setup::new(None);
+    s.new_graft("a");
+    let git_dir = s.repo.path().join(".git").canonicalize().unwrap();
+    let head = s.root_git(&["rev-parse", "main"]);
+    let head = head.trim();
+    let object = git_dir.join("objects").join(&head[..2]).join(&head[2..]);
+    assert!(
+        object.is_file(),
+        "{} is not a loose object",
+        object.display()
+    );
+    let script = format!(
+        "! rm -f '{o}' 2>/dev/null; ! chmod 644 '{o}' 2>/dev/null; \
+         ! mv '{o}' '{o}.x' 2>/dev/null; test -f '{o}'",
+        o = object.display()
+    );
+    s.cmd(&["run", "a", "--", "sh", "-c", &script])
+        .assert()
+        .success();
+    assert!(object.is_file(), "Root's commit object was removed");
+    assert_eq!(
+        std::fs::metadata(&object).unwrap().permissions().mode() & 0o222,
+        0,
+        "Root's object became writable"
+    );
+    s.root_git(&["cat-file", "-e", head]);
 }

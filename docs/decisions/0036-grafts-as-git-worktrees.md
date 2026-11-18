@@ -55,7 +55,7 @@ Checked with git 2.55:
 - D. `graft/<name>`, as in a private repository. Integrate's `branch` and
   `push` modes land on `refs/heads/graft/<name>` in Root (ADR 0017), so
   they would move the branch the graft has checked out.
-- E. `graft-live/<name>`: in Root's refs, distinct from Integrate's
+- E. `graft-live/<name>/live`: in Root's refs, distinct from Integrate's
   branch, and clearly a live graft's.
 
 **Removing a virtual graft through git**
@@ -79,11 +79,14 @@ Checked with git 2.55:
 and its temp dir; a registered graft's git state lives in Root's `.git`)
 
 - J. Leave the policy alone: `git commit` fails inside `graft run`.
-- K. Also allow writes to the graft's registration, Root's object store,
-  and the graft's own ref namespace (`refs/heads/graft-live/<name>` is a
-  file; its lock and reflog need `refs/heads/graft-live/` and
-  `logs/refs/heads/graft-live/`). Root's working tree, config, hooks,
-  index, `HEAD`, `packed-refs` and every other branch stay read-only.
+- K. Also allow writes to the graft's registration, its own ref
+  namespace and, create-only, Root's object store. Each graft's branch is
+  `graft-live/<name>/live`, in a directory of its own, because git
+  writes a ref's lock file beside it and Landlock can only grant
+  directories: granting `refs/heads/graft-live/` as a whole would let one
+  graft move or delete every other graft's branch. Root's working tree,
+  config, hooks, index, `HEAD`, `packed-refs` and every other branch stay
+  read-only.
 
 ## Decision
 
@@ -95,7 +98,7 @@ C + E + G + H + K.
   grafts; a registration whose `gitdir` names the mount for virtual
   grafts), so turning the setting off or on affects only new grafts.
 - **Registration.** `$GIT_COMMON_DIR/worktrees/graft-<name>/` holds
-  `HEAD` (`ref: refs/heads/graft-live/<name>`), `commondir` (`../..`),
+  `HEAD` (`ref: refs/heads/graft-live/<name>/live`), `commondir` (`../..`),
   `gitdir` (the absolute path of the graft's `.git`), `index` and
   `config.worktree`. Virtual grafts also hold `locked`. The branch is
   created at the base commit. An existing registration or branch of that
@@ -121,16 +124,27 @@ C + E + G + H + K.
   `core.checkStat` and `core.trustctime` for virtual grafts, and
   `core.excludesFile` for grafts with layers.
 - **Prune** removes the registration (only if its `gitdir` names this
-  graft) and the `graft-live/<name>` branch (unless another worktree has
+  graft) and the `graft-live/<name>/live` branch (unless another worktree has
   it checked out). The lost-work check (AGENTS.md §3.9) for a registered
-  graft counts commits reachable from its `HEAD` or `graft-live/<name>`
+  graft counts commits reachable from its `HEAD` or `graft-live/<name>/live`
   that are not reachable from the base or any other ref in Root.
 - **A reflink graft removed with `git worktree remove`** shows as
   `missing` in `graft ls`; `graft prune <name>` then releases its
   Blueprint resources, pin and record. Releasing resources (databases,
   volumes) is never done implicitly.
-- **`graft run`** on a registered graft adds the paths in K to the
-  policy.
+- **`graft run`** on a registered graft may write its registration and
+  `refs/heads/graft-live/<name>/` (and the matching reflog directory),
+  and may *add* to Root's `objects/` (`Policy::with_create_only`).
+  - macOS (Seatbelt): new files and directories may be created and
+    written; only git's temporary files (`tmp_*`) may be removed, renamed
+    away or have their mode changed, so the objects already there (0444)
+    can be neither deleted nor rewritten.
+  - Linux (Landlock): a rename needs the right to remove files, and mode
+    bits are not a Landlock right, so the object store is writable apart
+    from truncation, symlinks and device files. **Residual risk:** with
+    `[git] worktrees = true`, a process under `graft run` on Linux can
+    delete or replace Root's objects. The setting is off by default and
+    this is why it stays so.
 
 **Invariants:** a graft's layout never changes after creation; Graft
 never removes a registration or branch that is not its own graft's;
@@ -146,7 +160,8 @@ the default (`worktrees` off) is byte-for-byte ADR 0003.
 `the_setting_only_affects_new_grafts`,
 `registered_graft_layers_are_ignored`,
 `integrate_lands_a_registered_graft`,
-`run_in_a_registered_graft_can_commit_but_not_touch_root` (e2e,
+`run_in_a_registered_graft_can_commit_but_not_touch_root`,
+`run_cannot_touch_another_grafts_branch`, `run_cannot_remove_roots_objects` (macOS) (e2e,
 `tests/e2e/worktrees.rs`); registration, branch reuse and refusal,
 unregister and lost-work units in `crates/graft-root/tests/worktree.rs`;
 `a_registered_graft_serves_git_as_a_read_only_link` (the mount's `.git`,

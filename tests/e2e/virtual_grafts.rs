@@ -252,7 +252,10 @@ mod fuse {
         let path = new_fuse(home.path(), repo.path(), "v");
 
         let list = git_ok(repo.path(), &["worktree", "list", "--porcelain"]);
-        assert!(list.contains("branch refs/heads/graft-live/v\n"), "{list}");
+        assert!(
+            list.contains("branch refs/heads/graft-live/v/live\n"),
+            "{list}"
+        );
         assert!(list.contains("locked graft: virtual graft"), "{list}");
         let admin = repo
             .path()
@@ -277,7 +280,11 @@ mod fuse {
         std::fs::write(path.join("README.md"), "changed\n").unwrap();
         git_ok(&path, &["commit", "-q", "-am", "feat: change"]);
         assert_eq!(
-            git_ok(repo.path(), &["log", "-1", "--format=%s", "graft-live/v"]).trim(),
+            git_ok(
+                repo.path(),
+                &["log", "-1", "--format=%s", "graft-live/v/live"]
+            )
+            .trim(),
             "feat: change"
         );
         assert_eq!(git_ok(&path, &["status", "--porcelain"]), "");

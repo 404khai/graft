@@ -279,7 +279,7 @@ pub(crate) fn undo_register(
 }
 
 /// Removes graft `name`'s git worktree registration, if it has one, and
-/// its `graft-live/<name>` branch. `checked` means the branch's work was
+/// its `graft-live/<name>/live` branch. `checked` means the branch's work was
 /// checked by the lost-work check, integrated, or discarded with
 /// `--force`; otherwise a branch with commits on no other ref is kept.
 pub(crate) fn unregister(

@@ -114,7 +114,7 @@ worktrees = true
 ```
 
 Grafts created from then on appear in `git worktree list` (and in every
-tool that reads it) on a `graft-live/<name>` branch, so you can open one
+tool that reads it) on a `graft-live/<name>/live` branch, so you can open one
 and point an agent at it like any worktree. Their commits land in Root
 straight away. Virtual grafts are listed as locked, so `git worktree
 remove` leaves them to `graft prune`. Because they are ordinary worktrees,

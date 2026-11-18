@@ -101,7 +101,7 @@ Entries in `roots/` whose name is not a valid Root ID, or that contain no
 | 15 | Adds `crashes/<binary>-<ms>-<pid>.txt` (panic details) and `reports/report-<ms>.json` (diagnostics bundles; ADR 0030) | None: additive; Graft only reads them back to build a new report, and either directory may be deleted at any time |
 | 16 | Adds `run/graftd.log.1` (ADR 0031) | None: additive; never read by Graft except into a report |
 | 17 | Adds `telemetry/` (ADR 0034) | None: additive; created only on opt-in, deleted on opt-out |
-| 18 | Adds `git.worktrees` to `config.toml`; grafts created with it on are git worktrees of Root: a registration in Root's `.git/worktrees/graft-<name>/`, a `refs/heads/graft-live/<name>` branch, `extensions.worktreeConfig` in Root's config, and `grafts/<graft-id>/dotgit` for virtual grafts (ADR 0036) | None: additive and opt-in; a graft's layout is read from disk, so grafts from earlier formats keep their private repositories |
+| 18 | Adds `git.worktrees` to `config.toml`; grafts created with it on are git worktrees of Root: a registration in Root's `.git/worktrees/graft-<name>/`, a `refs/heads/graft-live/<name>/live` branch, `extensions.worktreeConfig` in Root's config, and `grafts/<graft-id>/dotgit` for virtual grafts (ADR 0036) | None: additive and opt-in; a graft's layout is read from disk, so grafts from earlier formats keep their private repositories |
 
 ## `config.toml`
 
@@ -441,14 +441,14 @@ state lives in Root's git directory, in git's own worktree layout:
 
 | Path (in Root's common git dir) | Contents |
 | --- | --- |
-| `worktrees/graft-<name>/HEAD` | `ref: refs/heads/graft-live/<name>` |
+| `worktrees/graft-<name>/HEAD` | `ref: refs/heads/graft-live/<name>/live` |
 | `worktrees/graft-<name>/commondir` | `../..` |
 | `worktrees/graft-<name>/gitdir` | Absolute path of the graft's `.git` file (`mounts/<name>/.git`) |
 | `worktrees/graft-<name>/index` | Index of the base tree; for a virtual graft, built on first use of `.git` |
 | `worktrees/graft-<name>/config.worktree` | `core.checkStat = minimal` and `core.trustctime = false` for virtual grafts; `core.excludesFile` for grafts with layers |
 | `worktrees/graft-<name>/graft-exclude` | The user's global excludes file, followed by an anchored line per layer path; only for grafts with layers |
 | `worktrees/graft-<name>/locked` | Virtual grafts only: a reason naming `graft prune <name>`, so `git worktree remove` and `git worktree prune` leave them alone |
-| `refs/heads/graft-live/<name>` | The graft's branch, created at the base commit |
+| `refs/heads/graft-live/<name>/live` | The graft's branch, created at the base commit |
 | `config` | `[extensions] worktreeConfig = true`, added once, under git's `config.lock` protocol |
 
 The graft's `.git` is a file, `gitdir: <worktrees/graft-<name>>`. A
@@ -460,7 +460,7 @@ Root's object store. Scratch checkouts (Integrate, Radar, layer builds,
 materialize) are never registered.
 
 Graft never overwrites a registration whose `gitdir` names another path,
-or a `graft-live/<name>` branch with commits on no other ref. Prune
+or a `graft-live/<name>/live` branch with commits on no other ref. Prune
 removes the registration only if its `gitdir` names this graft, and the
 branch unless another worktree has it checked out or (without `--force`)
 it holds commits on no other ref.
@@ -506,7 +506,7 @@ and refuses it if it is a symlink, is owned by anyone other than
 | Ref | Points at | Lifetime |
 | --- | --- | --- |
 | `refs/graft/<graft-id>` | The graft's base commit | `graft new` to `graft prune`; keeps the base reachable so `git gc` cannot prune it |
-| `refs/heads/graft-live/<name>` | (v18) A registered graft's checked-out branch | `graft new` to `graft prune`; kept by prune when it holds commits on no other ref |
+| `refs/heads/graft-live/<name>/live` | (v18) A registered graft's checked-out branch | `graft new` to `graft prune`; kept by prune when it holds commits on no other ref |
 
 `graft integrate` pushes each landing commit to
 `refs/graft/integrating/<graft-id>` to copy its objects into Root, moves

@@ -7,7 +7,7 @@
 //! every editor and git client that shows worktrees.
 //!
 //! A registered graft has the id `graft-<name>` and checks out its own
-//! branch, `graft-live/<name>`, in Root. Registration is opt-in (`[git]
+//! branch, `graft-live/<name>/live`, in Root. Registration is opt-in (`[git]
 //! worktrees` in `config.toml`): a graft created without it keeps the
 //! private repository of ADR 0003, and a graft's layout never changes after
 //! it is created.
@@ -26,9 +26,21 @@ pub const LIVE_BRANCH_PREFIX: &str = "graft-live/";
 /// File in a registration holding the excludes of a graft with layers.
 const EXCLUDE_FILE: &str = "graft-exclude";
 
-/// The branch a registered graft checks out: `graft-live/<name>`.
+/// The branch a registered graft checks out: `graft-live/<name>/live`.
+///
+/// Each graft's branch sits in a directory of its own, `graft-live/<name>/`,
+/// so `graft run` can let a graft move its branch without letting it touch
+/// any other graft's (git creates a ref's lock file beside it, and
+/// Landlock can only grant directories).
 #[must_use]
 pub fn live_branch(name: &GraftName) -> String {
+    format!("{}/live", live_namespace(name))
+}
+
+/// The directory of graft `name`'s branch under `refs/heads/`:
+/// `graft-live/<name>`.
+#[must_use]
+pub fn live_namespace(name: &GraftName) -> String {
     format!("{LIVE_BRANCH_PREFIX}{name}")
 }
 
@@ -36,6 +48,15 @@ pub fn live_branch(name: &GraftName) -> String {
 #[must_use]
 pub fn live_ref(name: &GraftName) -> String {
     format!("refs/heads/{}", live_branch(name))
+}
+
+/// What [`Repo::registered_write_paths`] grants a registered graft.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredWrites {
+    /// Directories it may change freely.
+    pub writable: Vec<PathBuf>,
+    /// Directories it may only add to (see `graft_sandbox::Policy`).
+    pub create_only: Vec<PathBuf>,
 }
 
 /// The worktree id of a registered graft: `graft-<name>`.
@@ -56,7 +77,7 @@ pub enum Layout {
     Virtual,
 }
 
-/// What to do with a graft's `graft-live/<name>` branch when it is
+/// What to do with a graft's `graft-live/<name>/live` branch when it is
 /// unregistered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BranchPolicy {
@@ -302,7 +323,10 @@ impl Repo {
             }
             // `graft run` grants writes to the graft's own ref namespace,
             // which must exist (ADR 0036).
-            let logs = self.common_dir().join("logs/refs/heads/graft-live");
+            let logs = self
+                .common_dir()
+                .join("logs/refs/heads")
+                .join(live_namespace(name));
             std::fs::create_dir_all(&logs).map_err(io_err(&logs))?;
             if !layers.is_empty() {
                 exclude_layers(&self.repo, &admin, layers)?;
@@ -364,11 +388,11 @@ impl Repo {
         self.delete_ref(&branch)?;
         let common = self.common_dir();
         remove_empty_dirs(
-            &common.join("refs/heads/graft-live"),
+            &common.join("refs/heads").join(live_namespace(name)),
             &common.join("refs/heads"),
         );
         remove_empty_dirs(
-            &common.join("logs/refs/heads/graft-live"),
+            &common.join("logs/refs/heads").join(live_namespace(name)),
             &common.join("logs"),
         );
         Ok(BranchOutcome::Deleted)
@@ -388,25 +412,32 @@ impl Repo {
         )
     }
 
-    /// Paths `graft run` must be able to write for a registered graft to
-    /// commit: its registration, Root's object store and its own ref and
-    /// reflog directories. Creates the directories if missing.
+    /// What `graft run` must let a registered graft write to so it can
+    /// commit: its registration and its own ref and reflog directories
+    /// (writable), and Root's object store (create-only: git adds objects
+    /// and never changes one). Creates the directories if missing.
     ///
     /// # Errors
     ///
     /// If a directory cannot be created.
-    pub fn registered_write_paths(&self, admin: &Path) -> Result<Vec<PathBuf>> {
+    pub fn registered_write_paths(
+        &self,
+        name: &GraftName,
+        admin: &Path,
+    ) -> Result<RegisteredWrites> {
         let common = self.common_dir();
-        let paths = vec![
-            admin.to_owned(),
-            common.join("objects"),
-            common.join("refs/heads/graft-live"),
-            common.join("logs/refs/heads/graft-live"),
-        ];
-        for p in &paths {
+        let writes = RegisteredWrites {
+            writable: vec![
+                admin.to_owned(),
+                common.join("refs/heads").join(live_namespace(name)),
+                common.join("logs/refs/heads").join(live_namespace(name)),
+            ],
+            create_only: vec![common.join("objects")],
+        };
+        for p in writes.writable.iter().chain(&writes.create_only) {
             std::fs::create_dir_all(p).map_err(io_err(p))?;
         }
-        Ok(paths)
+        Ok(writes)
     }
 
     /// Bytes used by the registration at `admin` (mostly its index).

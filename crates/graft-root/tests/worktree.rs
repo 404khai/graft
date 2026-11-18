@@ -130,7 +130,10 @@ fn registered_reflink_graft_is_a_git_worktree_of_root() {
         list.contains(&format!("worktree {}\n", canonical(&dest))),
         "{list}"
     );
-    assert!(list.contains("branch refs/heads/graft-live/auth"), "{list}");
+    assert!(
+        list.contains("branch refs/heads/graft-live/auth/live"),
+        "{list}"
+    );
     assert!(
         !list.contains("locked"),
         "a reflink graft is not locked: {list}"
@@ -140,7 +143,7 @@ fn registered_reflink_graft_is_a_git_worktree_of_root() {
     assert_eq!(git(&dest, &["status", "--porcelain"]), "");
     assert_eq!(
         git(&dest, &["rev-parse", "--abbrev-ref", "HEAD"]),
-        "graft-live/auth"
+        "graft-live/auth/live"
     );
     assert_eq!(
         git(f.root_dir.path(), &["config", "extensions.worktreeConfig"]),
@@ -155,7 +158,7 @@ fn registered_reflink_graft_is_a_git_worktree_of_root() {
     assert_eq!(
         git(
             f.root_dir.path(),
-            &["log", "-1", "--format=%s", "graft-live/auth"]
+            &["log", "-1", "--format=%s", "graft-live/auth/live"]
         ),
         "feat: change readme"
     );
@@ -247,7 +250,7 @@ fn unregister_keeps_a_branch_with_work_of_its_own_unless_told() {
         .unregister(&name("auth"), &dest, BranchPolicy::KeepIfUnique)
         .unwrap();
     assert!(matches!(outcome, BranchOutcome::Kept { .. }), "{outcome:?}");
-    assert!(git(f.root_dir.path(), &["branch"]).contains("graft-live/auth"));
+    assert!(git(f.root_dir.path(), &["branch"]).contains("graft-live/auth/live"));
     assert_eq!(
         root.unregister(&name("auth"), &dest, BranchPolicy::Delete)
             .unwrap(),
@@ -266,7 +269,7 @@ fn unregister_never_deletes_a_branch_checked_out_elsewhere() {
     // Root itself checks out a branch named like a graft's.
     git(
         f.root_dir.path(),
-        &["checkout", "-q", "-b", "graft-live/auth"],
+        &["checkout", "-q", "-b", "graft-live/auth/live"],
     );
     let outcome = root
         .unregister(&name("auth"), &dest, BranchPolicy::Delete)
@@ -298,10 +301,10 @@ fn register_refuses_a_worktree_or_branch_that_is_not_the_grafts() {
         .unwrap_err();
     assert!(matches!(err, RootError::AlreadyExists { .. }), "{err}");
     assert!(dest.join(".git").is_dir(), "the graft is left as it was");
-    assert!(!git(f.root_dir.path(), &["branch"]).contains("graft-live/auth"));
+    assert!(!git(f.root_dir.path(), &["branch"]).contains("graft-live/auth/live"));
 
     // A branch with work of its own.
-    git(f.root_dir.path(), &["branch", "graft-live/ui"]);
+    git(f.root_dir.path(), &["branch", "graft-live/ui/live"]);
     let wt = f.home.path().join("ui-work");
     git(
         f.root_dir.path(),
@@ -310,7 +313,7 @@ fn register_refuses_a_worktree_or_branch_that_is_not_the_grafts() {
             "add",
             "-q",
             &wt.display().to_string(),
-            "graft-live/ui",
+            "graft-live/ui/live",
         ],
     );
     std::fs::write(wt.join("x"), "x").unwrap();
@@ -320,15 +323,15 @@ fn register_refuses_a_worktree_or_branch_that_is_not_the_grafts() {
         f.root_dir.path(),
         &["worktree", "remove", &wt.display().to_string()],
     );
-    let tip = git(f.root_dir.path(), &["rev-parse", "graft-live/ui"]);
+    let tip = git(f.root_dir.path(), &["rev-parse", "graft-live/ui/live"]);
     let ui = f.path("ui");
     create_worktree(&root, &ui, &branch_name(&name("ui")), &f.base, &Copier).unwrap();
     let err = root
         .register(&name("ui"), &ui, &f.base, Layout::Reflink, &[])
         .unwrap_err();
-    assert!(err.to_string().contains("graft-live/ui"), "{err}");
+    assert!(err.to_string().contains("graft-live/ui/live"), "{err}");
     assert_eq!(
-        git(f.root_dir.path(), &["rev-parse", "graft-live/ui"]),
+        git(f.root_dir.path(), &["rev-parse", "graft-live/ui/live"]),
         tip,
         "the branch is untouched"
     );
@@ -338,7 +341,7 @@ fn register_refuses_a_worktree_or_branch_that_is_not_the_grafts() {
 #[test]
 fn register_reuses_a_branch_whose_work_is_on_another_ref() {
     let f = Fixture::new();
-    git(f.root_dir.path(), &["branch", "graft-live/auth"]);
+    git(f.root_dir.path(), &["branch", "graft-live/auth/live"]);
     let dest = f.reflink("auth");
     assert_eq!(git(&dest, &["rev-parse", "HEAD"]), f.base.as_str());
 }
@@ -420,7 +423,10 @@ fn virtual_registration_is_locked_and_built_on_first_use() {
         .unwrap();
     assert!(!admin.join("index").exists(), "the index is built lazily");
     let list = f.worktree_list();
-    assert!(list.contains("branch refs/heads/graft-live/v"), "{list}");
+    assert!(
+        list.contains("branch refs/heads/graft-live/v/live"),
+        "{list}"
+    );
     assert!(list.contains("locked graft: virtual graft"), "{list}");
     let config = std::fs::read_to_string(admin.join("config.worktree")).unwrap();
     assert!(config.contains("checkStat = minimal"), "{config}");
