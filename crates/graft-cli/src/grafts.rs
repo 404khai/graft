@@ -307,19 +307,45 @@ pub(crate) fn unregister(
     Ok(())
 }
 
-/// Connects to graftd, starting it if needed, and warns once if its version
-/// differs from ours.
+/// Connects to graftd, starting it if needed. A graftd from another
+/// version (left running across an upgrade) is restarted when it serves no
+/// mounts, which loses nothing; otherwise this warns, since stopping it
+/// would unmount grafts in use.
 pub(crate) fn daemon(home: &GraftHome, out: &mut Output) -> anyhow::Result<Client> {
+    let ours = env!("CARGO_PKG_VERSION");
     let mut client = Client::connect_or_start(home)?;
-    let ping = client.ping()?;
-    if ping.version != env!("CARGO_PKG_VERSION") {
+    let mut ping = client.ping()?;
+    if ping.version != ours && client.mounts()?.is_empty() {
+        let old = ping.version.clone();
+        client.shutdown()?;
+        drop(client);
+        wait_for_daemon_exit(home);
+        client = Client::connect_or_start(home)?;
+        ping = client.ping()?;
+        if ping.version == ours {
+            tracing::info!(
+                old,
+                new = ours,
+                "restarted an idle graftd from another version"
+            );
+        }
+    }
+    if ping.version != ours {
         out.warnings.push(format!(
-            "graftd {} is running but this is graft {}; stop it with `graft daemon stop` once no grafts are in use",
-            ping.version,
-            env!("CARGO_PKG_VERSION")
+            "graftd {} is running but this is graft {ours}; stop it with `graft daemon stop` once no grafts are in use",
+            ping.version
         ));
     }
     Ok(client)
+}
+
+/// Waits up to 5 s for a graftd that was asked to shut down to stop
+/// answering.
+fn wait_for_daemon_exit(home: &GraftHome) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while Client::connect(home).is_ok() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 /// Creates a graft.

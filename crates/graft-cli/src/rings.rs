@@ -31,8 +31,9 @@ pub(crate) struct BudArgs {
 pub(crate) struct RingArgs {
     /// The graft to checkpoint.
     name: String,
-    /// The ring's label (lowercase letters, digits and hyphens). Defaults
-    /// to `ring-<seq>`, after the graft's last op.
+    /// The ring's label (lowercase letters, digits and hyphens). Without
+    /// one, a ring named `ring-<seq>` (after the graft's last op) is still
+    /// taken; use `--list` to see the rings.
     label: Option<String>,
     /// List the graft's rings instead of taking one.
     #[arg(long, conflicts_with = "label")]
@@ -211,12 +212,21 @@ pub(crate) fn ring(args: &RingArgs, env: &Environment) -> anyhow::Result<Output>
     let mut out = Output::default();
     let mut client = daemon(&ctx.home, &mut out)?;
     sync(&ctx, &mut client, &record)?;
+    let named = label.is_some();
     let ring = ctx.located.store.ring(record.id, label)?;
     let _ = writeln!(
         out.stdout,
         "Ringed graft {name} as {} (op {}, {} delta entries)",
         ring.label, ring.seq, ring.paths
     );
+    if !named {
+        // `graft ring <name>` reads like a listing; say what happened.
+        let _ = writeln!(
+            out.stdout,
+            "  (no label given, so it is named {}; `graft ring {name} --list` lists rings)",
+            ring.label
+        );
+    }
     Ok(out.json_if(args.json, || ring_json(&name, &ring)))
 }
 
