@@ -575,14 +575,35 @@ impl Repo {
     }
 
     fn set_ref(&self, name: &str, commit: &CommitId, message: &str) -> Result<()> {
-        self.repo
-            .reference(
-                name,
-                oid(commit)?,
-                gix::refs::transaction::PreviousValue::Any,
-                message,
-            )
-            .map_err(|e| git_err("writing a graft branch")(boxed(e)))?;
+        // A branch's reflog entry needs a committer. Like git, which falls
+        // back to a default identity for reflogs, use one when the user has
+        // none configured (as on a fresh CI runner).
+        let fallback;
+        let repo = if self.repo.committer().is_some() {
+            &self.repo
+        } else {
+            let mut r = self.repo.clone();
+            {
+                let mut config = r.config_snapshot_mut();
+                for (key, value) in [
+                    ("committer.name", "Graft"),
+                    ("committer.email", "graft@localhost"),
+                ] {
+                    config
+                        .set_raw_value(key, value)
+                        .map_err(|e| git_err("setting a fallback committer")(boxed(e)))?;
+                }
+            }
+            fallback = r;
+            &fallback
+        };
+        repo.reference(
+            name,
+            oid(commit)?,
+            gix::refs::transaction::PreviousValue::Any,
+            message,
+        )
+        .map_err(|e| git_err("writing a graft branch")(boxed(e)))?;
         Ok(())
     }
 
