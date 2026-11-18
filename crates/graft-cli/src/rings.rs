@@ -6,7 +6,7 @@
 use std::fmt::Write as _;
 
 use anyhow::{Context, bail};
-use graft_core::{GraftState, RingLabel, Timestamp};
+use graft_core::{GraftName, GraftState, RingLabel, Timestamp};
 use graft_daemon::Client;
 use graft_fs::FsBackend;
 use graft_store::GraftRecord;
@@ -56,8 +56,8 @@ pub(crate) struct RewindArgs {
     json: bool,
 }
 
-/// Refuses reflink grafts, whose changes live in a working tree rather than
-/// a delta (ADR 0013).
+/// Refuses reflink grafts for bud, which would have to clone the whole
+/// working tree (ADR 0013; rings and rewind work on them, ADR 0038).
 fn require_virtual(record: &GraftRecord, what: &str) -> anyhow::Result<()> {
     if !record.backend.is_virtual() {
         let kind = if cfg!(target_os = "macos") {
@@ -80,6 +80,92 @@ fn require_virtual(record: &GraftRecord, what: &str) -> anyhow::Result<()> {
         ));
     }
     Ok(())
+}
+
+/// The working tree of reflink graft `name`, which must exist.
+fn reflink_dir(ctx: &Ctx, name: &GraftName) -> anyhow::Result<std::path::PathBuf> {
+    let dir = ctx.backend.path(name);
+    if !dir.is_dir() {
+        bail!("graft {name}'s working tree is missing ({})", dir.display());
+    }
+    Ok(dir)
+}
+
+/// `graft ring` for a reflink graft: a git snapshot (ADR 0038).
+fn reflink_ring(ctx: &Ctx, name: &GraftName, args: &RingArgs) -> anyhow::Result<Output> {
+    let dir = reflink_dir(ctx, name)?;
+    if args.list {
+        let rings = crate::reflink_rings::list(&dir)?;
+        if args.json {
+            let list = rings.iter().map(|r| r.json(name.as_str())).collect();
+            return Ok(Output::default().json_if(true, || serde_json::Value::Array(list)));
+        }
+        if rings.is_empty() {
+            return Ok(Output::stdout(format!("graft {name}: no rings\n")));
+        }
+        return Ok(Output::stdout(crate::reflink_rings::list_text(&rings)));
+    }
+    let label = args
+        .label
+        .as_deref()
+        .map(str::parse::<RingLabel>)
+        .transpose()?;
+    if label
+        .as_ref()
+        .is_some_and(|l| l.as_str().starts_with("undo-"))
+    {
+        bail!("ring labels starting with \"undo-\" are reserved for `graft rewind`");
+    }
+    let ring = crate::reflink_rings::ring(&dir, label.as_ref().map(RingLabel::as_str))?;
+    let mut out = Output::stdout(format!(
+        "Ringed graft {name} as {} ({} changed paths; untracked files included, ignored ones not)\n",
+        ring.label, ring.entries
+    ));
+    if label.is_none() {
+        let _ = writeln!(
+            out.stdout,
+            "  (no label given, so it is named {}; `graft ring {name} --list` lists rings)",
+            ring.label
+        );
+    }
+    Ok(out.json_if(args.json, || ring.json(name.as_str())))
+}
+
+/// `graft rewind` for a reflink graft (ADR 0038).
+fn reflink_rewind(
+    ctx: &Ctx,
+    name: &GraftName,
+    label: &RingLabel,
+    json: bool,
+) -> anyhow::Result<Output> {
+    let dir = reflink_dir(ctx, name)?;
+    if crate::reflink_rings::list(&dir)?
+        .iter()
+        .all(|r| r.label != label.as_str())
+    {
+        let list = if crate::agent::is_mcp() {
+            format!("graft_ring with name: \"{name}\", list: true")
+        } else {
+            format!("`graft ring {name} --list`")
+        };
+        return Err(crate::agent::coded(
+            "not_found",
+            format!("graft {name} has no ring named {label}"),
+            Some(format!("see {list}")),
+        ));
+    }
+    let undo = crate::reflink_rings::rewind(&dir, label.as_str())?;
+    let how = if crate::agent::is_mcp() {
+        format!("graft_rewind with name: \"{name}\", ring: \"{undo}\"")
+    } else {
+        format!("graft rewind {name} {undo}")
+    };
+    Ok(Output::stdout(format!(
+        "Rewound graft {name} to ring {label}. To undo: {how}\n"
+    ))
+    .json_if(json, || {
+        serde_json::json!({"name": name.as_str(), "ring": label.as_str(), "seq": null, "undo": undo})
+    }))
 }
 
 /// Whether graftd has `record` mounted.
@@ -178,6 +264,9 @@ pub(crate) fn ring(args: &RingArgs, env: &Environment) -> anyhow::Result<Output>
     let name = parse_name(&args.name)?;
     let mut ctx = open(env)?;
     let record = find(&ctx.located.store, &name)?;
+    if !record.backend.is_virtual() {
+        return reflink_ring(&ctx, &name, args);
+    }
     if args.list {
         let rings = ctx.located.store.rings(record.id)?;
         if args.json {
@@ -197,7 +286,6 @@ pub(crate) fn ring(args: &RingArgs, env: &Environment) -> anyhow::Result<Output>
         }
         return Ok(Output::stdout(out));
     }
-    require_virtual(&record, "take rings")?;
     let label = args
         .label
         .as_deref()
@@ -246,7 +334,9 @@ pub(crate) fn rewind(args: &RewindArgs, env: &Environment) -> anyhow::Result<Out
     let label: RingLabel = args.ring.parse()?;
     let mut ctx = open(env)?;
     let record = find(&ctx.located.store, &name)?;
-    require_virtual(&record, "be rewound")?;
+    if !record.backend.is_virtual() {
+        return reflink_rewind(&ctx, &name, &label, args.json);
+    }
     if ctx.located.store.ring_named(record.id, &label)?.is_none() {
         let list = if crate::agent::is_mcp() {
             format!("graft_ring with name: \"{name}\", list: true")

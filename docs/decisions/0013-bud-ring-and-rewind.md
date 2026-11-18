@@ -1,5 +1,5 @@
 # 0013: Bud, Ring and rewind
-Status: accepted
+Status: accepted (ring and rewind on reflink grafts: ADR 0038)
 
 ## Context
 

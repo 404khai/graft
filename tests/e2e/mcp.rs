@@ -542,22 +542,21 @@ fn failures_have_codes_and_mcp_hints() {
         "{status}"
     );
 
-    // Reflink grafts cannot be budded, ringed or rewound; the hint says how.
-    for (tool, args) in [
-        ("graft_bud", json!({"src": "a", "dst": "b"})),
-        ("graft_ring", json!({"name": "a"})),
-        ("graft_rewind", json!({"name": "a", "ring": "r"})),
-    ] {
-        let e = error_of(&mut c, tool, args);
-        assert_eq!(e["code"], "backend_unsupported", "{tool}: {e}");
-        assert!(
-            e["hint"]
-                .as_str()
-                .unwrap()
-                .contains("graft_new with backend"),
-            "{tool}: {e}"
-        );
-    }
+    // Reflink grafts cannot be budded; the hint says how (ADR 0013).
+    let e = error_of(&mut c, "graft_bud", json!({"src": "a", "dst": "b"}));
+    assert_eq!(e["code"], "backend_unsupported", "{e}");
+    assert!(
+        e["hint"]
+            .as_str()
+            .unwrap()
+            .contains("graft_new with backend"),
+        "{e}"
+    );
+    // They can be ringed and rewound (ADR 0038).
+    let ring: Value = serde_json::from_str(&c.ok("graft_ring", json!({"name": "a"}))).unwrap();
+    assert_eq!(ring["label"], "ring-1", "{ring}");
+    let e = error_of(&mut c, "graft_rewind", json!({"name": "a", "ring": "nope"}));
+    assert_eq!(e["code"], "not_found", "{e}");
     c.ok(
         "graft_prune",
         json!({"name": "a", "force": true, "confirm": true}),
