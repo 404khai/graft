@@ -112,10 +112,11 @@ fn fuse_grafts_are_refused_off_linux_and_leave_nothing() {
     assert!(refs.stdout.is_empty(), "a failed graft new left a pin ref");
 }
 
-/// Bud, ring and rewind refuse reflink grafts until the owner settles
-/// how they should work there (ADR 0013), and leave nothing behind.
+/// Bud refuses reflink grafts, which it would have to clone (ADR 0013), and
+/// leaves nothing behind. (Ring and rewind work on them, ADR 0038: see
+/// `reflink_rings_snapshot_and_rewind_the_working_tree`.)
 #[test]
-fn bud_ring_and_rewind_refuse_reflink_grafts() {
+fn bud_refuses_reflink_grafts() {
     let home = tempfile::tempdir().unwrap();
     let repo = git_repo();
     graft(home.path())
@@ -128,17 +129,9 @@ fn bud_ring_and_rewind_refuse_reflink_grafts() {
         .args(["new", "r", "--backend", "reflink"])
         .assert()
         .success();
-    for args in [&["bud", "r", "s"][..], &["ring", "r"], &["ring", "r", "x"]] {
-        graft(home.path())
-            .current_dir(repo.path())
-            .args(args)
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains("reflink backend"));
-    }
     graft(home.path())
         .current_dir(repo.path())
-        .args(["rewind", "r", "x"])
+        .args(["bud", "r", "s"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("reflink backend"));

@@ -58,14 +58,17 @@ On macOS graft paths live under `~/.graft`. Installs from before 0.2 keep
 using `~/Library/Application Support/graft`, which has a space: quote those
 paths (`cd "$(graft path auth)"`), or set `GRAFT_HOME`.
 
-Virtual grafts (`graft new --backend fuse` on Linux, `--backend nfs` on
-macOS) can also be forked and checkpointed, as metadata operations:
+Checkpoint a graft and go back to it; a rewind can itself be undone:
 
 ```sh
-graft bud auth auth-alt               # fork: same base, a copy of the delta
 graft ring auth before-refactor       # checkpoint; `graft ring auth --list`
 graft rewind auth before-refactor     # go back; prints how to undo it
 ```
+
+On reflink grafts a ring is a git snapshot of the working tree (ignored
+files such as build outputs are left alone). Virtual grafts (`graft new
+--backend fuse` on Linux, `--backend nfs` on macOS) ring their whole delta
+as a metadata operation, and can also be forked: `graft bud auth auth-alt`.
 
 Run an agent or any command so it can only write inside its graft (and a
 private `TMPDIR`): writes to Root, other grafts or `$HOME` fail. Landlock on

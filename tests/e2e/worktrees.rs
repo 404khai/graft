@@ -471,3 +471,25 @@ fn run_cannot_remove_roots_objects() {
     );
     s.root_git(&["cat-file", "-e", head]);
 }
+
+/// Rings of a registered reflink graft live with its registration in
+/// Root's `.git` (per-worktree refs): rewind works, Root's own refs never
+/// see them, and they go when the graft is pruned (ADR 0038).
+#[test]
+fn rings_of_a_registered_graft_stay_in_its_worktree() {
+    let s = Setup::new(None);
+    let a = s.new_graft("a");
+    std::fs::write(a.join("src/lib.rs"), "pub fn ringed() {}\n").unwrap();
+    s.ok(&["ring", "a", "r1"]);
+    std::fs::write(a.join("src/lib.rs"), "pub fn later() {}\n").unwrap();
+    s.ok(&["rewind", "a", "r1"]);
+    assert_eq!(
+        std::fs::read_to_string(a.join("src/lib.rs")).unwrap(),
+        "pub fn ringed() {}\n"
+    );
+    assert_eq!(s.root_git(&["for-each-ref", "refs/worktree"]).trim(), "");
+    let admin = s.repo.path().join(".git/worktrees/graft-a");
+    assert!(admin.join("refs/worktree/graft/rings/r1").is_file());
+    s.ok(&["prune", "a", "--force"]);
+    assert!(!admin.exists());
+}

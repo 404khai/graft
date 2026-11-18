@@ -17,6 +17,7 @@ mod layers;
 mod materialize;
 mod plan;
 mod radar;
+mod reflink_rings;
 mod rings;
 mod root;
 mod run;

@@ -582,3 +582,85 @@ fn concurrent_new_with_one_name_creates_one_graft() {
         "losers must leave no temporary directories: {mounts:?}"
     );
 }
+
+/// Rings and rewind on a reflink graft (ADR 0038): a ring snapshots the
+/// working tree (tracked and untracked files, not ignored ones) and HEAD;
+/// rewind restores them, saving the current state as an undo ring first.
+#[test]
+fn reflink_rings_snapshot_and_rewind_the_working_tree() {
+    let s = Setup::new();
+    let r = s.repo.path();
+    std::fs::write(r.join(".gitignore"), "/target/\n").unwrap();
+    git(r, &["add", ".gitignore"]);
+    git(r, &["commit", "-qm", "ignore"]);
+    s.run(&["new", "a"]).success();
+    let a = s.path("a");
+    let gita = |args: &[&str]| git_out(&a, args).trim().to_owned();
+    let base = gita(&["rev-parse", "HEAD"]);
+
+    std::fs::write(a.join("src/lib.rs"), "pub fn v1() {}\n").unwrap();
+    std::fs::write(a.join("notes.txt"), "untracked\n").unwrap();
+    s.run(&["ring", "a", "first"])
+        .success()
+        .stdout(predicate::str::contains("Ringed graft a as first"));
+
+    // Later work: an edit, a new file, a commit, and build output.
+    std::fs::write(a.join("src/lib.rs"), "pub fn v2() {}\n").unwrap();
+    std::fs::remove_file(a.join("notes.txt")).unwrap();
+    std::fs::write(a.join("later.txt"), "later\n").unwrap();
+    git(&a, &["add", "-A"]);
+    git(&a, &["commit", "-qm", "later work"]);
+    let later = gita(&["rev-parse", "HEAD"]);
+    std::fs::create_dir_all(a.join("target")).unwrap();
+    std::fs::write(a.join("target/build.o"), "obj").unwrap();
+
+    let out = s.stdout(&["rewind", "a", "first"]);
+    assert!(out.contains("To undo: graft rewind a undo-2"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(a.join("src/lib.rs")).unwrap(),
+        "pub fn v1() {}\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(a.join("notes.txt")).unwrap(),
+        "untracked\n"
+    );
+    assert!(
+        !a.join("later.txt").exists(),
+        "a file the ring did not have stayed"
+    );
+    assert_eq!(gita(&["rev-parse", "HEAD"]), base, "HEAD did not go back");
+    assert!(
+        a.join("target/build.o").is_file(),
+        "an ignored file was touched"
+    );
+    // Back where it was: the rewind undoes cleanly.
+    s.run(&["rewind", "a", "undo-2"]).success();
+    assert_eq!(
+        std::fs::read_to_string(a.join("src/lib.rs")).unwrap(),
+        "pub fn v2() {}\n"
+    );
+    assert!(a.join("later.txt").is_file() && !a.join("notes.txt").exists());
+    assert_eq!(gita(&["rev-parse", "HEAD"]), later);
+
+    let v: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["ring", "a", "--list", "--json"])).unwrap();
+    let labels: Vec<&str> = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["label"].as_str().unwrap())
+        .collect();
+    assert!(
+        labels.contains(&"first") && labels.contains(&"undo-2"),
+        "{v}"
+    );
+    s.run(&["ring", "a", "first"])
+        .failure()
+        .stderr(predicate::str::contains("exists already"));
+    s.run(&["rewind", "a", "nope"])
+        .failure()
+        .stderr(predicate::str::contains("no ring named nope"));
+    // Rings belong to the graft and go with it.
+    s.run(&["prune", "a", "--force"]).success();
+    assert_eq!(git_out(r, &["for-each-ref", "refs/worktree"]).trim(), "");
+}

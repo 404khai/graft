@@ -210,7 +210,7 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_ring",
             "Checkpoint a graft",
-            "Checkpoint a virtual graft's (fuse or nfs) changes as a named ring, to restore later with graft_rewind, or list its rings. Returns JSON {graft, label, seq, entries, at}, or a list of them with list.",
+            "Checkpoint a graft's changes as a named ring, to restore later with graft_rewind, or list its rings. On a reflink graft a ring is a git snapshot of the working tree (tracked and untracked files; ignored ones such as build outputs are not included) and seq is null. Returns JSON {graft, label, seq, entries, at} (plus commit on reflink grafts), or a list of them with list.",
             json!({
                 "type": "object",
                 "properties": {
@@ -226,7 +226,7 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_rewind",
             "Rewind a graft to a ring",
-            "Restore a virtual graft's changes to a ring made with graft_ring. The state it leaves is saved first as a ring named undo-<seq>, so a rewind can itself be undone. Returns JSON {name, ring, seq, undo}.",
+            "Restore a graft's changes to a ring made with graft_ring (on a reflink graft: its files and HEAD; ignored files are left alone). The state it leaves is saved first as a ring named undo-<seq>, so a rewind can itself be undone. Returns JSON {name, ring, seq, undo}.",
             json!({
                 "type": "object",
                 "properties": {
