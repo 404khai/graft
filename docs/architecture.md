@@ -122,7 +122,9 @@ driver; `serde` + `toml` for config; `rmcp` for MCP.
 - `$GRAFT_HOME`: `$GRAFT_HOME` if set (must be absolute), else
   `$XDG_DATA_HOME/graft` or `~/.local/share/graft` on Linux, and
   `~/Library/Application Support/graft` on macOS.
-- `$GRAFT_HOME/config.toml`: optional user config (see `graft-core`).
+- `$GRAFT_HOME/config.toml`: optional user config (see `graft-core`);
+  `[git] worktrees = true` registers new grafts as git worktrees of Root
+  (ADR 0036).
 - `$GRAFT_HOME/roots/<root-id>/` per Root:
   - `graft.db`: SQLite (grafts, op log, claims, queue)
   - `blobs/`: delta blobs by `blake3` hex, sharded by the first two characters

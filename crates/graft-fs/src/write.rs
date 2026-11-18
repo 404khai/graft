@@ -425,6 +425,11 @@ impl GraftView {
     pub fn open(&self, ino: Ino, mode: OpenMode) -> Result<u64, Errno> {
         let path = self.path_of(ino)?;
         if let Some(rel) = self.git_rel(&path) {
+            if (mode.write || mode.truncate) && self.git_is_link() {
+                // git owns the registration it names; nothing writes it
+                // through the mount (ADR 0036).
+                return Err(Errno::EACCES);
+            }
             let real = self.git_path(rel)?;
             let file = std::fs::OpenOptions::new()
                 .read(true)
@@ -892,6 +897,9 @@ impl GraftView {
         }
         let path = self.path_of(ino)?;
         if let Some(rel) = self.git_rel(&path) {
+            if self.git_is_link() {
+                return Err(Errno::EPERM);
+            }
             let real = self.git_path(rel)?;
             #[cfg(unix)]
             if let Some(mode) = set.mode {

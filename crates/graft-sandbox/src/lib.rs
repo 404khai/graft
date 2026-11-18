@@ -72,6 +72,7 @@ pub type Result<T, E = SandboxError> = std::result::Result<T, E>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
     writable: Vec<PathBuf>,
+    create_only: Vec<PathBuf>,
     tag: Option<String>,
 }
 
@@ -100,8 +101,41 @@ impl Policy {
         }
         Ok(Self {
             writable,
+            create_only: Vec::new(),
             tag: None,
         })
+    }
+
+    /// Also allows adding files below each of `dirs` (which must exist),
+    /// but, where the platform can tell the difference, not changing or
+    /// removing the files already there: for git's object store, where git
+    /// only ever writes a temporary file (`tmp_*`) and links it into place.
+    ///
+    /// Seatbelt (macOS) enforces exactly that. Landlock (Linux) cannot: a
+    /// rename needs the right to remove files, and permission bits are not
+    /// a Landlock right, so there it grants creating, writing, renaming
+    /// and removing files and directories (not truncating, symlinks or
+    /// device files).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
+    pub fn with_create_only<P: AsRef<Path>>(
+        mut self,
+        dirs: impl IntoIterator<Item = P>,
+    ) -> Result<Self> {
+        for p in Self::new(dirs)?.writable {
+            if !self.create_only.contains(&p) {
+                self.create_only.push(p);
+            }
+        }
+        Ok(self)
+    }
+
+    /// The canonical create-only directories, in the order given.
+    #[must_use]
+    pub fn create_only(&self) -> &[PathBuf] {
+        &self.create_only
     }
 
     /// Marks every denial under this policy with `tag` where the platform
@@ -195,6 +229,16 @@ pub fn confine_self(policy: &Policy) -> Result<Enforcement> {
         .iter()
         .map(|p| (p.as_path(), if p.is_dir() { write } else { file_write }))
         .collect();
+    // See `Policy::with_create_only` for why this is broader than on macOS.
+    let create = AccessFs::WriteFile
+        | AccessFs::RemoveFile
+        | AccessFs::RemoveDir
+        | AccessFs::MakeReg
+        | AccessFs::MakeDir
+        | AccessFs::Refer;
+    for p in policy.create_only() {
+        targets.push((p.as_path(), create & write));
+    }
     for dev in DEVICE_FILES.iter().map(Path::new).filter(|d| d.exists()) {
         targets.push((dev, file_write));
     }
@@ -277,7 +321,36 @@ pub fn seatbelt_profile(policy: &Policy) -> String {
         let _ = writeln!(p, "  (literal \"{dev}\")");
     }
     p.push_str("  (regex #\"^/dev/ttys[0-9]+$\")\n  (regex #\"^/dev/fd/\"))\n");
+    // Create-only: new files and directories may be made and written, but
+    // only git's own temporary files may be removed, renamed away or have
+    // their mode changed; the objects already there are 0444 and stay so.
+    for dir in policy.create_only() {
+        let _ = writeln!(
+            p,
+            "(allow file-write-create file-write-data file-write-times (subpath {}))",
+            sbpl_string(dir)
+        );
+        let tmp = format!("^{}/(.*/)?tmp_[^/]*$", regex_escape(&dir.to_string_lossy()));
+        let _ = writeln!(
+            p,
+            "(allow file-write-unlink file-write-mode file-write-flags file-write-xattr (regex #{}))",
+            sbpl_string(Path::new(&tmp))
+        );
+    }
     p
+}
+
+/// `s` with every regex metacharacter escaped, for an SBPL `regex`.
+#[cfg(any(target_os = "macos", test))]
+fn regex_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if "\\.+*?()|[]{}^$".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// A command that runs `program` with `args` under `policy` through
@@ -326,6 +399,35 @@ mod tests {
         assert!(profile.starts_with("(version 1)\n(allow default)\n(deny file-write*)\n"));
         assert!(profile.contains(r#"a \"b\\c")"#), "{profile}");
         assert!(profile.contains("(subpath "));
+    }
+
+    #[test]
+    fn create_only_dirs_allow_new_files_but_only_tmp_removals() {
+        let dir = tempfile::tempdir().unwrap();
+        let objects = dir.path().join("obj.d+x");
+        std::fs::create_dir(&objects).unwrap();
+        let policy = Policy::new([dir.path()])
+            .unwrap()
+            .with_create_only([&objects])
+            .unwrap();
+        let canonical = objects.canonicalize().unwrap();
+        assert_eq!(policy.create_only(), std::slice::from_ref(&canonical));
+        let profile = seatbelt_profile(&policy);
+        let quoted = sbpl_string(&canonical);
+        assert!(
+            profile.contains(&format!(
+                "(allow file-write-create file-write-data file-write-times (subpath {quoted}))"
+            )),
+            "{profile}"
+        );
+        assert!(
+            profile.contains(r"obj\\.d\\+x/(.*/)?tmp_[^/]*$"),
+            "{profile}"
+        );
+        assert!(
+            !profile.contains(&format!("  (subpath {quoted})")),
+            "{profile}"
+        );
     }
 
     #[test]

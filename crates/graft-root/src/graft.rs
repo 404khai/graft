@@ -78,7 +78,7 @@ fn oid(id: &CommitId) -> Result<gix::ObjectId> {
 }
 
 /// Escapes a value for a double-quoted git config string.
-fn config_quote(value: &[u8]) -> Vec<u8> {
+pub(crate) fn config_quote(value: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(value.len() + 2);
     out.push(b'"');
     for &b in value {
@@ -238,9 +238,9 @@ fn init_git_dir(root: &Repo, dest: &Path, branch: &str, base: &CommitId) -> Resu
     init_git_dir_at(root, &dest.join(".git"), branch, base)
 }
 
-/// Creates a graft's git directory at `git_dir`, sharing Root's object
-/// store.
-fn init_git_dir_at(root: &Repo, git_dir: &Path, branch: &str, base: &CommitId) -> Result<()> {
+/// Refuses Roots that set `core.worktree`: a graft's config includes
+/// Root's, so the setting would point the graft at Root's working tree.
+pub(crate) fn refuse_core_worktree(root: &Repo) -> Result<()> {
     if root
         .repo
         .config_snapshot()
@@ -251,6 +251,13 @@ fn init_git_dir_at(root: &Repo, git_dir: &Path, branch: &str, base: &CommitId) -
             reason: "Roots that set core.worktree are not supported".to_owned(),
         });
     }
+    Ok(())
+}
+
+/// Creates a graft's git directory at `git_dir`, sharing Root's object
+/// store.
+fn init_git_dir_at(root: &Repo, git_dir: &Path, branch: &str, base: &CommitId) -> Result<()> {
+    refuse_core_worktree(root)?;
     let git_dir = git_dir.to_owned();
     for dir in [
         git_dir.join("objects/info"),
@@ -646,7 +653,16 @@ fn materialize(
 ///
 /// If the exclude file cannot be written.
 pub fn exclude_paths(workdir: &Path, paths: &[&Path]) -> Result<()> {
-    exclude_paths_in(&workdir.join(".git"), paths)
+    let dot_git = workdir.join(".git");
+    if dot_git.is_file() {
+        // A graft registered as a git worktree (ADR 0036).
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let graft = gix::open(workdir).map_err(|e| git_err("opening the graft")(boxed(e)))?;
+        return crate::worktree::exclude_layers(&graft, graft.git_dir(), paths);
+    }
+    exclude_paths_in(&dot_git, paths)
 }
 
 /// As [`exclude_paths`], for the git directory `git_dir`.
@@ -668,6 +684,13 @@ pub fn exclude_paths_in(git_dir: &Path, paths: &[&Path]) -> Result<()> {
         .append(true)
         .open(&file)
         .map_err(io_err(&file))?;
+    out.write_all(&layer_exclude_lines(paths))
+        .map_err(io_err(&file))
+}
+
+/// Exclude lines for layer `paths`: a comment, then one anchored, escaped
+/// line per path.
+pub(crate) fn layer_exclude_lines(paths: &[&Path]) -> Vec<u8> {
     let mut text = Vec::from(&b"\n# Graft layers (shared, see graft.toml)\n"[..]);
     for path in paths {
         // Anchored to the top level, and escaped so names are literal.
@@ -680,7 +703,7 @@ pub fn exclude_paths_in(git_dir: &Path, paths: &[&Path]) -> Result<()> {
         }
         text.extend_from_slice(b"/\n");
     }
-    out.write_all(&text).map_err(io_err(&file))
+    text
 }
 
 /// How a path differs from the graft's base commit.
@@ -734,6 +757,10 @@ pub struct Unintegrated {
     pub reference: String,
     /// The commit.
     pub commit: CommitId,
+    /// Whether Root's object store has it, on no ref but the graft's own
+    /// (a graft registered as a git worktree, ADR 0036); otherwise Root
+    /// does not have it at all.
+    pub in_root: bool,
 }
 
 /// An existing graft's git repository.
@@ -768,6 +795,22 @@ impl GraftRepo {
     #[must_use]
     pub fn workdir(&self) -> &Path {
         &self.workdir
+    }
+
+    /// The graft's name if it is registered as a git worktree of Root
+    /// (ADR 0036), read from its worktree id `graft-<name>`.
+    #[must_use]
+    pub fn registered_name(&self) -> Option<GraftName> {
+        if self.repo.git_dir() == self.repo.common_dir() {
+            return None;
+        }
+        self.repo
+            .git_dir()
+            .file_name()?
+            .to_str()?
+            .strip_prefix("graft-")?
+            .parse()
+            .ok()
     }
 
     fn tree_of(&self, commit: &CommitId) -> Result<gix::ObjectId> {
@@ -903,6 +946,22 @@ impl GraftRepo {
     ///
     /// Git errors.
     pub fn unintegrated(&self, root: &Repo) -> Result<Vec<Unintegrated>> {
+        if let Some(name) = self.registered_name() {
+            // Its commits are in Root's object store: what pruning would
+            // lose is what only its own branch (or HEAD) holds.
+            let own = crate::worktree::live_ref(&name);
+            let mut tips = Vec::new();
+            // The branch first, so a HEAD on it is reported by its name.
+            if let Ok(Some(mut r)) = self.repo.try_find_reference(own.as_str())
+                && let Ok(id) = r.peel_to_id()
+            {
+                tips.push((own.clone(), id.detach()));
+            }
+            if let Ok(head) = self.repo.head_id() {
+                tips.push(("HEAD".to_owned(), head.detach()));
+            }
+            return crate::worktree::only_on(&self.repo, &tips, &own);
+        }
         let mut tips: Vec<(String, gix::ObjectId)> = Vec::new();
         if let Ok(head) = self.repo.head_id() {
             tips.push(("HEAD".to_owned(), head.detach()));
@@ -927,7 +986,11 @@ impl GraftRepo {
         for (reference, id) in tips {
             let commit = to_commit_id(id)?;
             if seen.insert(commit.clone()) && !root.has_commit(&commit) {
-                out.push(Unintegrated { reference, commit });
+                out.push(Unintegrated {
+                    reference,
+                    commit,
+                    in_root: false,
+                });
             }
         }
         Ok(out)
@@ -1102,6 +1165,18 @@ pub fn init_virtual_git(
 
     let repo =
         gix::open(git_dir).map_err(|e| git_err("opening the graft's git directory")(boxed(e)))?;
+    let mut index = virtual_index(&repo, base)?;
+    index.set_path(repo.index_path());
+    index
+        .write(gix::index::write::Options::default())
+        .map_err(|e| git_err("writing the graft index")(boxed(e)))?;
+    Ok(())
+}
+
+/// The index of `base` for a virtual graft, with the stat data the mount
+/// reports (committer time, blob size) and a cache tree. Its path is
+/// whatever `repo` would use; callers set it before writing.
+pub(crate) fn virtual_index(repo: &gix::Repository, base: &CommitId) -> Result<gix::index::File> {
     let commit = repo
         .find_commit(oid(base)?)
         .map_err(|e| git_err("reading the base commit")(boxed(e)))?;
@@ -1132,11 +1207,7 @@ pub fn init_virtual_git(
             ..Stat::default()
         };
     }
-    let mut index = with_cache_tree(&repo, &index, tree)?;
-    index
-        .write(gix::index::write::Options::default())
-        .map_err(|e| git_err("writing the graft index")(boxed(e)))?;
-    Ok(())
+    with_cache_tree(repo, &index, tree)
 }
 
 /// The cache tree (git's `TREE` index extension) for `tree`: for every

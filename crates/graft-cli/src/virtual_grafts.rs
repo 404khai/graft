@@ -104,20 +104,11 @@ pub(crate) fn work_at_risk(
         }
         why.push('\n');
     }
-    let git_dir = root_dir
-        .join("grafts")
-        .join(record.id.to_string())
-        .join("git");
-    if git_dir.join("HEAD").is_file() {
+    if has_git(located, root_dir, mount, record) {
         match GraftRepo::open(mount).and_then(|g| g.unintegrated(&located.repo)) {
             Ok(lost) => {
                 for l in lost {
-                    let _ = writeln!(
-                        why,
-                        "  commit {} on {} is not in Root",
-                        l.commit.short(7),
-                        l.reference
-                    );
+                    let _ = writeln!(why, "  {}", crate::grafts::describe_lost(&l));
                 }
             }
             Err(e) => {
@@ -126,4 +117,24 @@ pub(crate) fn work_at_risk(
         }
     }
     Ok((!why.is_empty()).then_some(why))
+}
+
+/// Whether virtual graft `record`, mounted at `mount`, has git state yet:
+/// its private `.git` (ADR 0008), or the index of its git worktree
+/// registration (ADR 0036). Both are built on first use.
+pub(crate) fn has_git(
+    located: &Located,
+    root_dir: &Path,
+    mount: &Path,
+    record: &GraftRecord,
+) -> bool {
+    let private = root_dir
+        .join("grafts")
+        .join(record.id.to_string())
+        .join("git");
+    private.join("HEAD").is_file()
+        || located
+            .repo
+            .registration(&record.name, mount)
+            .is_some_and(|admin| admin.join("index").is_file())
 }

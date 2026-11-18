@@ -1419,15 +1419,12 @@ fn rebase_virtual(
     result?;
     let mount = mount.with_context(|| format!("remounting graft {name} after the rebase"))?;
     // The graft's .git (if it has one yet) moves to the new head too.
-    if ctx
-        .root_dir()
-        .join("grafts")
-        .join(record.id.to_string())
-        .join("git")
-        .join("HEAD")
-        .is_file()
-    {
+    if crate::virtual_grafts::has_git(&ctx.located, &ctx.root_dir(), &mount, record) {
         git(&mount, &["reset", "-q", "--mixed", head.as_str()])?;
+    } else if ctx.located.repo.registration(name, &mount).is_some() {
+        // Registered, but its index is not built yet: it will be built
+        // from the new base, so its branch must be there too (ADR 0036).
+        ctx.located.repo.move_live_branch(name, head)?;
     }
     let _ = writeln!(
         out.stdout,

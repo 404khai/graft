@@ -40,6 +40,7 @@ Status: done (#3, #4)
   - `grafts::two_grafts_are_independent` (e2e), conformance `independent_grafts`.
 - [x] A graft never shares a git branch lock with Root or another graft.
   - `grafts::grafts_do_not_take_branch_locks`: Root and two grafts all have `main` checked out and commit on it; Root's branches and worktree list are untouched.
+  - Still holds by default. Grafts registered as git worktrees (opt-in `[git] worktrees = true`, ADR 0036, `feat/graft-git-worktrees`) take a lock on their own `graft-live/<name>/live` branch only, like any worktree; `worktrees::a_registered_graft_cannot_take_a_branch_another_worktree_has` covers what that means.
 - [x] Prune leaves no files, mounts or DB rows behind (verified by test).
   - `grafts::prune_leaves_nothing_behind`: no working tree, empty mounts dir, no rows, no `refs/graft/*`.
   - Removal retries a bounded number of times when a pass leaves a directory not empty (seen on the macOS runner with the 200k-file large fixture), and, between attempts, sweeps what is left by listing it all before deleting any of it (on the macOS runner `remove_dir_all` kept missing the same directory pass after pass); otherwise it names what is left: `backend::tests::*`, `reflink_backend::prunes_a_graft_with_many_files_and_nothing_else` (20,000 files, a read-only directory, a symlink to Root).

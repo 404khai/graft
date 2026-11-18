@@ -122,6 +122,7 @@ fuzz_target!(|reqs: Vec<Req>| {
             dir: root_dir.join("grafts").join(graft.to_string()),
             git_init: None,
             git_in_background: false,
+            git_link: false,
             admission: None,
         },
     )

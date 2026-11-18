@@ -9,6 +9,9 @@
 //!
 //! [`tree`] reads trees and blobs one at a time for virtual grafts.
 //!
+//! [`worktree`] registers grafts as git linked worktrees of Root, so every
+//! tool that lists worktrees lists them (opt-in, ADR 0036).
+//!
 //! [`layer`] owns the layer cache: shared directory trees such as
 //! `node_modules`, keyed by the hash of their declared inputs.
 
@@ -21,6 +24,7 @@ use graft_core::{CommitId, RootId};
 pub mod graft;
 pub mod layer;
 pub mod tree;
+pub mod worktree;
 
 /// Errors from opening or reading a repository.
 #[derive(Debug, thiserror::Error)]
@@ -72,6 +76,13 @@ pub enum RootError {
         /// The path as stored in the tree.
         path: String,
         /// Why it is unsafe.
+        reason: String,
+    },
+
+    /// Something Graft would create already exists and is not its own.
+    #[error("{reason}")]
+    AlreadyExists {
+        /// What exists, and what to do about it.
         reason: String,
     },
 

@@ -46,6 +46,9 @@ pub(crate) struct ConfineArgs {
     /// Writable paths.
     #[arg(long)]
     write: Vec<PathBuf>,
+    /// Paths that may only be added to.
+    #[arg(long)]
+    create_only: Vec<PathBuf>,
     /// The command and its arguments.
     #[arg(last = true, required = true)]
     command: Vec<OsString>,
@@ -285,6 +288,24 @@ fn parse_denials(ndjson: &str) -> Vec<String> {
     paths
 }
 
+/// A graft registered as a git worktree keeps its git state in Root's
+/// `.git`: commits need its registration, its own ref namespace and (to
+/// add objects to) Root's object store, and nothing else there (ADR 0036).
+/// Nothing for other grafts.
+fn registered_writes(
+    ctx: &Ctx,
+    name: &graft_core::GraftName,
+    graft_dir: &Path,
+) -> anyhow::Result<graft_root::worktree::RegisteredWrites> {
+    Ok(match ctx.located.repo.registration(name, graft_dir) {
+        Some(admin) => ctx.located.repo.registered_write_paths(name, &admin)?,
+        None => graft_root::worktree::RegisteredWrites {
+            writable: Vec::new(),
+            create_only: Vec::new(),
+        },
+    })
+}
+
 /// Runs `command` confined to graft `record`, with its blueprint's
 /// environment, and waits for it. `extra_write` paths are writable too.
 pub(crate) fn run_in(
@@ -346,8 +367,12 @@ pub(crate) fn run_in(
     create_private_dir(&tmp)?;
     let mut writable = vec![graft_dir.clone(), tmp.clone()];
     writable.extend(extra);
+    let git = registered_writes(ctx, name, &graft_dir)?;
+    writable.extend(git.writable);
     let session = GraftId::random()?.to_string();
-    let policy = Policy::new(&writable)?.tagged(&format!("graft-run-{session}"));
+    let policy = Policy::new(&writable)?
+        .with_create_only(&git.create_only)?
+        .tagged(&format!("graft-run-{session}"));
 
     let cwd = std::env::current_dir()
         .ok()
@@ -475,6 +500,9 @@ pub(crate) fn confined(
         for w in policy.writable() {
             cmd.arg("--write").arg(w);
         }
+        for c in policy.create_only() {
+            cmd.arg("--create-only").arg(c);
+        }
         cmd.arg("--").arg(program).args(args);
         Ok(cmd)
     }
@@ -497,7 +525,7 @@ pub(crate) fn confined(
 /// Only returns on failure.
 pub(crate) fn confine(args: &ConfineArgs) -> anyhow::Result<ExitCode> {
     use std::os::unix::process::CommandExt as _;
-    let policy = Policy::new(&args.write)?;
+    let policy = Policy::new(&args.write)?.with_create_only(&args.create_only)?;
     match graft_sandbox::confine_self(&policy)? {
         graft_sandbox::Enforcement::Full => {}
         graft_sandbox::Enforcement::Partial => tracing::warn!(

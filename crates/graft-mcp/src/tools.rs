@@ -82,7 +82,7 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "graft_list",
             "List grafts",
-            "List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count) and disk_bytes. disk_bytes (blocks not shared with Root or the layer cache, so build outputs count) is measured only with disk: true, which walks every file and can take seconds for a large build tree; otherwise, or when unknown, it is null with the reason in note.",
+            "List grafts as JSON {root, version, grafts: [...]}: each graft's name, base, state, backend, path, changed (file count), disk_bytes and git_worktree (whether it is registered as a git worktree of Root). disk_bytes (blocks not shared with Root or the layer cache, so build outputs count) is measured only with disk: true, which walks every file and can take seconds for a large build tree; otherwise, or when unknown, it is null with the reason in note.",
             json!({
                 "type": "object",
                 "properties": {"disk": {"type": "boolean", "description": "Measure disk_bytes (slow for large build trees such as target/)."}},
