@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BREW_INSTALL, CopyCommand } from "./CopyCommand";
 import { GraftLogo } from "./GraftLogo";
 
@@ -32,7 +32,7 @@ export function Nav({ current }: { current?: "Docs" | "Changelog" }) {
         ))}
       </nav>
       <div className="nav-actions">
-        <a className="muted-link" href="https://github.com/404khai/graft">GitHub</a>
+        <GitHubLink />
         <CopyCommand command={BREW_INSTALL} className="btn btn-dark btn-sm" prompt={false} />
       </div>
       <button
@@ -46,5 +46,53 @@ export function Nav({ current }: { current?: "Docs" | "Changelog" }) {
         <span />
       </button>
     </header>
+  );
+}
+
+const REPO = "404khai/graft";
+const STARS_KEY = "graft:stars";
+
+/** GitHub mark with the repo's star count, fetched once per session. */
+function GitHubLink() {
+  const [stars, setStars] = useState<number | null>(() => {
+    try {
+      const v = sessionStorage.getItem(STARS_KEY);
+      return v ? Number(v) : null;
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    if (stars !== null) return;
+    const ctl = new AbortController();
+    fetch(`https://api.github.com/repos/${REPO}`, { signal: ctl.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (typeof d?.stargazers_count !== "number") return;
+        setStars(d.stargazers_count);
+        try {
+          sessionStorage.setItem(STARS_KEY, String(d.stargazers_count));
+        } catch {
+          // storage blocked: the count just isn't cached
+        }
+      })
+      .catch(() => {});
+    return () => ctl.abort();
+  }, [stars]);
+  const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
+  return (
+    <a
+      className="gh-link"
+      href={`https://github.com/${REPO}`}
+      aria-label={stars === null ? "Graft on GitHub" : `Graft on GitHub, ${stars} stars`}
+    >
+      <img src="/github.svg" alt="" width="18" height="18" />
+      {stars !== null && (
+        <span className="gh-stars">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5l1.9 4 4.3.5-3.2 3 .9 4.3L8 11.2l-3.9 2.1.9-4.3-3.2-3 4.3-.5z" /></svg>
+          {fmt(stars)}
+        </span>
+      )}
+    </a>
   );
 }
