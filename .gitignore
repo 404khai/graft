@@ -6,3 +6,7 @@
 /tests/fixtures/*/
 # Hand-written task fixtures and their generator scripts are source.
 !/tests/fixtures/tasks/
+
+# wrangler state for the telemetry collector
+telemetry/collector/.wrangler/
+telemetry/collector/node_modules/

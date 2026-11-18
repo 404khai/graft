@@ -2,6 +2,9 @@
 name = "graft-telemetry"
 main = "src/index.js"
 compatibility_date = "2026-11-01"
+# One public URL (workers.dev); no extra per-version preview URLs.
+workers_dev = true
+preview_urls = false
 
 # Never keep request logs: they would hold IP addresses.
 [observability]
