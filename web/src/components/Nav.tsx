@@ -1,16 +1,18 @@
+import { Icon } from "./Icon";
 import { useEffect, useState } from "react";
 import { BREW_INSTALL, CopyCommand } from "./CopyCommand";
 import { GraftLogo } from "./GraftLogo";
 
 const links = [
-  { label: "Docs", href: "/docs.html" },
+  { label: "Docs", href: "/docs" },
   { label: "Features", href: "/#features" },
   { label: "Benchmarks", href: "/#at-work" },
-  { label: "MCP", href: "/docs.html#mcp" },
-  { label: "Changelog", href: "/changelog.html" },
+  { label: "MCP", href: "/docs#mcp" },
+  { label: "Blog", href: "/blog" },
+  { label: "Changelog", href: "/changelog" },
 ];
 
-export function Nav({ current }: { current?: "Docs" | "Changelog" }) {
+export function Nav({ current }: { current?: "Docs" | "Changelog" | "Blog" }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -89,7 +91,7 @@ function GitHubLink() {
       <img src="/github.svg" alt="" width="18" height="18" />
       {stars !== null && (
         <span className="gh-stars">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5l1.9 4 4.3.5-3.2 3 .9 4.3L8 11.2l-3.9 2.1.9-4.3-3.2-3 4.3-.5z" /></svg>
+          <Icon name="star" size={13} />
           {fmt(stars)}
         </span>
       )}

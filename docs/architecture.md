@@ -53,21 +53,55 @@ User-facing text never calls a graft a "worktree", "sandbox" or "clone".
 
 ## Components
 
-```
- agents (MCP clients) ──stdio──> graft mcp (graft-mcp) ──runs──┐
- people and scripts ───────────────────────────────────────────┤
-                                                               v
-                                                     graft (graft-cli)
-           ┌──────────────┬───────────────┬──────────────┬─────┴──────────┬──────────────┐
-      graft-sched    graft-integrate   graft-radar   graft-blueprint  graft-sandbox   JSON-RPC over
-      (plans,        (queue, merge,    (overlaps)    (graft.toml,     (Landlock,      a Unix socket
-       claims)        test gate)                      runtimes)        Seatbelt)            │
-           └──────────────┴──────┬────────┴──────────────┘                                  v
-                                 │                                         graftd (graft-daemon):
-                  graft-fs (reflink, FUSE and NFS backends)  <─────────── virtual mounts, claims
-                  graft-store (SQLite metadata, blobs, op log)             admission
-                  graft-root (gix object store, layer cache)
-                  graft-core (IDs, errors, $GRAFT_HOME, config)
+```mermaid
+flowchart TD
+    agents(["Agents<br/>MCP clients"])
+    people(["People and scripts"])
+
+    subgraph entry["Entry points"]
+        mcp["<b>graft mcp</b><br/>graft-mcp"]
+        cli["<b>graft</b><br/>graft-cli"]
+    end
+
+    subgraph features["Features"]
+        sched["<b>graft-sched</b><br/>plans, claims"]
+        integrate["<b>graft-integrate</b><br/>queue, merge, test gate"]
+        radar["<b>graft-radar</b><br/>overlaps"]
+        blueprint["<b>graft-blueprint</b><br/>graft.toml, runtimes"]
+        sandbox["<b>graft-sandbox</b><br/>Landlock, Seatbelt"]
+    end
+
+    daemon["<b>graftd</b><br/>graft-daemon<br/>virtual mounts, claims admission"]
+
+    subgraph foundation["Foundation"]
+        fs["<b>graft-fs</b><br/>reflink, FUSE and NFS backends"]
+        store["<b>graft-store</b><br/>SQLite metadata, blobs, op log"]
+        root["<b>graft-root</b><br/>gix object store, layer cache"]
+        core["<b>graft-core</b><br/>IDs, errors, $GRAFT_HOME, config"]
+    end
+
+    agents -- stdio --> mcp
+    mcp -- runs --> cli
+    people --> cli
+    cli --> sched & integrate & radar & blueprint & sandbox
+    cli -- "JSON-RPC over a Unix socket" --> daemon
+    features --> foundation
+    daemon --> fs
+    fs --> store --> root --> core
+
+    classDef ext fill:#ffffff,stroke:#8a8a8f,color:#18181a
+    classDef entryCls fill:#b8f28c,stroke:#1f7a3a,color:#0f3d1d
+    classDef featureCls fill:#e8e8e6,stroke:#1f7a3a,color:#0e120f
+    classDef daemonCls fill:#1f7a3a,stroke:#0f3d1d,color:#ffffff
+    classDef baseCls fill:#0f3d1d,stroke:#0f3d1d,color:#ffffff
+    class agents,people ext
+    class mcp,cli entryCls
+    class sched,integrate,radar,blueprint,sandbox featureCls
+    class daemon daemonCls
+    class fs,store,root,core baseCls
+    style entry fill:#f6f6f3,stroke:#c4c6c2
+    style features fill:#f6f6f3,stroke:#c4c6c2
+    style foundation fill:#f6f6f3,stroke:#c4c6c2
 ```
 
 A reflink graft is a real working tree; the CLI does everything for it. A

@@ -3,8 +3,8 @@ import { Poster } from "./Poster";
 
 const gh = "https://github.com/404khai/graft";
 const columns = [
-  { title: "Product", links: [["Blueprints", "/docs.html#blueprints"], ["Radar", "/docs.html#radar"], ["Integrate", "/docs.html#integrate"], ["MCP server", "/docs.html#mcp"]] },
-  { title: "Resources", links: [["Docs", "/docs.html"], ["Benchmarks", `${gh}/tree/main/bench/results`], ["On‑disk format", `${gh}/blob/main/docs/on-disk-format.md`], ["Changelog", "/changelog.html"]] },
+  { title: "Product", links: [["Blueprints", "/docs#blueprints"], ["Radar", "/docs#radar"], ["Integrate", "/docs#integrate"], ["MCP server", "/docs#mcp"]] },
+  { title: "Resources", links: [["Docs", "/docs"], ["Benchmarks", `${gh}/tree/main/bench/results`], ["On‑disk format", `${gh}/blob/main/docs/on-disk-format.md`], ["Changelog", "/changelog"]] },
   { title: "Community", links: [["GitHub", gh], ["Issues", `${gh}/issues`], ["Releases", `${gh}/releases`]] },
 ];
 

@@ -1,3 +1,4 @@
+import { Icon } from "./Icon";
 import { useEffect, useState } from "react";
 
 export const BREW_INSTALL = "brew install 404khai/graft/graft";
@@ -48,7 +49,14 @@ export function CopyCommand({
     >
       {prompt && <span className="prompt">$</span>}
       <span className="copy-text">{command}</span>
-      <span className="copy-state" aria-live="polite">{copied ? "Copied" : ""}</span>
+      <span className={`copy-icon${copied ? " is-copied" : ""}`} aria-hidden="true">
+        {copied ? (
+          <Icon name="check" />
+        ) : (
+          <Icon name="copy" />
+        )}
+      </span>
+      <span className="sr-only" aria-live="polite">{copied ? "Copied to clipboard" : ""}</span>
     </button>
   );
 }

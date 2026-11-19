@@ -1,3 +1,4 @@
+import { Icon } from "./Icon";
 import { Poster } from "./Poster";
 import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
@@ -84,7 +85,7 @@ export function AtWork() {
     <section className="at-work" id="at-work">
       <div className="at-work-head">
         <h2>See Graft at work.</h2>
-        <a className="btn btn-ghost-dark" href="#">Read the benchmarks ›</a>
+        <a className="btn btn-ghost-dark" href="#">Read the benchmarks <Icon name="arrow-right" /></a>
       </div>
 
       <div className="at-work-body">

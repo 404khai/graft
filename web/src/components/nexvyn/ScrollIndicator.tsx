@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import "./scroll-indicator.css";
 
 /** Nexvyn ScrollIndicator, adapted from https://ui.nexvyn.dev/r/scroll-indicator.json:
  * a 60-tick ruler with section marks, a sliding accent marker and "n/total"

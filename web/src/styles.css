@@ -595,3 +595,59 @@ button.btn { border: 0; cursor: pointer; }
 }
 @media (prefers-reduced-motion: reduce) { .pill i { animation: none; } }
 @media (max-width: 640px) { .pill { font-size: 11px; letter-spacing: .08em; padding: 7px 12px; white-space: nowrap; } }
+
+/* ---------- dither backgrounds ---------- */
+.dither-tree { position: absolute; inset: 0; pointer-events: none; }
+.dither-tree canvas { display: block; width: 100%; height: 100%; }
+.hero-dither { z-index: 0; opacity: .9; }
+.shot { position: relative; overflow: hidden; background: #0b2a14 !important; }
+.shot > .term { position: relative; z-index: 1; }
+.shot-dither { z-index: 0; }
+
+/* ---------- version pill: square, filled, no border ---------- */
+.pill { border: 0; border-radius: 0; background: color-mix(in srgb, var(--sprout) 55%, var(--ground)); color: var(--green-deep); padding: 9px 14px; }
+.pill i { background: var(--green); }
+
+/* ---------- navbar command: copy icon ---------- */
+.copy-icon { display: inline-grid; place-items: center; width: 16px; height: 16px; margin-left: 2px; opacity: .75; transition: opacity .15s, color .15s; }
+.copy-cmd:hover .copy-icon { opacity: 1; }
+.copy-icon svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.copy-icon.is-copied { color: var(--sprout); opacity: 1; }
+.hero > .hero-dither { position: absolute; inset: 0; z-index: 0; }
+
+/* version pill: the square pulses between the two greens, never into the pill's own colour */
+.pill i { animation: pill-pulse 1.6s ease-in-out infinite; }
+@keyframes pill-pulse {
+  0%, 100% { background: var(--green-deep); box-shadow: 0 0 0 0 rgba(31, 122, 58, .45); }
+  50% { background: var(--green); box-shadow: 0 0 0 4px rgba(31, 122, 58, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .pill i { animation: none; background: var(--green); } }
+
+/* hero actions: install box above, button below, whichever method is chosen */
+.hero .actions { flex-direction: column; align-items: center; flex-wrap: nowrap; }
+.hero .install { width: min(640px, 100%); }
+
+/* Hugeicons */
+.icon { display: inline-block; flex-shrink: 0; vertical-align: -0.18em; }
+.btn .icon, .install-copy .icon, .copy-icon .icon { vertical-align: middle; }
+.overlaps .pair { display: inline-flex; align-items: center; gap: 6px; }
+.steps li { display: flex; align-items: center; gap: 6px; }
+.gh-stars .icon { color: #ff975b; }
+
+/* "Plant one Root": a tree grows in from the left edge */
+.cta { position: relative; overflow: hidden; }
+.cta > :not(.cta-dither) { position: relative; z-index: 1; }
+.cta > .cta-dither { position: absolute; inset: 0; z-index: 0; }
+
+/* version pill: a steady square with a ring pulsing outward from it */
+.pill i { position: relative; animation: none; background: var(--green); box-shadow: none; }
+.pill i::after {
+  content: ""; position: absolute; inset: 0; border: 2px solid var(--green);
+  animation: pill-ring 1.6s cubic-bezier(.2, .6, .3, 1) infinite;
+}
+@keyframes pill-ring { from { transform: scale(1); opacity: .9; } to { transform: scale(2.8); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .pill i::after { animation: none; opacity: 0; } }
+
+/* terminal icons */
+.term .ok, .term .warn { display: inline-flex; align-items: center; gap: 6px; }
+.term .pair { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; color: #c9d1c9; }
