@@ -21,7 +21,7 @@ Three pages: `index.html` (home), `docs.html` (`src/docs/`, hash-routed: `#quick
 
 ## Routes
 
-One app (`index.html`, `src/main.tsx`): `/`, `/docs` (hash routes such as `/docs#quickstart`), `/changelog`, `/blog` and `/blog/<slug>`. The host must rewrite unknown paths to `/index.html`; `npm run dev` and `npm run preview` already do.
+One app (`index.html`, `src/main.tsx`): `/`, `/docs` (hash routes such as `/docs#quickstart`), `/changelog`, `/blog` and `/blog/<slug>`. The host must rewrite unknown paths to `/index.html`: `vercel.json` does this on Vercel (static files are still served first), and `npm run dev` and `npm run preview` already do.
 
 - `src/blog/posts.ts`: blog posts as blocks (render as HTML, copy as Markdown). Figures are built by `scripts/build-figures.mjs` with the vendored Anatomy kit (`vendor/anatomy/`, MIT).
 - `src/docs/brand.tsx`: the brand guidelines page.
