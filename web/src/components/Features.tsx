@@ -1,10 +1,11 @@
+import { Icon } from "./Icon";
 const overlaps = [
-  { sev: "behaviour", pair: "auth ↔ billing", detail: "speculative merge: tests fail together" },
-  { sev: "symbol", pair: "auth ↔ api", detail: "src/session.rs · fn refresh_token" },
-  { sev: "path", pair: "api ↔ search", detail: "src/routes.ts · different functions" },
+  { sev: "behaviour", pair: ["auth", "billing"], detail: "speculative merge: tests fail together" },
+  { sev: "symbol", pair: ["auth", "api"], detail: "src/session.rs · fn refresh_token" },
+  { sev: "path", pair: ["api", "search"], detail: "src/routes.ts · different functions" },
 ];
 
-const steps = ["rebase onto Root", "structural merge · Mergiraf", "test gate", "plain git commit →"];
+const steps = ["rebase onto Root", "structural merge · Mergiraf", "test gate", "plain git commit"];
 
 const small = [
   { label: "Blueprints", title: "A private runtime per graft.", body: "Ports, Postgres databases, Docker volumes and .env, declared once in graft.toml." },
@@ -31,9 +32,9 @@ export function Features() {
           </div>
           <ul className="overlaps">
             {overlaps.map((o) => (
-              <li key={o.pair}>
+              <li key={o.pair.join()}>
                 <span className={`sev sev-${o.sev}`}>● {o.sev}</span>
-                <b>{o.pair}</b>
+                <b className="pair">{o.pair[0]} <Icon name="both-ways" size={14} /> {o.pair[1]}</b>
                 <span>{o.detail}</span>
               </li>
             ))}
@@ -48,7 +49,7 @@ export function Features() {
           <ol className="steps">
             {steps.map((s, i) => (
               <li key={s} className={i === steps.length - 1 ? "hl" : undefined}>
-                <span>{String(i + 1).padStart(2, "0")}</span>{s}
+                <span>{String(i + 1).padStart(2, "0")}</span>{s}{i === steps.length - 1 && <Icon name="arrow-right" size={14} />}
               </li>
             ))}
           </ol>

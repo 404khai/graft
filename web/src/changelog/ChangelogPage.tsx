@@ -1,5 +1,4 @@
-import { StrictMode, useEffect, useState } from "react";
-import { createRoot } from "react-dom/client";
+import { useEffect, useState } from "react";
 import { Flora, type FloraKind } from "../components/Flora";
 import { Footer } from "../components/Footer";
 import { GraftLogo } from "../components/GraftLogo";
@@ -167,7 +166,7 @@ const fmt = (iso: string, opts: Intl.DateTimeFormatOptions) =>
 const monthKey = (iso: string) => iso.slice(0, 7);
 const MONTHS = [...new Set(ENTRIES.map((e) => monthKey(e.date)))];
 
-function Changelog() {
+export function Changelog() {
   const [month, setMonth] = useState(MONTHS[0]);
   useEffect(() => {
     const onScroll = () => {
@@ -257,8 +256,3 @@ function Changelog() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <Changelog />
-  </StrictMode>,
-);

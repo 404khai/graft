@@ -1,6 +1,6 @@
-import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
+import { Icon } from "../components/Icon";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { createRoot } from "react-dom/client";
 import { Flora } from "../components/Flora";
 import { GraftLogo } from "../components/GraftLogo";
 import { BounceSidebar } from "../components/nexvyn/BounceSidebar";
@@ -10,6 +10,7 @@ import { BlueprintSheet } from "../components/art/BlueprintSheet";
 import { McpLink } from "../components/art/McpLink";
 import { RadarScope } from "../components/art/RadarScope";
 import { TreePuzzle } from "../components/art/TreePuzzle";
+import { DitherTree } from "../components/art/DitherTree";
 import { GH, PAGES, type DocPage } from "./content";
 import "../styles.css";
 import "./docs.css";
@@ -36,6 +37,13 @@ function TileArt({ page }: { page: DocPage }) {
     );
   if (page.id === "blueprints") return <BlueprintSheet className="doc-tile-blueprint" />;
   if (page.id === "integrate") return <TreePuzzle />;
+  if (page.id === "brand")
+    return (
+      <div className="brand-tile">
+        <DitherTree trees={[{ x: 0.5, size: 0.95, seed: 7, depth: 9 }]} ink="#b8f28c" cell={4} light={0.12} />
+        <GraftLogo className="brand-tile-logo" title="" />
+      </div>
+    );
   if (page.id === "mcp") return <McpLink />;
   if (page.id === "commands") return <img className="doc-tile-art art-wide" src="/branch-code.svg" alt="" />;
   if (page.art === "graft") return <GraftLogo className="doc-tile-art" title="" />;
@@ -97,7 +105,7 @@ function Page({ page }: { page: DocPage }) {
   return (
     <>
       <header className="doc-page-head">
-        {["radar", "blueprints", "integrate", "mcp", "commands"].includes(page.id) ? (
+        {["radar", "blueprints", "integrate", "mcp", "commands", "brand"].includes(page.id) ? (
           <div className="doc-page-art"><TileArt page={page} /></div>
         ) : (
           <Flora kind={page.art === "graft" ? "leaf2" : page.art} className="doc-page-peek" style={{ "--r": "-14deg" }} />
@@ -115,7 +123,7 @@ function Page({ page }: { page: DocPage }) {
       {next && (
         <a className="doc-next" href={`#${next.id}`}>
           <span>Next</span>
-          <b>{next.title} →</b>
+          <b>{next.title} <Icon name="arrow-right" /></b>
         </a>
       )}
     </>
@@ -172,7 +180,7 @@ function Search({ onGo }: { onGo: (id: string) => void }) {
   return (
     <>
       <button ref={trigger} className="doc-search" onClick={() => setOpen(true)} aria-haspopup="dialog">
-        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="6" /><path d="m14 14 4 4" /></svg>
+        <Icon name="search" />
         <span>Search…</span>
         <kbd>⌘K</kbd>
       </button>
@@ -185,7 +193,7 @@ function Search({ onGo }: { onGo: (id: string) => void }) {
             <Flora kind="leaf2" className="sd-leaf" style={{ "--r": "150deg", "--d": "-1s" }} />
             <div className="search-box">
               <div className="search-field">
-                <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="6" /><path d="m14 14 4 4" /></svg>
+                <Icon name="search" />
                 <input
                   ref={input}
                   value={q}
@@ -225,7 +233,7 @@ function Search({ onGo }: { onGo: (id: string) => void }) {
                   <li className="empty">Nothing matches “{q}”.</li>
                 )}
               </ul>
-              <div className="search-foot"><span>↑↓ to move</span><span>↵ to open</span><span>esc to close</span></div>
+              <div className="search-foot"><span><Icon name="up-down" size={14} /> to move</span><span><Icon name="enter" size={14} /> to open</span><span>esc to close</span></div>
             </div>
           </div>
         </div>,
@@ -235,7 +243,7 @@ function Search({ onGo }: { onGo: (id: string) => void }) {
   );
 }
 
-function Docs() {
+export function Docs() {
   const [route, setRoute] = useState(fromHash);
   const [menu, setMenu] = useState(false);
   useEffect(() => {
@@ -271,9 +279,9 @@ function Docs() {
           <Search onGo={go} />
           <BounceSidebar items={ROUTES.map((r) => r.title)} value={index} onChange={(i) => go(ROUTES[i].id)} />
           <nav className="docs-out">
-            <a href="/changelog.html">Changelog</a>
-            <a href={GH}>GitHub ↗</a>
-            <a href="/">Home ↗</a>
+            <a href="/changelog">Changelog</a>
+            <a href={GH}>GitHub <Icon name="external" size={13} /></a>
+            <a href="/">Home <Icon name="external" size={13} /></a>
           </nav>
         </div>
       </aside>
@@ -296,8 +304,3 @@ function Docs() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <Docs />
-  </StrictMode>,
-);

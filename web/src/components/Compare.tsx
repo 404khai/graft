@@ -1,3 +1,4 @@
+import { Icon } from "./Icon";
 /**
  * Grafts vs worktrees, from the README's measured results: bench run
  * 42113580319, GitHub Actions ubuntu-latest (AMD EPYC 9V74, 4 threads), XFS
@@ -108,7 +109,7 @@ export function Compare() {
           Inside a workspace, FUSE grafts are up to about 40× slower on file-heavy work like <code>rg</code>.
         </p>
         <a href="https://github.com/404khai/graft/tree/main/bench/results">
-          Bench run 42113580319 · GitHub Actions ubuntu-latest, AMD EPYC 9V74 · full tables →
+          Bench run 42113580319 · GitHub Actions ubuntu-latest, AMD EPYC 9V74 · full tables <Icon name="arrow-right" size={14} />
         </a>
       </div>
     </section>

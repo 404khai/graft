@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { FloraKind } from "../components/Flora";
+import { BRAND_SECTIONS } from "./brand";
 
 export const GH = "https://github.com/404khai/graft";
 
@@ -28,7 +29,7 @@ export type DocSection = { title: string; body: ReactNode };
 export type DocPage = {
   id: string;
   title: string;
-  group: "Get started" | "Concepts" | "Reference";
+  group: "Get started" | "Concepts" | "Reference" | "Brand";
   summary: string;
   art: FloraKind;
   sections: DocSection[];
@@ -343,5 +344,13 @@ args = ["mcp", "--root", "/path/to/repo"]`}</Code>
         ),
       },
     ],
+  },
+  {
+    id: "brand",
+    title: "Brand guidelines",
+    group: "Brand",
+    summary: "The mark, colour, dithered trees, posters, type and illustrations that make Graft look like Graft.",
+    art: "graft",
+    sections: BRAND_SECTIONS,
   },
 ];

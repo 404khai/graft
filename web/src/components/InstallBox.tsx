@@ -1,3 +1,4 @@
+import { Icon } from "./Icon";
 import { useEffect, useState } from "react";
 import { copyText } from "./CopyCommand";
 
@@ -48,9 +49,9 @@ export function InstallBox({ suffix = "", className }: { suffix?: string; classN
         title={copied ? "Copied" : "Copy"}
       >
         {copied ? (
-          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4.5 10.5 3.5 3.5 7.5-8" /></svg>
+          <Icon name="check" />
         ) : (
-          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="7" width="9" height="9" rx="2" /><path d="M13 7V5.5A1.5 1.5 0 0 0 11.5 4h-6A1.5 1.5 0 0 0 4 5.5v6A1.5 1.5 0 0 0 5.5 13H7" /></svg>
+          <Icon name="copy" />
         )}
       </button>
       <span className="sr-only" aria-live="polite">{copied ? "Copied to clipboard" : ""}</span>

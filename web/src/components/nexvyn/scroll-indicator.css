@@ -1,0 +1,17 @@
+/* Nexvyn ScrollIndicator, in Graft's palette. */
+.scroll-indicator { position: relative; height: 100%; }
+.si-tick, .si-mark { position: absolute; right: 0; height: 1px; width: 6px; background: rgba(14, 18, 15, .2); transition: background .15s; }
+.si-tick.major { width: 12px; background: rgba(14, 18, 15, .4); }
+.si-tick.past { background: var(--ink); }
+.si-mark { width: 16px; background: rgba(14, 18, 15, .55); }
+.si-mark.active { background: var(--green); }
+.si-label {
+  position: absolute; right: 22px; font: 11px var(--font-mono); letter-spacing: .08em; text-transform: uppercase;
+  white-space: nowrap; color: var(--muted); opacity: 0; translate: 8px 0; transition: opacity .2s, translate .2s, color .15s;
+}
+.scroll-indicator.hovered .si-label { opacity: 1; translate: 0 0; }
+.si-label.active { color: var(--green); }
+.si-marker { position: absolute; top: 0; right: 0; z-index: 2; transition: transform .45s cubic-bezier(.22, 1, .36, 1); }
+.si-marker i { display: block; width: 16px; height: 2px; background: var(--green); }
+.si-marker span { position: absolute; top: -7px; right: 24px; font: 10px var(--font-mono); color: var(--green); transition: opacity .15s; }
+.scroll-indicator.hovered .si-marker span { opacity: 0; }
