@@ -15,7 +15,8 @@ type Entry = {
   title: string;
   tag: "Feature" | "Performance" | "Platform" | "Foundation";
   lede: string;
-  items: { title: string; body: string; pr: number }[];
+  /** `by` credits a contributor by GitHub login. */
+  items: { title: string; body: string; pr: number; by?: string }[];
   art?: FloraKind;
 };
 
@@ -49,7 +50,7 @@ const ENTRIES: Entry[] = [
     lede: "From the Turborepo field report: one command to create a graft and start an agent in it, confined, and grafts every git tool can see.",
     items: [
       { title: "graft new <name> -- <command>", body: "Creates the graft, then runs the command in it through graft run, confined and with GRAFT_NAME set. graft run <name> with no command starts a confined shell.", pr: 61 },
-      { title: "Grafts as git worktrees", body: "Opt in with [git] worktrees in config.toml and grafts are registered as git worktrees of Root, on their own graft-live/<name>/live branch, so editors and git clients list them. A confined run can write only its own branch.", pr: 39 },
+      { title: "Grafts as git worktrees", body: "Opt in with [git] worktrees in config.toml and grafts are registered as git worktrees of Root, on their own graft-live/<name>/live branch, so editors and git clients list them. A confined run can write only its own branch.", pr: 39, by: "Kaloyanes" },
       { title: "Radar warns before landing", body: "graft integrate prints a warning for each overlap Radar has recorded with the grafts it lands. It does not block; --json and graft_integrate return them as radar.", pr: 62 },
       { title: "A starter graft.toml", body: "examples/rust-pnpm/ shares Cargo's target/ across grafts and installs a pnpm workspace offline from the shared store.", pr: 60 },
       { title: "No stale graftd after an upgrade", body: "An old graftd serving no mounts is restarted automatically. graft ring's help now says --list lists rings.", pr: 56 },
@@ -352,7 +353,10 @@ export function Changelog() {
                     <div key={it.title} className="cl-item">
                       <h3>{it.title}</h3>
                       <p>{it.body}</p>
-                      <a href={`${PR}${it.pr}`}>Shipped in <span>#{it.pr}</span></a>
+                      <p className="cl-shipped">
+                        <a href={`${PR}${it.pr}`}>Shipped in <span>#{it.pr}</span></a>
+                        {it.by && <> by <a href={`https://github.com/${it.by}`}><span>{it.by}</span></a></>}
+                      </p>
                     </div>
                   ))}
                 </div>

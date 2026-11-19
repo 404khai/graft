@@ -59,6 +59,7 @@
 .cl-item h3 { font: 600 17px var(--font-display); margin-bottom: 8px; }
 .cl-item p { font-size: 14px; line-height: 1.7; color: var(--ink-2); margin-bottom: 14px; }
 .cl-item a { font-size: 13px; color: var(--muted); }
+.cl-item .cl-shipped { margin: 0; font-size: 13px; color: var(--muted); }
 .cl-item a span { font: 600 15px var(--font-display); color: var(--green); }
 .cl-item a:hover span { text-decoration: underline; }
 
