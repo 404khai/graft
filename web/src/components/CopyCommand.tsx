@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 export const BREW_INSTALL = "brew install 404khai/graft/graft";
 
-async function copy(text: string) {
+export async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text);
     return true;
@@ -42,7 +42,7 @@ export function CopyCommand({
     <button
       type="button"
       className={`${className} copy-cmd`}
-      onClick={async () => setCopied(await copy(command))}
+      onClick={async () => setCopied(await copyText(command))}
       aria-label={`Copy: ${command}`}
       title="Click to copy"
     >

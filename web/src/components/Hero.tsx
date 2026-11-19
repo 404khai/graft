@@ -1,4 +1,4 @@
-import { BREW_INSTALL, CopyCommand } from "./CopyCommand";
+import { InstallBox } from "./InstallBox";
 import { Flora } from "./Flora";
 
 export function Hero() {
@@ -11,7 +11,7 @@ export function Hero() {
         <Flora kind="leaf2" className="hf-leaf-c" style={{ "--r": "200deg", "--d": "-4s" }} />
         <Flora kind="branch" className="hf-branch" style={{ "--r": "-62deg", "--d": "-1s" }} />
       </div>
-      <span className="pill"><i />0.1.1 — now on Linux &amp; macOS</span>
+      <span className="pill"><i aria-hidden="true" />0.1.1 — now on Linux &amp; macOS</span>
       <h1>
         One root. Every agent its own <em>graft.</em>
       </h1>
@@ -20,8 +20,8 @@ export function Hero() {
         Root plus a private delta, so it costs only what the agent changes.
       </p>
       <div className="actions">
+        <InstallBox />
         <a className="btn btn-green" href="/docs.html#quickstart">Get started →</a>
-        <CopyCommand command={BREW_INSTALL} />
       </div>
     </section>
   );
