@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Flora, type FloraKind } from "../components/Flora";
 import { Footer } from "../components/Footer";
 import { GraftLogo } from "../components/GraftLogo";
@@ -9,6 +9,8 @@ import "./changelog.css";
 const PR = "https://github.com/404khai/graft/pull/";
 
 type Entry = {
+  /** the release that shipped it */
+  release: string;
   date: string; // ISO
   title: string;
   tag: "Feature" | "Performance" | "Platform" | "Foundation";
@@ -17,9 +19,88 @@ type Entry = {
   art?: FloraKind;
 };
 
+/** Newest first. Dates are when each release was tagged. */
+const RELEASES = [
+  { version: "0.2.0", date: "2026-11-19" },
+  { version: "0.1.1", date: "2026-11-15" },
+  { version: "0.1.0", date: "2026-11-14" },
+];
+
 // From the merged PRs on main.
 const ENTRIES: Entry[] = [
   {
+    release: "0.2.0",
+    date: "2026-11-19",
+    title: "Rings on reflink grafts, and ~/.graft on macOS",
+    tag: "Feature",
+    lede: "Rings and rewind now work on the default backend, and new macOS installs keep grafts at a path with no space in it.",
+    items: [
+      { title: "Rings on reflink grafts", body: "graft ring commits the working tree, tracked and untracked, under a per-worktree ref; graft rewind rings the current state as undo-<n> first. Ignored files such as build outputs and layers are never touched.", pr: 64 },
+      { title: "~/.graft on macOS", body: "New installs use ~/.graft instead of ~/Library/Application Support/graft, so scripts and prompts no longer quote graft paths. An existing home stays where it is, and graft doctor says which default applies.", pr: 63 },
+      { title: "Rereads in FUSE grafts ≈2× faster", body: "Read-only opens of files unchanged from the base keep the kernel's page cache. Reading a 20k-file tree again: 5.9 s → 3.1 s; rg 1.5–2.1 s → 1.2–1.4 s. A written file still drops it, so no reader sees stale data.", pr: 66 },
+    ],
+    art: "leaf1",
+  },
+  {
+    release: "0.2.0",
+    date: "2026-11-18",
+    title: "Start agents inside their graft",
+    tag: "Feature",
+    lede: "From the Turborepo field report: one command to create a graft and start an agent in it, confined, and grafts every git tool can see.",
+    items: [
+      { title: "graft new <name> -- <command>", body: "Creates the graft, then runs the command in it through graft run, confined and with GRAFT_NAME set. graft run <name> with no command starts a confined shell.", pr: 61 },
+      { title: "Grafts as git worktrees", body: "Opt in with [git] worktrees in config.toml and grafts are registered as git worktrees of Root, on their own graft-live/<name>/live branch, so editors and git clients list them. A confined run can write only its own branch.", pr: 39 },
+      { title: "Radar warns before landing", body: "graft integrate prints a warning for each overlap Radar has recorded with the grafts it lands. It does not block; --json and graft_integrate return them as radar.", pr: 62 },
+      { title: "A starter graft.toml", body: "examples/rust-pnpm/ shares Cargo's target/ across grafts and installs a pnpm workspace offline from the shared store.", pr: 60 },
+      { title: "No stale graftd after an upgrade", body: "An old graftd serving no mounts is restarted automatically. graft ring's help now says --list lists rings.", pr: 56 },
+    ],
+    art: "graft",
+  },
+  {
+    release: "0.2.0",
+    date: "2026-11-18",
+    title: "A first git status in 1 s, and a steadier graftd",
+    tag: "Performance",
+    lede: "Fixes for the waits and flakes agents hit right after creating or restarting a graft.",
+    items: [
+      { title: "First git status in NFS grafts", body: "An NFS graft starts building its .git as soon as it is mounted. On a 10k-file repo the first git status after graft new went from 5.5 s to 1.15 s.", pr: 55 },
+      { title: "One graftd at a time", body: "graft daemon stop now returns once graftd has exited, and a new graftd waits for a stopping one. This ends an intermittent \"not a git repository\" in remounted grafts.", pr: 65 },
+    ],
+    art: "leaf2",
+  },
+  {
+    release: "0.2.0",
+    date: "2026-11-17",
+    title: "See inside Graft when something goes wrong",
+    tag: "Feature",
+    lede: "Diagnostics for bug reports, each also available to agents over MCP.",
+    items: [
+      { title: "graft doctor --report", body: "One JSON file with doctor's findings, config, each Root's schema and integrity, graftd's log tail and recent crash files, with secrets redacted. graft_doctor hands an agent its path.", pr: 48 },
+      { title: "graft fsck", body: "Read-only checks that each virtual graft's op log replays to its delta, that blobs exist and match their hashes, and that layers and mounts are in order.", pr: 50 },
+      { title: "graft stats", body: "Counts and latencies for every FUSE and NFS request, and content-cache hits, from graftd. Also graft_stats.", pr: 51 },
+      { title: "Request ids", body: "Every command and MCP call carries a request id into graftd's log, which now rotates at 8 MiB.", pr: 49 },
+      { title: "Opt-in telemetry", body: "Off unless you run graft telemetry on, and sent only to an endpoint you configure: one anonymous count per command. DO_NOT_TRACK turns it off.", pr: 52 },
+    ],
+    art: "branch",
+  },
+  {
+    release: "0.2.0",
+    date: "2026-11-16",
+    title: "Fixes from the Astrid field report",
+    tag: "Feature",
+    lede: "An agent built a large Rust and Swift project in grafts over MCP. These are the changes it asked for.",
+    items: [
+      { title: "graft_init and graft_path", body: "graft mcp starts in any git repository, and an agent can register the Root itself and ask for a graft's path.", pr: 42 },
+      { title: "Integrate to a new branch, with your own gate", body: "--create-branch creates a missing target; --test COMMAND gates just this call, with no commit to graft.toml first.", pr: 43 },
+      { title: "Clone Root's build outputs", body: "graft new --clone-ignored target,web/node_modules reflinks ignored directories from Root into a new graft, with no build.", pr: 45 },
+      { title: "List and prune in milliseconds", body: "graft ls measures disk on 8 threads (or not at all with --no-disk), and prune frees the name at once and deletes in the background: 0.45 s → 0.01 s with a 1.9 GB target/.", pr: 44 },
+      { title: "Refused writes named", body: "A failed graft run on macOS names the paths the sandbox refused; --dev-caches makes toolchain caches writable for the run.", pr: 46 },
+      { title: "Modes that match git checkout", body: "Files in virtual grafts follow the umask, so ls -l matches Root under umask 002.", pr: 41 },
+    ],
+    art: "leaf3",
+  },
+  {
+    release: "0.1.1",
     date: "2026-11-15",
     title: "Every MCP tool answers in JSON",
     tag: "Feature",
@@ -34,6 +115,7 @@ const ENTRIES: Entry[] = [
     art: "leaf1",
   },
   {
+    release: "0.1.1",
     date: "2026-11-15",
     title: "Clearer answers for agents over MCP",
     tag: "Feature",
@@ -48,6 +130,7 @@ const ENTRIES: Entry[] = [
     art: "graft",
   },
   {
+    release: "0.1.1",
     date: "2026-11-14",
     title: "Faster landing and NFS builds on macOS",
     tag: "Performance",
@@ -62,6 +145,7 @@ const ENTRIES: Entry[] = [
     art: "leaf2",
   },
   {
+    release: "0.1.0",
     date: "2026-11-12",
     title: "Agents drive Graft over MCP",
     tag: "Feature",
@@ -73,6 +157,7 @@ const ENTRIES: Entry[] = [
     art: "graft",
   },
   {
+    release: "0.1.0",
     date: "2026-11-11",
     title: "Scheduler: split work so agents rarely collide",
     tag: "Feature",
@@ -84,6 +169,7 @@ const ENTRIES: Entry[] = [
     art: "branch",
   },
   {
+    release: "0.1.0",
     date: "2026-11-07",
     title: "Integrate, Radar, Blueprints and sandboxed runs",
     tag: "Feature",
@@ -98,6 +184,7 @@ const ENTRIES: Entry[] = [
     art: "leaf1",
   },
   {
+    release: "0.1.0",
     date: "2026-11-06",
     title: "Faster reflink grafts",
     tag: "Performance",
@@ -108,6 +195,7 @@ const ENTRIES: Entry[] = [
     ],
   },
   {
+    release: "0.1.0",
     date: "2026-11-05",
     title: "Virtual grafts on macOS",
     tag: "Platform",
@@ -119,6 +207,7 @@ const ENTRIES: Entry[] = [
     art: "leaf2",
   },
   {
+    release: "0.1.0",
     date: "2026-11-04",
     title: "Grafts accept writes",
     tag: "Feature",
@@ -129,6 +218,7 @@ const ENTRIES: Entry[] = [
     ],
   },
   {
+    release: "0.1.0",
     date: "2026-11-03",
     title: "Lazy virtual grafts on Linux",
     tag: "Platform",
@@ -140,6 +230,7 @@ const ENTRIES: Entry[] = [
     art: "leaf3",
   },
   {
+    release: "0.1.0",
     date: "2026-11-01",
     title: "A benchmark against worktrees",
     tag: "Foundation",
@@ -147,6 +238,7 @@ const ENTRIES: Entry[] = [
     items: [{ title: "bench/", body: "Three fixtures from 1k to 200k files and 1 to 16 agents, with CSV and Markdown results.", pr: 6 }],
   },
   {
+    release: "0.1.0",
     date: "2026-10-31",
     title: "The first grafts",
     tag: "Foundation",
@@ -164,6 +256,7 @@ const ENTRIES: Entry[] = [
 const fmt = (iso: string, opts: Intl.DateTimeFormatOptions) =>
   new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", { ...opts, timeZone: "UTC" });
 const monthKey = (iso: string) => iso.slice(0, 7);
+const releaseId = (v: string) => `v${v.replaceAll(".", "-")}`;
 const MONTHS = [...new Set(ENTRIES.map((e) => monthKey(e.date)))];
 
 export function Changelog() {
@@ -206,11 +299,21 @@ export function Changelog() {
               {fmt(`${m}-01`, { month: "long" })}
             </a>
           ))}
+          <b className="cl-releases-head">Releases</b>
+          {RELEASES.map((r) => (
+            <a key={r.version} href={`#${releaseId(r.version)}`}>
+              <i />
+              {r.version}
+            </a>
+          ))}
         </nav>
 
         <main className="cl-entries">
           {ENTRIES.map((e, i) => {
             const firstOfMonth = ENTRIES.findIndex((x) => monthKey(x.date) === monthKey(e.date)) === i;
+            const release = ENTRIES.findIndex((x) => x.release === e.release) === i
+              ? RELEASES.find((r) => r.version === e.release)
+              : undefined;
             // Entries from the same day share one date and no divider.
             const sameDay = i > 0 && ENTRIES[i - 1].date === e.date;
             const continues = ENTRIES[i + 1]?.date === e.date;
@@ -218,8 +321,14 @@ export function Changelog() {
               .filter(Boolean)
               .join(" ");
             return (
+              <Fragment key={e.title}>
+              {release && (
+                <div className="cl-release" id={releaseId(release.version)}>
+                  <h2>Graft {release.version}</h2>
+                  <span>Released {fmt(release.date, { month: "long", day: "numeric", year: "numeric" })}</span>
+                </div>
+              )}
               <article
-                key={e.title}
                 className={cls}
                 id={firstOfMonth ? monthKey(e.date) : undefined}
                 data-month={firstOfMonth ? monthKey(e.date) : undefined}
@@ -236,6 +345,7 @@ export function Changelog() {
                 )}
                 <h2>{e.title}</h2>
                 <span className={`cl-tag tag-${e.tag.toLowerCase()}`}>{e.tag}</span>
+                <span className="cl-tag tag-release">{e.release}</span>
                 <p className="cl-lede">{e.lede}</p>
                 <div className="cl-items">
                   {e.items.map((it) => (
@@ -247,6 +357,7 @@ export function Changelog() {
                   ))}
                 </div>
               </article>
+              </Fragment>
             );
           })}
         </main>
