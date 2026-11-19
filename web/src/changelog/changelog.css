@@ -31,6 +31,16 @@
 .cl-months a[aria-current] i { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sprout) 70%, transparent); }
 
 .cl-entries { min-width: 0; padding-bottom: 96px; }
+/* A release heading above its first entry. */
+.cl-release {
+  display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+  padding: 40px 0 0; scroll-margin-top: 80px;
+}
+.cl-release h2 { font: 700 15px var(--font-display); letter-spacing: .02em; padding: 6px 12px; background: var(--ink); color: var(--ground); border-radius: 6px; }
+.cl-release span { font-size: 13px; color: var(--muted); }
+.cl-release + .cl-entry { padding-top: 32px; }
+.cl-entry:has(+ .cl-release) { border-bottom: 1px solid var(--rule); }
+.cl-releases-head { margin-top: 18px; }
 .cl-entry { position: relative; padding: 64px 0; border-bottom: 1px solid var(--rule); scroll-margin-top: 80px; }
 .cl-entry:last-child { border-bottom: 0; }
 /* Several entries on one day: one date, no divider between them. */
@@ -42,12 +52,14 @@
 .tag-feature { background: var(--green); color: var(--on-green); }
 .tag-performance { background: #ff975b; color: #2a1406; }
 .tag-platform { background: var(--sprout); color: var(--green-deep); }
+.tag-release { margin-left: 8px; background: transparent; color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--rule); }
 .tag-foundation { background: var(--ink); color: var(--ground); }
 .cl-lede { max-width: 720px; margin: 24px 0 36px; font: 500 18px/1.5 var(--font-display); color: var(--ink); }
 .cl-items { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 36px 48px; max-width: 980px; }
 .cl-item h3 { font: 600 17px var(--font-display); margin-bottom: 8px; }
 .cl-item p { font-size: 14px; line-height: 1.7; color: var(--ink-2); margin-bottom: 14px; }
 .cl-item a { font-size: 13px; color: var(--muted); }
+.cl-item .cl-shipped { margin: 0; font-size: 13px; color: var(--muted); }
 .cl-item a span { font: 600 15px var(--font-display); color: var(--green); }
 .cl-item a:hover span { text-decoration: underline; }
 
@@ -70,6 +82,7 @@
     border-bottom: 1px solid var(--rule);
   }
   .cl-months b { margin: 0; font-size: 15px; }
+  .cl-releases-head { margin-top: 0; }
   .cl-months a { white-space: nowrap; }
   .cl-peek { display: none; }
   .cl-entry { padding: 48px 0; }

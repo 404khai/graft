@@ -1620,7 +1620,7 @@ dependencies = [
 
 [[package]]
 name = "graft-bench"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1631,7 +1631,7 @@ dependencies = [
 
 [[package]]
 name = "graft-blueprint"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "thiserror",
@@ -1640,7 +1640,7 @@ dependencies = [
 
 [[package]]
 name = "graft-cli"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1668,7 +1668,7 @@ dependencies = [
 
 [[package]]
 name = "graft-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "getrandom 0.4.3",
  "serde",
@@ -1679,7 +1679,7 @@ dependencies = [
 
 [[package]]
 name = "graft-daemon"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1701,7 +1701,7 @@ dependencies = [
 
 [[package]]
 name = "graft-fs"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "fuser",
@@ -1718,7 +1718,7 @@ dependencies = [
 
 [[package]]
 name = "graft-integrate"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "tempfile",
  "thiserror",
@@ -1726,7 +1726,7 @@ dependencies = [
 
 [[package]]
 name = "graft-mcp"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "graft-core",
  "insta",
@@ -1738,7 +1738,7 @@ dependencies = [
 
 [[package]]
 name = "graft-radar"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "tree-sitter",
@@ -1750,7 +1750,7 @@ dependencies = [
 
 [[package]]
 name = "graft-root"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "gix",
@@ -1763,7 +1763,7 @@ dependencies = [
 
 [[package]]
 name = "graft-sandbox"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "landlock",
  "libc",
@@ -1774,7 +1774,7 @@ dependencies = [
 
 [[package]]
 name = "graft-sched"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "graft-radar",
  "serde",
@@ -1784,7 +1784,7 @@ dependencies = [
 
 [[package]]
 name = "graft-store"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "getrandom 0.4.3",

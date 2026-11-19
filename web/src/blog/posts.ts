@@ -34,6 +34,40 @@ const GH = "https://github.com/404khai/graft/blob/main";
 // Inline markup: `code`, **bold**, [text](href). Kept tiny on purpose.
 export const POSTS: Post[] = [
   {
+    slug: "graftd-handoff",
+    title: "Two graftds, one lock",
+    cover: "The Handoff",
+    category: "Engineering",
+    date: "2026-11-19",
+    summary:
+      "An intermittent \"not a git repository\" inside a graft came from a command that ran while graftd was still shutting down. The fix was to wait for the lock, not the socket.",
+    figure: "handoff",
+    sources: [
+      { label: "Issue #58: flaky \"not a git repository\" on Linux CI", href: "https://github.com/404khai/graft/issues/58" },
+      { label: "PR #65: wait for a stopping graftd to exit", href: "https://github.com/404khai/graft/pull/65" },
+    ],
+    body: [
+      { p: "Virtual grafts are mounts, and `graftd` owns them. If `graftd` stops, the next `graft` command starts a new one, which remounts every live graft. Under load, that went wrong about 2 or 3 times in 60: a `git status` in a graft that should have been remounted ran in an empty directory and failed with **not a git repository** (#58)." },
+      { h2: "Shutdown is three steps" },
+      { p: "`graftd` stops in order: remove its socket, unmount every graft, then release its lock. The lock is what guarantees one `graftd` per `$GRAFT_HOME`. The socket is how clients find it." },
+      { p: "`graft daemon stop` returned as soon as it had asked. A command run straight after it found no socket and started a new `graftd`. That one saw the lock still held and exited, and the command was answered by the stopping one, which then unmounted the graft it had just been asked about." },
+      { figure: "handoff", caption: "The socket goes first and the lock goes last; between them, a new graftd cannot start." },
+      { h2: "Wait for the lock, not the socket" },
+      { p: "A missing socket does not mean no `graftd` is running. A held lock does. So the client now waits on the lock:" },
+      { list: [
+        "`Client::wait_until_stopped` polls the lock file every 20 ms until no `graftd` holds it.",
+        "Starting a `graftd` first waits for a stopping one to exit.",
+        "`graft daemon stop` returns once `graftd` has exited, or fails after 30 s.",
+        "Restarting an idle `graftd` after an upgrade uses the same wait.",
+      ] },
+      { stats: [
+        { label: "Reproduction under load", value: "0 / 60", note: "was 2/60 and 3/60" },
+        { label: "#58 regression test", value: "40 / 40", note: "was 38/40" },
+      ] },
+      { p: "It shipped in 0.2.0, with an e2e test that stops `graftd` five times in a row and checks that the next command finds the graft remounted." },
+    ],
+  },
+  {
     slug: "lazy-grafts",
     title: "Serving a whole repo without copying it",
     cover: "Lazy Grafts",

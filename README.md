@@ -11,11 +11,13 @@ detects overlapping edits between agents while they work, and lands finished
 work into Root through a tested merge queue. The output is always ordinary git
 history.
 
-> **Status:** 0.1.1. Every phase of the plan is built and tested. 0.1.1
-> adds faster `graft integrate` and NFS builds on macOS, and structured
-> JSON results and error codes for agents over MCP. The performance work
-> (beating worktrees on every workload) is still in progress, and the
-> measured results below show where grafts still lose. See
+> **Status:** 0.2.0. Every phase of the plan is built and tested. 0.2.0
+> adds rings on reflink grafts, `graft new <name> -- <command>` to start an
+> agent inside its graft, opt-in registration of grafts as git worktrees,
+> `~/.graft` as the macOS default home, and diagnostics (`graft doctor
+> --report`, `graft fsck`, `graft stats`). The performance work (beating
+> worktrees on every workload) is still in progress, and the measured
+> results below show where grafts still lose. See
 > [docs/STATUS.md](docs/STATUS.md) for what is done and
 > [docs/architecture.md](docs/architecture.md) for the design.
 

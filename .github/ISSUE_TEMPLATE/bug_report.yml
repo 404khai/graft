@@ -61,6 +61,6 @@ body:
     id: version
     attributes:
       label: graft --version
-      placeholder: graft 0.1.1
+      placeholder: graft 0.2.0
     validations:
       required: true
