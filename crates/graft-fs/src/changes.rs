@@ -294,6 +294,7 @@ impl Compare<'_> {
                 _ => continue,
             };
             out.push(FileDiff {
+                old_mode: old.as_ref().map(|f| f.mode),
                 mode: new.as_ref().or(old.as_ref()).map_or(0o100_644, |f| f.mode),
                 change: Change {
                     path: graft_core::path_from_bytes(path.clone()),

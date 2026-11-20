@@ -746,6 +746,8 @@ pub struct FileDiff {
     pub change: Change,
     /// Git file mode of the current version, or the base version if deleted.
     pub mode: u32,
+    /// Git file mode of the base version; `None` if added.
+    pub old_mode: Option<u32>,
     /// The base version, in working-tree form (filters applied); `None` if
     /// added.
     pub old: Option<Vec<u8>>,
@@ -1207,6 +1209,7 @@ impl GraftRepo {
                     0o100_644
                 }
             };
+            let old_mode = entry.as_ref().map(|entry| u32::from(entry.mode().value()));
             let old = if change.kind == ChangeKind::Added {
                 None
             } else {
@@ -1216,20 +1219,24 @@ impl GraftRepo {
                             .repo
                             .find_blob(entry.object_id())
                             .map_err(|e| git_err("reading a blob")(boxed(e)))?;
-                        let rela = gix::path::into_bstr(&change.path)
-                            .map_err(|e| git_err("converting a path")(boxed(e)))?;
-                        let mut converted = pipeline
-                            .convert_to_worktree(
-                                &blob.data,
-                                rela.as_ref(),
-                                ToWorktreeOptions::default(),
-                            )
-                            .map_err(|e| git_err("applying git filters")(boxed(e)))?;
-                        let mut data = Vec::new();
-                        converted
-                            .read_to_end(&mut data)
-                            .map_err(io_err(&change.path))?;
-                        Some(data)
+                        if old_mode == Some(0o120_000) {
+                            Some(blob.data.clone())
+                        } else {
+                            let rela = gix::path::into_bstr(&change.path)
+                                .map_err(|e| git_err("converting a path")(boxed(e)))?;
+                            let mut converted = pipeline
+                                .convert_to_worktree(
+                                    &blob.data,
+                                    rela.as_ref(),
+                                    ToWorktreeOptions::default(),
+                                )
+                                .map_err(|e| git_err("applying git filters")(boxed(e)))?;
+                            let mut data = Vec::new();
+                            converted
+                                .read_to_end(&mut data)
+                                .map_err(io_err(&change.path))?;
+                            Some(data)
+                        }
                     }
                     _ => Some(Vec::new()),
                 }
@@ -1241,6 +1248,7 @@ impl GraftRepo {
             out.push(FileDiff {
                 change,
                 mode,
+                old_mode,
                 old,
                 new,
             });

@@ -256,7 +256,7 @@ fn apply(dir: &Path, diffs: &[FileDiff], merger: &Merger) -> anyhow::Result<Appl
             if ours.as_deref() == d.new.as_deref() && ours_link == theirs_link {
                 continue;
             }
-            if ours.as_deref() == d.old.as_deref() {
+            if ours.as_deref() == d.old.as_deref() && ours_link == (d.old_mode == Some(0o120_000)) {
                 write_entry(&target, d.new.as_deref(), theirs_link)?;
                 continue;
             }
@@ -522,9 +522,28 @@ fn commit_diffs(dir: &Path, parent: &str, commit: &str) -> anyhow::Result<Vec<Fi
         } else {
             ChangeKind::Modified
         };
+        let old_mode = if old.is_some() {
+            let entry = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(["ls-tree", parent, "--"])
+                .arg(&path)
+                .output()?;
+            anyhow::ensure!(entry.status.success(), "reading parent file mode failed");
+            Some(u32::from_str_radix(
+                String::from_utf8_lossy(&entry.stdout)
+                    .split_whitespace()
+                    .next()
+                    .context("missing parent file mode")?,
+                8,
+            )?)
+        } else {
+            None
+        };
         diffs.push(FileDiff {
             change: Change { path, kind },
             mode,
+            old_mode,
             old,
             new,
         });
@@ -564,11 +583,17 @@ fn git_with_input(dir: &Path, args: &[&std::ffi::OsStr], input: &[u8]) -> anyhow
 /// filters.
 fn clean_with_filters(source: &Path, diffs: &mut [FileDiff]) -> anyhow::Result<()> {
     for diff in diffs {
-        if diff.mode == 0o120_000 {
-            continue;
-        }
         let path = diff.change.path.as_os_str();
-        for bytes in [&mut diff.old, &mut diff.new].into_iter().flatten() {
+        for (contents, mode) in [
+            (&mut diff.old, diff.old_mode),
+            (&mut diff.new, Some(diff.mode)),
+        ] {
+            if mode == Some(0o120_000) {
+                continue;
+            }
+            let Some(bytes) = contents else {
+                continue;
+            };
             let blob = git_with_input(
                 source,
                 &[
@@ -595,8 +620,7 @@ fn clean_with_filters(source: &Path, diffs: &mut [FileDiff]) -> anyhow::Result<(
 fn smudge_with_filters(dir: &Path, diffs: &mut [FileDiff], old: bool) -> anyhow::Result<()> {
     for diff in diffs {
         let link = if old {
-            std::fs::symlink_metadata(dir.join(&diff.change.path))
-                .is_ok_and(|m| m.file_type().is_symlink())
+            diff.old_mode == Some(0o120_000)
         } else {
             diff.mode == 0o120_000
         };

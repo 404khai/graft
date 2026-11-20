@@ -22,6 +22,8 @@ replays commits and applies pending or squashed changes, so a target that
 removed a filter lands the graft's clean contents.
 Old sides use pre-change attributes, including filtered `.gitattributes` and
 regular files replaced by symlinks; new sides use the resulting attributes.
+Per-side file modes govern cleaning and smudging, preserving concurrent target
+symlinks and avoiding double filtering of pending regular-to-symlink changes.
 
 ## Phase 0 — Foundation
 
