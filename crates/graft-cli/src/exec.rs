@@ -65,5 +65,5 @@ pub(crate) fn exec(args: &ExecArgs, env: &Environment) -> anyhow::Result<ExitCod
         .current_dir(&dir)
         .env("PWD", &dir)
         .exec();
-    Err(error).with_context(|| format!("starting {program:?} in graft {name}"))
+    Err(error).with_context(|| format!("starting {} in graft {name}", program.to_string_lossy()))
 }
