@@ -212,17 +212,18 @@ Overlaps between live grafts, as JSON: same file (path), same symbol, merge conf
 
 ### `graft_integrate`
 
-Merge grafts onto a branch of Root through the integrate queue: structural merge, the [integrate] test gate if graft.toml sets one (the result says when none ran), one commit each. Changes Root's history, so it needs confirm: true unless dry_run. Returns JSON {results: [{graft, target, state, code, commit, output}], gated, radar}; radar lists Radar's overlaps between these grafts and other live grafts, flagged before landing (it does not block); if any request did not land, it is a tool error whose code is the first failed request's (conflict, gate_failed, checkout_would_fall_behind, root_not_clean, not_approved, nothing_to_integrate, claimed, failed) and whose output holds the results. (destructive)
+Merge grafts onto a branch of Root through the integrate queue, preserving ordered commits, messages and authors by default; squash: true opts into one combined commit. Uncommitted changes become one final commit. Structural merge and the [integrate] test gate run before any Root ref moves. Requires confirm: true unless dry_run. Returns JSON {results: [{graft, target, state, code, commit, commits, commit_count, output}], gated, radar}; commit is the final commit, commits lists every landed (or dry-run candidate) hash. Radar reports overlaps without blocking. Failed requests are tool errors with the first failed request's code and results in output. (destructive)
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `confirm` | boolean | no | Required (true) to land anything. |
 | `create_branch` | boolean | no | Create onto at Root's HEAD if it does not exist (else a missing branch is an error). |
 | `dry_run` | boolean | no | Run every step and check except landing, including the checked-out-branch rule, so a passing dry run predicts the real one. |
-| `message` | string | no | Commit message. |
+| `message` | string | no | Message for squash or the final uncommitted-changes commit. |
 | `names` | array of string | yes | Grafts, in order. |
 | `onto` | string | no | Branch to land on (default: [integrate] branch in graft.toml, else the branch Root has checked out, which also needs update_checkout). |
 | `prune` | boolean | no | Prune each graft once it has landed. |
+| `squash` | boolean | no | Opt in to a single commit instead of preserving commits, messages and authors. |
 | `update_checkout` | boolean | no | Allow landing on the branch Root has checked out: Root's working tree is fast-forwarded, which needs no changes to tracked files (untracked files are left alone). |
 | `test` | string | no | Shell command to use as this call's test gate instead of graft.toml's [integrate] test, e.g. "cargo test". Runs confined to the scratch checkout; needs no graft trust. |
 
