@@ -207,6 +207,100 @@ fn integrate_preserves_successful_gate_edits_in_a_final_commit() {
 }
 
 #[test]
+fn integrate_replay_uses_worktree_filters_for_both_sides() {
+    for crlf in [false, true] {
+        let attributes = if crlf {
+            "*.txt text eol=crlf\n"
+        } else {
+            "*.txt filter=caps\n"
+        };
+        let f = Fixture::new(
+            "",
+            &[
+                (".gitattributes", attributes),
+                ("file.txt", "one\ntwo\nthree\n"),
+            ],
+        );
+        if !crlf {
+            git(
+                f.repo.path(),
+                &["config", "filter.caps.clean", "tr A-Z a-z"],
+            );
+            git(
+                f.repo.path(),
+                &["config", "filter.caps.smudge", "tr a-z A-Z"],
+            );
+            git(f.repo.path(), &["config", "filter.caps.required", "true"]);
+        }
+        let worktree = |text: &str| {
+            if crlf {
+                text.replace('\n', "\r\n")
+            } else {
+                text.to_uppercase()
+            }
+        };
+        std::fs::write(
+            f.repo.path().join("file.txt"),
+            worktree("one\ntwo\nthree\n"),
+        )
+        .unwrap();
+        git(f.repo.path(), &["add", "file.txt"]);
+        assert_eq!(
+            out(f.repo.path(), &["status", "--porcelain"]),
+            "",
+            "Root was dirty before integration, crlf={crlf}"
+        );
+        let dir = f.new_graft("history");
+        for (subject, text) in [
+            ("feat: first", "first\ntwo\nthree\n"),
+            ("feat: last", "first\ntwo\nlast\n"),
+        ] {
+            std::fs::write(dir.join("file.txt"), worktree(text)).unwrap();
+            git(&dir, &["add", "-A"]);
+            git(&dir, &["commit", "-qm", subject]);
+        }
+        let other = f.new_graft("other");
+        std::fs::write(other.join("other"), "other\n").unwrap();
+        f.ok(&["integrate", "other", "--onto", "land"]);
+        let gate = if crlf {
+            "printf 'first\\r\\ntwo\\r\\nlast\\r\\n' | cmp - file.txt"
+        } else {
+            "printf 'FIRST\\nTWO\\nLAST\\n' | cmp - file.txt"
+        };
+        let result: serde_json::Value = serde_json::from_str(&f.ok(&[
+            "integrate",
+            "history",
+            "--onto",
+            "land",
+            "--test",
+            gate,
+            "--json",
+        ]))
+        .unwrap();
+        assert_eq!(result["results"][0]["commit_count"], 2);
+        assert_eq!(
+            out(f.repo.path(), &["show", "land:file.txt"]),
+            "first\ntwo\nlast\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("file.txt")).unwrap(),
+            worktree("first\ntwo\nlast\n")
+        );
+        assert_eq!(
+            std::fs::read_to_string(f.repo.path().join("file.txt")).unwrap(),
+            worktree("one\ntwo\nthree\n"),
+            "Root's bytes changed, crlf={crlf}"
+        );
+        assert_eq!(
+            out(f.repo.path(), &["status", "--porcelain"]),
+            "",
+            "Root became dirty, crlf={crlf}"
+        );
+        f.assert_root_clean();
+    }
+}
+
+#[test]
 fn integrate_preserves_order_messages_authors_and_reachability() {
     for moved in [false, true] {
         let f = Fixture::new("", &[]);

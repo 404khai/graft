@@ -479,7 +479,7 @@ fn commit_diffs(dir: &Path, parent: &str, commit: &str) -> anyhow::Result<Vec<Fi
             let result = Command::new("git")
                 .arg("-C")
                 .arg(dir)
-                .arg("show")
+                .args(["cat-file", "--filters"])
                 .arg(object)
                 .output()?;
             if !result.status.success() {
