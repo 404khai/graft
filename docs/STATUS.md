@@ -187,6 +187,11 @@ Status: in review (`feat/sandboxed-run`, ADR 0014). Landlock on Linux and a gene
 - [x] Clear error messages when the kernel lacks Landlock support.
   - `graft run` refuses before starting anything, naming the kernel requirement (5.13+, `landlock` in `/sys/kernel/security/lsm`); `graft doctor` reports the sandbox mechanism. The tests check that message on a kernel without Landlock, but every CI runner has Landlock, so that branch has not run in CI.
 
+Follow-up from the Kinigami field report (ADR 0039): `graft exec` runs a
+trusted command in the graft, without confinement or a shell. E2E tests
+cover paths with spaces, explicit Root selection, process status, refusal
+of unavailable grafts, and on-demand remounting.
+
 ## Phase 11 — Blueprints
 
 Status: done (PR #23, ADR 0015). Not done: the optional Linux network namespace (apps bind a reserved port instead).

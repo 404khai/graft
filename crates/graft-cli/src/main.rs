@@ -10,6 +10,7 @@ mod blueprints;
 mod daemon;
 mod diagnostics;
 mod doctor;
+mod exec;
 mod fsck;
 mod grafts;
 mod integrate;
@@ -59,6 +60,8 @@ enum Command {
     Ls(grafts::LsArgs),
     /// Print a graft's working-tree path, e.g. `cd "$(graft path auth)"`.
     Path(grafts::PathArgs),
+    /// Run a command in a graft's directory without confinement.
+    Exec(exec::ExecArgs),
     /// Print a graft's blueprint environment (secrets redacted).
     Env(blueprints::EnvArgs),
     /// Show what changed in a graft since its base.
@@ -246,8 +249,9 @@ fn run() -> anyhow::Result<ExitCode> {
 }
 
 /// The subcommand to record in telemetry, if any: a public command other
-/// than `telemetry` itself and the long-running `mcp` server (whose tool
-/// calls are recorded one by one). Global flags cannot precede it.
+/// than `telemetry` itself, `exec` (which replaces this process), and the
+/// long-running `mcp` server (whose tool calls are recorded one by one).
+/// Global flags cannot precede it.
 fn telemetry_name() -> Option<&'static str> {
     let given = std::env::args().nth(1)?;
     KNOWN_COMMANDS.iter().copied().find(|k| *k == given)
@@ -327,6 +331,7 @@ fn execute(command: Command, env: &Environment) -> anyhow::Result<ExitCode> {
         }
         Command::Ls(args) => ok(grafts::ls(&args, env))?,
         Command::Path(args) => ok(grafts::path(&args, env))?,
+        Command::Exec(args) => return exec::exec(&args, env),
         Command::Status(args) => ok(grafts::status(&args, env))?,
         Command::Env(args) => ok(blueprints::env(&args, env))?,
         Command::Diff(args) => ok(grafts::diff(&args, env))?,
@@ -399,13 +404,13 @@ mod tests {
 
     /// Telemetry's list stays in step with the CLI.
     #[test]
-    fn known_commands_are_the_public_subcommands() {
+    fn known_commands_match_telemetry_eligible_subcommands() {
         use clap::CommandFactory;
         let public: Vec<String> = Cli::command()
             .get_subcommands()
             .filter(|c| !c.is_hide_set())
             .map(|c| c.get_name().to_owned())
-            .filter(|n| !matches!(n.as_str(), "telemetry" | "mcp"))
+            .filter(|n| !matches!(n.as_str(), "telemetry" | "mcp" | "exec"))
             .collect();
         assert_eq!(public, KNOWN_COMMANDS);
     }
