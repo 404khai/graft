@@ -5,7 +5,7 @@ Phase checklist for Graft. Acceptance criteria are copied from
 Items marked *target* are performance goals; the PR that meets or misses
 them records the measured number.
 
-Follow-up from the Kinigami field report (ADR 0039): reflink list/status
+Follow-up from the Kinigami field report (ADR 0040): reflink list/status
 derive a published-ancestry display base without changing integration's
 recorded base or prune's existing work-at-risk guard. Status reports committed
 and uncommitted path counts; reflink rings name their HEAD parent and uncommitted delta.

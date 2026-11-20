@@ -1,4 +1,4 @@
-# 0039: Published ancestry for reflink status
+# 0040: Published ancestry for reflink status
 
 Status: accepted
 
