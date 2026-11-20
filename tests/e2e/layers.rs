@@ -173,7 +173,8 @@ fn clone_ignored_overrides_a_layer_at_the_same_path() {
         );
         if name == "cold" {
             assert!(f.builds().is_empty(), "the overridden layer built");
-            assert!(f.store().layers().unwrap().is_empty());
+            let layers = f.store().layers().unwrap();
+            assert!(layers.is_empty(), "{layers:?}");
             f.run(&["new", "normal"]).success();
         }
     }
@@ -199,7 +200,8 @@ fn clone_ignored_refuses_nested_layer_overlaps() {
             )));
     }
     assert!(f.builds().is_empty(), "planning ran a toolchain command");
-    assert!(f.store().grafts().unwrap().is_empty());
+    let grafts = f.store().grafts().unwrap();
+    assert!(grafts.is_empty(), "{grafts:?}");
 }
 
 #[test]

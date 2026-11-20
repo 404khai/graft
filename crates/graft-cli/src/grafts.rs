@@ -849,7 +849,7 @@ fn measure(
     g: &GraftRecord,
     base: &CommitId,
     path: &std::path::Path,
-    mounted: Option<&[GraftName]>,
+    mounted: &[GraftName],
     want_disk: bool,
     warnings: &mut Vec<String>,
 ) -> (Option<usize>, Option<u64>, Option<String>) {
@@ -863,8 +863,7 @@ fn measure(
         ..
     } = ctx;
     if g.backend.is_virtual() {
-        let up = mounted.is_some_and(|m| m.contains(&g.name));
-        if up {
+        if mounted.contains(&g.name) {
             let root_dir = ctx.root_dir();
             let changed = crate::virtual_grafts::diffs(home, located, &root_dir, path, g, warnings)
                 .map(|d| d.len())
@@ -926,36 +925,36 @@ fn with_registration(
     (registration, disk)
 }
 
+fn mounted_names(ctx: &Ctx, out: &mut Output) -> Vec<GraftName> {
+    // Asking graftd also restarts it (and so remounts) after a crash.
+    match daemon(&ctx.home, out).and_then(|mut c| Ok(c.mounts()?)) {
+        Ok(list) => list
+            .into_iter()
+            .filter(|m| m.root == ctx.located.record.id.to_string())
+            .filter_map(|m| m.graft.parse().ok())
+            .collect(),
+        Err(e) => {
+            out.warnings.push(format!("cannot reach graftd: {e:#}"));
+            Vec::new()
+        }
+    }
+}
+
 /// Lists grafts.
 pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
     let ctx = open(env)?;
     let Ctx {
-        home,
-        located,
-        backend,
-        ..
+        located, backend, ..
     } = &ctx;
     let grafts = located.store.grafts()?;
     let mut out = Output::default();
-    // Asking graftd also restarts it (and so remounts) after a crash.
-    let mounted: Option<Vec<GraftName>> = if grafts
+    let mounted = if grafts
         .iter()
         .any(|g| g.backend.is_virtual() && g.state != GraftState::Created)
     {
-        match daemon(home, &mut out).and_then(|mut c| Ok(c.mounts()?)) {
-            Ok(list) => Some(
-                list.into_iter()
-                    .filter(|m| m.root == located.record.id.to_string())
-                    .filter_map(|m| m.graft.parse().ok())
-                    .collect(),
-            ),
-            Err(e) => {
-                out.warnings.push(format!("cannot reach graftd: {e:#}"));
-                Some(Vec::new())
-            }
-        }
+        mounted_names(&ctx, &mut out)
     } else {
-        None
+        Vec::new()
     };
     if grafts.is_empty() && !args.json {
         let _ = writeln!(
@@ -976,9 +975,15 @@ pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
     for g in &grafts {
         let path = backend.path(&g.name);
         let base = display_base(&ctx, g, &path, &mut out.warnings);
-        let (up, want_disk) = (mounted.as_deref(), !args.no_disk);
-        let (changed, disk, note) =
-            measure(&ctx, g, &base, &path, up, want_disk, &mut out.warnings);
+        let (changed, disk, note) = measure(
+            &ctx,
+            g,
+            &base,
+            &path,
+            &mounted,
+            !args.no_disk,
+            &mut out.warnings,
+        );
         let (registration, disk) = with_registration(&located.repo, g, &path, disk);
         let shown = |v: Option<String>| v.or_else(|| note.clone()).unwrap_or_default();
         rows.push([
