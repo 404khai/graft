@@ -36,6 +36,29 @@ jobs:
       - run: node --version && node --test
         working-directory: telemetry/collector
 
+  homebrew:
+    name: Homebrew formula audit
+    runs-on: macos-latest
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Generate and audit the formula
+        run: |
+          version=0.2.0
+          dist="$RUNNER_TEMP/graft-dist"
+          mkdir -p "$dist"
+          for target in aarch64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            archive="graft-$version-$target.tar.gz"
+            printf '%s\n' "$archive" | shasum -a 256 > "$dist/$archive.sha256"
+          done
+          tap=graft-ci/fixtures
+          brew tap-new --no-git "$tap"
+          packaging/homebrew/formula.sh "$version" "$dist" > "$(brew --repo "$tap")/Formula/graft.rb"
+          brew trust --formula "$tap/graft"
+          brew audit --strict "$tap/graft"
+          brew audit --strict --os=linux --arch=all "$tap/graft"
+
   clippy:
     name: clippy (${{ matrix.os }})
     strategy:
