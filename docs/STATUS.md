@@ -17,6 +17,14 @@ retain the recorded base rather than breaking list/status.
 Registered graft topic branches count as published only when checked out in
 Root or another workspace, not solely in the graft being measured.
 
+Integrate applies the target's filter attributes, not the graft's, when it
+replays commits and applies pending or squashed changes, so a target that
+removed a filter lands the graft's clean contents.
+Old sides use pre-change attributes, including filtered `.gitattributes` and
+regular files replaced by symlinks; new sides use the resulting attributes.
+Per-side file modes govern cleaning and smudging, preserving concurrent target
+symlinks and avoiding double filtering of pending regular-to-symlink changes.
+
 ## Phase 0 — Foundation
 
 Status: done (#1)

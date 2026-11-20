@@ -329,6 +329,36 @@ fn detects_uncommitted_and_unintegrated_work() {
 }
 
 #[test]
+fn diffs_preserve_base_symlink_modes_and_unfiltered_targets() {
+    let (root_dir, _) = root_repo();
+    std::fs::write(
+        root_dir.path().join(".gitattributes"),
+        "filtered-link filter=rev\n",
+    )
+    .unwrap();
+    git(root_dir.path(), &["config", "filter.rev.clean", "rev"]);
+    git(root_dir.path(), &["config", "filter.rev.smudge", "rev"]);
+    std::os::unix::fs::symlink("destination", root_dir.path().join("filtered-link")).unwrap();
+    git(root_dir.path(), &["add", "-A"]);
+    git(root_dir.path(), &["commit", "-qm", "add filtered symlink"]);
+    let base = git(root_dir.path(), &["rev-parse", "HEAD"])
+        .parse()
+        .unwrap();
+    let (_home, dest, _) = make_graft(root_dir.path(), &base, "modes");
+    std::fs::remove_file(dest.join("filtered-link")).unwrap();
+    std::fs::write(dest.join("filtered-link"), "regular").unwrap();
+    let diffs = GraftRepo::open(&dest).unwrap().diff_since(&base).unwrap();
+    let diff = diffs
+        .iter()
+        .find(|d| d.change.path == Path::new("filtered-link"))
+        .unwrap();
+    assert_eq!(diff.old_mode, Some(0o120_000));
+    assert_eq!(diff.mode, 0o100_644);
+    assert_eq!(diff.old.as_deref(), Some(b"destination".as_slice()));
+    assert_eq!(diff.new.as_deref(), Some(b"regular".as_slice()));
+}
+
+#[test]
 fn renders_unified_diffs() {
     let (root_dir, base) = root_repo();
     let (_home, dest, _) = make_graft(root_dir.path(), &base, "diffs");

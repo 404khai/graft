@@ -207,6 +207,296 @@ fn integrate_preserves_successful_gate_edits_in_a_final_commit() {
 }
 
 #[test]
+fn integrate_uses_target_filters_when_target_removes_filter() {
+    for mode in ["replay", "pending", "squash"] {
+        let f = Fixture::new(
+            "",
+            &[
+                (".gitattributes", "*.txt filter=caps\n"),
+                ("file.txt", "one\n"),
+            ],
+        );
+        git(
+            f.repo.path(),
+            &["config", "filter.caps.clean", "tr A-Z a-z"],
+        );
+        git(
+            f.repo.path(),
+            &["config", "filter.caps.smudge", "tr a-z A-Z"],
+        );
+        std::fs::write(f.repo.path().join("file.txt"), "ONE\n").unwrap();
+        let dir = f.new_graft("filtered");
+        std::fs::write(dir.join("file.txt"), "TWO\n").unwrap();
+        if mode != "pending" {
+            git(&dir, &["add", "-A"]);
+            git(&dir, &["commit", "-qm", "feat: change filtered file"]);
+        }
+        // The target drops the filter without touching file.txt.
+        let index = f.repo.path().join(".git/attributes-index");
+        let plumb = |args: &[&str]| {
+            let o = Command::new("git")
+                .args(args)
+                .current_dir(f.repo.path())
+                .env("GIT_INDEX_FILE", &index)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "git {args:?}");
+            String::from_utf8(o.stdout).unwrap().trim().to_owned()
+        };
+        plumb(&["read-tree", "land"]);
+        plumb(&["rm", "-q", "--cached", ".gitattributes"]);
+        let tree = plumb(&["write-tree"]);
+        let commit = plumb(&[
+            "commit-tree",
+            &tree,
+            "-p",
+            "land",
+            "-m",
+            "chore: drop filter",
+        ]);
+        plumb(&["update-ref", "refs/heads/land", &commit]);
+        std::fs::remove_file(&index).unwrap();
+        let mut args = vec!["integrate", "filtered", "--onto", "land"];
+        if mode == "squash" {
+            args.push("--squash");
+        }
+        f.ok(&args);
+        assert_eq!(
+            out(f.repo.path(), &["show", "land:file.txt"]),
+            "two\n",
+            "{mode}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("file.txt")).unwrap(),
+            "TWO\n"
+        );
+        f.assert_root_clean();
+    }
+}
+
+#[test]
+fn integrate_filter_modes_preserve_concurrent_target_symlink() {
+    for mode in ["replay", "pending"] {
+        for target in ["one", "ONE"] {
+            let f = Fixture::new(
+                "",
+                &[
+                    (".gitattributes", "*.txt filter=caps\n"),
+                    ("file.txt", "one"),
+                ],
+            );
+            git(
+                f.repo.path(),
+                &["config", "filter.caps.clean", "tr A-Z a-z"],
+            );
+            git(
+                f.repo.path(),
+                &["config", "filter.caps.smudge", "tr a-z A-Z"],
+            );
+            std::fs::write(f.repo.path().join("file.txt"), "ONE").unwrap();
+            git(f.repo.path(), &["add", "-A"]);
+            let dir = f.new_graft("filtered");
+            std::fs::write(dir.join("file.txt"), "TWO").unwrap();
+            if mode == "replay" {
+                git(&dir, &["add", "-A"]);
+                git(&dir, &["commit", "-qm", "feat: edit file"]);
+            }
+            let other = f.new_graft("other");
+            std::fs::remove_file(other.join("file.txt")).unwrap();
+            std::os::unix::fs::symlink(target, other.join("file.txt")).unwrap();
+            git(&other, &["add", "-A"]);
+            git(
+                &other,
+                &["commit", "-qm", "feat: replace file with symlink"],
+            );
+            git(
+                f.repo.path(),
+                &["fetch", "--no-tags", other.to_str().unwrap(), "HEAD"],
+            );
+            git(
+                f.repo.path(),
+                &["update-ref", "refs/heads/land", "FETCH_HEAD"],
+            );
+            let before = f.rev("land");
+            f.cmd()
+                .args(["integrate", "filtered", "--onto", "land"])
+                .assert()
+                .failure()
+                .stdout(predicate::str::contains("conflict"));
+            assert_eq!(f.rev("land"), before, "{mode}");
+            assert!(out(f.repo.path(), &["ls-tree", "land", "file.txt"]).starts_with("120000"));
+            assert_eq!(out(f.repo.path(), &["show", "land:file.txt"]), target);
+            f.assert_root_clean();
+        }
+    }
+}
+
+#[test]
+fn integrate_filter_modes_clean_old_regular_side_of_symlink_replacement() {
+    for mode in ["pending", "squash"] {
+        let f = Fixture::new(
+            "",
+            &[
+                (".gitattributes", "*.txt filter=rev\n"),
+                ("file.txt", "one\n"),
+            ],
+        );
+        git(f.repo.path(), &["config", "filter.rev.clean", "rev"]);
+        git(f.repo.path(), &["config", "filter.rev.smudge", "rev"]);
+        std::fs::write(f.repo.path().join("file.txt"), "eno\n").unwrap();
+        git(f.repo.path(), &["add", "-A"]);
+        let dir = f.new_graft("filtered");
+        std::fs::remove_file(dir.join("file.txt")).unwrap();
+        std::os::unix::fs::symlink("destination", dir.join("file.txt")).unwrap();
+        if mode == "squash" {
+            git(&dir, &["add", "-A"]);
+            git(&dir, &["commit", "-qm", "feat: replace file with symlink"]);
+        }
+        let mut args = vec!["integrate", "filtered", "--onto", "land"];
+        if mode == "squash" {
+            args.push("--squash");
+        }
+        f.ok(&args);
+        assert!(
+            out(f.repo.path(), &["ls-tree", "land", "file.txt"]).starts_with("120000"),
+            "{mode}"
+        );
+        assert_eq!(
+            out(f.repo.path(), &["show", "land:file.txt"]),
+            "destination",
+            "{mode}"
+        );
+        f.assert_root_clean();
+    }
+}
+
+#[test]
+fn integrate_filter_sides_delete_crlf_attributes() {
+    check_filter_sides("attributes");
+}
+
+#[test]
+fn integrate_filter_sides_remove_filter_and_delete_file() {
+    check_filter_sides("delete");
+}
+
+#[test]
+fn integrate_filter_sides_replace_regular_file_with_symlink() {
+    check_filter_sides("symlink");
+}
+
+fn check_filter_sides(case: &str) {
+    for mode in ["replay", "pending", "squash"] {
+        let attributes = if case == "attributes" {
+            "* text eol=crlf\n"
+        } else {
+            "*.txt filter=caps\n"
+        };
+        let f = Fixture::new("", &[(".gitattributes", attributes), ("file.txt", "one\n")]);
+        git(
+            f.repo.path(),
+            &["config", "filter.caps.clean", "tr A-Z a-z"],
+        );
+        git(
+            f.repo.path(),
+            &["config", "filter.caps.smudge", "tr a-z A-Z"],
+        );
+        if case == "attributes" {
+            std::fs::write(
+                f.repo.path().join(".gitattributes"),
+                attributes.replace('\n', "\r\n"),
+            )
+            .unwrap();
+            std::fs::write(f.repo.path().join("file.txt"), "one\r\n").unwrap();
+        } else {
+            std::fs::write(f.repo.path().join("file.txt"), "ONE\n").unwrap();
+        }
+        git(f.repo.path(), &["add", "-A"]);
+        f.assert_root_clean();
+        let dir = f.new_graft("filtered");
+        if case == "attributes" {
+            std::fs::remove_file(dir.join(".gitattributes")).unwrap();
+        } else {
+            std::fs::remove_file(dir.join("file.txt")).unwrap();
+            if case == "delete" {
+                std::fs::remove_file(dir.join(".gitattributes")).unwrap();
+            } else {
+                std::os::unix::fs::symlink("destination", dir.join("file.txt")).unwrap();
+            }
+        }
+        if mode != "pending" {
+            git(&dir, &["add", "-A"]);
+            git(&dir, &["commit", "-qm", "feat: update filtered entries"]);
+        }
+        let other = f.new_graft("other");
+        std::fs::write(other.join("other"), "other\n").unwrap();
+        f.ok(&["integrate", "other", "--onto", "land"]);
+        let mut args = vec!["integrate", "filtered", "--onto", "land"];
+        if mode == "squash" {
+            args.push("--squash");
+        }
+        f.ok(&args);
+        if case == "symlink" {
+            assert!(
+                out(f.repo.path(), &["ls-tree", "land", "file.txt"]).starts_with("120000"),
+                "{mode}"
+            );
+            assert_eq!(
+                out(f.repo.path(), &["show", "land:file.txt"]),
+                "destination",
+                "{mode}"
+            );
+        } else {
+            assert_eq!(
+                out(f.repo.path(), &["ls-tree", "land", ".gitattributes"]),
+                "",
+                "{mode}"
+            );
+            if case == "delete" {
+                assert_eq!(
+                    out(f.repo.path(), &["ls-tree", "land", "file.txt"]),
+                    "",
+                    "{mode}"
+                );
+            }
+        }
+        f.assert_root_clean();
+    }
+}
+
+#[test]
+fn integrate_applies_filters_the_graft_adds() {
+    for mode in ["replay", "pending", "squash"] {
+        let f = Fixture::new("", &[("file.txt", "one\n")]);
+        git(f.repo.path(), &["config", "filter.rev.clean", "rev"]);
+        git(f.repo.path(), &["config", "filter.rev.smudge", "rev"]);
+        let dir = f.new_graft("filtered");
+        std::fs::write(dir.join(".gitattributes"), "new.txt filter=rev\n").unwrap();
+        std::fs::write(dir.join("new.txt"), "wen\n").unwrap();
+        if mode != "pending" {
+            git(&dir, &["add", "-A"]);
+            git(&dir, &["commit", "-qm", "feat: add filtered file"]);
+        }
+        let other = f.new_graft("other");
+        std::fs::write(other.join("file.txt"), "two\n").unwrap();
+        f.ok(&["integrate", "other", "--onto", "land"]);
+        let mut args = vec!["integrate", "filtered", "--onto", "land"];
+        if mode == "squash" {
+            args.push("--squash");
+        }
+        f.ok(&args);
+        assert_eq!(
+            out(f.repo.path(), &["show", "land:new.txt"]),
+            "new\n",
+            "{mode}"
+        );
+        f.assert_root_clean();
+    }
+}
+
+#[test]
 fn integrate_replay_uses_worktree_filters_for_both_sides() {
     for crlf in [false, true] {
         let attributes = if crlf {
