@@ -829,6 +829,10 @@ impl Scratch {
                 },
             )
         })?;
+        git(
+            &created.path,
+            &["config", "--local", "core.hooksPath", "/dev/null"],
+        )?;
         Ok(Self {
             backend,
             name,

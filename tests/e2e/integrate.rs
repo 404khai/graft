@@ -15,6 +15,53 @@ use crate::{git, git_repo, graft};
 const CONFIG: &str = "pub struct Config {\n    pub name: String,\n}\n";
 
 #[test]
+fn integrate_scratch_never_runs_repository_git_hooks() {
+    for moved in [false, true] {
+        let f = Fixture::new("", &[]);
+        let dir = f.new_graft("hooks");
+        let marker = f.repo.path().join("hook-ran");
+        std::fs::create_dir(dir.join("hooks")).unwrap();
+        for hook in [
+            "pre-commit",
+            "prepare-commit-msg",
+            "post-commit",
+            "post-checkout",
+        ] {
+            let path = dir.join("hooks").join(hook);
+            std::fs::write(
+                &path,
+                format!("#!/bin/sh\nprintf triggered > '{}'\n", marker.display()),
+            )
+            .unwrap();
+            std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
+        }
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "test: add hooks"]);
+        std::fs::write(dir.join("pending"), "pending\n").unwrap();
+        if moved {
+            let other = f.new_graft("other");
+            std::fs::write(other.join("other"), "other\n").unwrap();
+            f.ok(&["integrate", "other", "--onto", "land"]);
+        }
+        git(f.repo.path(), &["config", "core.hooksPath", "hooks"]);
+        let target = f.rev("land");
+        f.ok(&["integrate", "hooks", "--onto", "land", "--dry-run"]);
+        assert_eq!(f.rev("land"), target);
+        assert!(
+            !marker.exists(),
+            "a dry run executed a hook outside confinement"
+        );
+        f.ok(&["integrate", "hooks", "--onto", "land"]);
+        assert!(
+            !marker.exists(),
+            "landing executed a hook outside confinement"
+        );
+        assert_eq!(out(f.repo.path(), &["config", "core.hooksPath"]), "hooks\n");
+    }
+}
+
+#[test]
 fn integrate_preserves_order_messages_authors_and_reachability() {
     for moved in [false, true] {
         let f = Fixture::new("", &[]);
