@@ -1038,7 +1038,7 @@ impl GraftRepo {
                 let meta = std::fs::symlink_metadata(&path).map_err(io_err(&path))?;
                 if meta.file_type().is_symlink() {
                     0o120_000
-                } else if meta.permissions().mode() & 0o111 != 0 {
+                } else if meta.permissions().mode() & 0o100 != 0 {
                     0o100_755
                 } else {
                     0o100_644

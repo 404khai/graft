@@ -235,7 +235,7 @@ impl Compare<'_> {
                 };
                 Some(GitFile {
                     bytes,
-                    mode: if mode & 0o111 != 0 {
+                    mode: if mode & 0o100 != 0 {
                         0o100_755
                     } else {
                         0o100_644
@@ -267,7 +267,7 @@ impl Compare<'_> {
                 };
                 Some(GitFile {
                     bytes,
-                    mode: if mode & 0o111 != 0 {
+                    mode: if mode & 0o100 != 0 {
                         0o100_755
                     } else {
                         0o100_644
