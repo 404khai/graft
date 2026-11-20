@@ -254,6 +254,8 @@ Diagnostics (ADR 0030, `feat/diagnostics-report`): `graft doctor --json`; `graft
 
 ## Phase 16 — Materialize, hardening and first release
 
+Landlock warnings name only missing required write rights, using the kernel ABI reported by the landlock crate. ABI 3 and newer no longer warn merely because optional newer rights are unavailable.
+
 `graft diff` patches preserve added/deleted file modes and empty-side hunk offsets; a git-apply round-trip covers regular files, executables, symlinks and empty files.
 
 Status: in review (`chore/first-release`, ADR 0020). Chunk-level copy-up is not done: no measurement shows whole-file copy-up as a cost (it stays with the deferred performance work). Licensed MIT, the maintainer's choice.

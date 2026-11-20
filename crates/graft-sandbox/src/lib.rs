@@ -169,11 +169,30 @@ impl Policy {
 /// How well [`confine_self`] could enforce the policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Enforcement {
-    /// Every write right is restricted.
+    /// Every write right required by Graft is restricted. Newer optional
+    /// Landlock rights are enforced when the kernel supports them.
     Full,
-    /// The kernel's Landlock ABI is older than this build knows, so some
-    /// rights (renames across directories, truncation) are not restricted.
-    Partial,
+    /// The kernel cannot enforce all required write rights.
+    Partial {
+        /// Required rights that the kernel does not support.
+        missing: &'static str,
+    },
+}
+
+#[cfg(target_os = "linux")]
+fn enforcement_for_abi(abi: landlock::ABI) -> Result<Enforcement> {
+    use landlock::ABI;
+
+    match abi {
+        ABI::Unsupported => Err(SandboxError::Unsupported),
+        ABI::V1 => Ok(Enforcement::Partial {
+            missing: "Refer (cross-directory rename permissions) and Truncate (file truncation)",
+        }),
+        ABI::V2 => Ok(Enforcement::Partial {
+            missing: "Truncate (file truncation)",
+        }),
+        _ => Ok(Enforcement::Full),
+    }
 }
 
 /// Which mechanism this platform would use, and whether it looks usable.
@@ -264,7 +283,7 @@ pub fn confine_self(policy: &Policy) -> Result<Enforcement> {
     let status = ruleset.restrict_self().map_err(ll)?;
     match status.ruleset {
         RulesetStatus::FullyEnforced => Ok(Enforcement::Full),
-        RulesetStatus::PartiallyEnforced => Ok(Enforcement::Partial),
+        RulesetStatus::PartiallyEnforced => enforcement_for_abi(status.landlock.into()),
         RulesetStatus::NotEnforced => Err(SandboxError::Unsupported),
     }
 }
@@ -374,6 +393,44 @@ pub fn seatbelt_command(
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn enforcement_tracks_required_write_rights_by_abi() {
+        use landlock::ABI;
+
+        assert!(matches!(
+            enforcement_for_abi(ABI::Unsupported),
+            Err(SandboxError::Unsupported)
+        ));
+        assert_eq!(
+            enforcement_for_abi(ABI::V1).unwrap(),
+            Enforcement::Partial {
+                missing: "Refer (cross-directory rename permissions) and Truncate (file truncation)",
+            }
+        );
+        assert_eq!(
+            enforcement_for_abi(ABI::V2).unwrap(),
+            Enforcement::Partial {
+                missing: "Truncate (file truncation)",
+            }
+        );
+        for abi in [
+            ABI::V3,
+            ABI::V4,
+            ABI::V5,
+            ABI::V6,
+            ABI::V7,
+            ABI::V8,
+            ABI::V9,
+        ] {
+            assert_eq!(
+                enforcement_for_abi(abi).unwrap(),
+                Enforcement::Full,
+                "{abi}"
+            );
+        }
+    }
 
     #[test]
     fn policies_are_canonical_and_absolute() {
