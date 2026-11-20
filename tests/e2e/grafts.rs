@@ -587,6 +587,29 @@ fn display_base_uses_remote_refs_and_keeps_recorded_base_after_reset() {
 }
 
 #[test]
+fn dangling_remote_head_does_not_break_listing_or_status() {
+    let s = Setup::new();
+    s.run(&["new", "a"]).success();
+    let a = s.path("a");
+    let base = git_out(&a, &["rev-parse", "HEAD"]).trim().to_owned();
+    git(
+        &a,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/pruned",
+        ],
+    );
+    let status: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["status", "a", "--json"])).unwrap();
+    assert_eq!(status["grafts"][0]["base"], base);
+    assert_eq!(status["grafts"][0]["changes"], serde_json::json!([]));
+    let ls: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["ls", "--json", "--no-disk"])).unwrap();
+    assert_eq!(ls["grafts"][0]["changed"], 0);
+}
+
+#[test]
 fn diff_applies_to_the_base_checkout() {
     let s = Setup::new();
     for (name, contents) in [

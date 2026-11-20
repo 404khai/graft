@@ -906,10 +906,10 @@ impl GraftRepo {
                 {
                     continue;
                 }
-                let tip = reference
-                    .peel_to_commit()
-                    .map_err(|e| git_err("reading published commit")(boxed(e)))?
-                    .id;
+                let Ok(tip) = reference.peel_to_commit() else {
+                    continue;
+                };
+                let tip = tip.id;
                 if let Some(base) = merge(head, tip)?
                     && merge(base, recorded_id)? == Some(recorded_id)
                 {
