@@ -199,8 +199,9 @@ How `graft integrate` lands grafts in Root ([ADR 0017](decisions/0017-integrate-
 By default, integration preserves every commit since the graft's base, in
 order, with its message and author. If the target has not moved, the original
 commits are fast-forwarded; otherwise each is replayed through the merge and
-resolver machinery (merge commits are replayed relative to their first parent,
-producing linear history). Uncommitted changes become one extra final commit, with
+resolver machinery, preserving parent relationships between replayed commits.
+Merge commits apply their first-parent diff, including merge resolutions.
+Uncommitted changes become one extra final commit, with
 `--message` or a generated message. Only the final tree runs the test gate;
 no Root ref moves unless it passes, and landing uses compare-and-swap.
 `--squash` opts into one commit; its generated message lists all original

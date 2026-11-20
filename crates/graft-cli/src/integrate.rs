@@ -7,6 +7,7 @@
 //! with compare-and-swap. Root's working tree is never written, unless the
 //! operator passes `--update-checkout` for the branch Root has checked out.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
@@ -928,6 +929,29 @@ fn call_spec(
     Ok((spec, caller))
 }
 
+fn replay_parent(
+    dir: &Path,
+    source: &Path,
+    original: &str,
+    mapped: &HashMap<String, String>,
+    head: &str,
+) -> anyhow::Result<String> {
+    let ancestry = git(source, &["rev-list", "--parents", "-n", "1", original])?;
+    let mut parents = ancestry.split_whitespace().skip(1);
+    let parent = parents.next().context("cannot replay a root commit")?;
+    let onto = mapped.get(parent).map_or(head, String::as_str);
+    git(dir, &["checkout", "--detach", onto])?;
+    let others: Vec<_> = parents
+        .filter_map(|p| mapped.get(p).map(String::as_str))
+        .collect();
+    if !others.is_empty() {
+        let mut args = vec!["merge", "--no-ff", "--no-commit", "-s", "ours"];
+        args.extend(others);
+        git(dir, &args)?;
+    }
+    Ok(parent.to_owned())
+}
+
 /// Preserves the graft's history in scratch, reusing objects or replaying.
 fn replay(
     ctx: &Ctx,
@@ -953,10 +977,11 @@ fn replay(
         return Ok(Ok((originals.to_vec(), false)));
     }
     let merger = Merger::detect();
+    let mut mapped = HashMap::new();
     let mut commits = Vec::new();
     let mut ran = false;
     for original in originals {
-        let parent = git(&source, &["rev-parse", &format!("{original}^1")])?;
+        let parent = replay_parent(dir, &source, original, &mapped, head.as_str())?;
         let part = commit_diffs(&source, &parent, original)?;
         let applied = apply(dir, &part, &merger)?;
         log_structural(&applied, log);
@@ -979,7 +1004,9 @@ fn replay(
                 original,
             ],
         )?;
-        commits.push(git(dir, &["rev-parse", "HEAD"])?);
+        let commit = git(dir, &["rev-parse", "HEAD"])?;
+        mapped.insert(original.clone(), commit.clone());
+        commits.push(commit);
     }
     Ok(Ok((commits, ran)))
 }

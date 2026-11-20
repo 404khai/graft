@@ -62,6 +62,85 @@ fn integrate_scratch_never_runs_repository_git_hooks() {
 }
 
 #[test]
+fn integrate_replays_merge_trees_and_keeps_side_commits_reachable() {
+    for ours in [false, true] {
+        let f = Fixture::new("", &[]);
+        let dir = f.new_graft("history");
+        let base = f.rev("land");
+        git(&dir, &["checkout", "-qb", "side"]);
+        std::fs::write(dir.join("side"), "side\n").unwrap();
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "feat: side"]);
+        git(&dir, &["checkout", "--detach", &base]);
+        std::fs::write(dir.join("main"), "main\n").unwrap();
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "feat: main"]);
+        let mut merge = vec!["merge", "--no-ff", "-m", "merge: side"];
+        if ours {
+            merge.extend(["-s", "ours"]);
+        }
+        merge.push("side");
+        git(&dir, &merge);
+        let originals = out(
+            &dir,
+            &[
+                "rev-list",
+                "--reverse",
+                "--topo-order",
+                &format!("{base}..HEAD"),
+            ],
+        );
+        let other = f.new_graft("other");
+        std::fs::write(other.join("other"), "other\n").unwrap();
+        f.ok(&["integrate", "other", "--onto", "land"]);
+        let target = f.rev("land");
+        let result: serde_json::Value =
+            serde_json::from_str(&f.ok(&["integrate", "history", "--onto", "land", "--json"]))
+                .unwrap();
+        let commits = result["results"][0]["commits"].as_array().unwrap();
+        assert_eq!(commits.len(), 3);
+        for (original, landed) in originals.lines().zip(commits) {
+            let landed = landed.as_str().unwrap();
+            assert_eq!(
+                out(&dir, &["show", "-s", "--format=%B%an%ae%aI", original]),
+                out(
+                    f.repo.path(),
+                    &["show", "-s", "--format=%B%an%ae%aI", landed]
+                ),
+            );
+            assert_eq!(
+                out(f.repo.path(), &["merge-base", landed, "land"]).trim(),
+                landed
+            );
+            assert_eq!(
+                out(&dir, &["show", "-s", "--format=%P", original])
+                    .split_whitespace()
+                    .count(),
+                out(f.repo.path(), &["show", "-s", "--format=%P", landed])
+                    .split_whitespace()
+                    .count(),
+            );
+        }
+        assert_eq!(
+            out(
+                f.repo.path(),
+                &["rev-list", "--count", &format!("{target}..land")]
+            )
+            .trim(),
+            "3"
+        );
+        assert_eq!(out(f.repo.path(), &["show", "land:main"]), "main\n");
+        assert_eq!(out(f.repo.path(), &["show", "land:other"]), "other\n");
+        assert_eq!(
+            out(f.repo.path(), &["ls-tree", "--name-only", "land", "side"]).is_empty(),
+            ours
+        );
+        assert_eq!(out(f.repo.path(), &["show", "land^2:side"]), "side\n");
+        f.assert_root_clean();
+    }
+}
+
+#[test]
 fn integrate_preserves_order_messages_authors_and_reachability() {
     for moved in [false, true] {
         let f = Fixture::new("", &[]);
