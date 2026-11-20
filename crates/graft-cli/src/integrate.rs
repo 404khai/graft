@@ -592,13 +592,20 @@ fn clean_with_filters(source: &Path, diffs: &mut [FileDiff]) -> anyhow::Result<(
 }
 
 /// Smudges the stored contents in `diffs` with `dir`'s filters.
-fn smudge_with_filters(dir: &Path, diffs: &mut [FileDiff]) -> anyhow::Result<()> {
+fn smudge_with_filters(dir: &Path, diffs: &mut [FileDiff], old: bool) -> anyhow::Result<()> {
     for diff in diffs {
-        if diff.mode == 0o120_000 {
+        let link = if old {
+            std::fs::symlink_metadata(dir.join(&diff.change.path))
+                .is_ok_and(|m| m.file_type().is_symlink())
+        } else {
+            diff.mode == 0o120_000
+        };
+        if link {
             continue;
         }
         let path = diff.change.path.as_os_str();
-        for bytes in [&mut diff.old, &mut diff.new].into_iter().flatten() {
+        let contents = if old { &mut diff.old } else { &mut diff.new };
+        if let Some(bytes) = contents {
             let blob = git_with_input(
                 dir,
                 &[
@@ -626,23 +633,25 @@ fn smudge_with_filters(dir: &Path, diffs: &mut [FileDiff]) -> anyhow::Result<()>
     Ok(())
 }
 
-/// Merges stored contents `diffs` into `dir` under the attributes they
-/// leave it with: `.gitattributes` first, staged because checkout reads
-/// attributes from the index, then the rest smudged with `dir`'s filters.
+/// Merges stored contents with old sides under the current attributes and
+/// new sides under the attributes the graft leaves behind.
 fn apply_with_filters(dir: &Path, diffs: &[FileDiff], merger: &Merger) -> anyhow::Result<Applied> {
-    let (attributes, mut rest): (Vec<_>, Vec<_>) = diffs.iter().cloned().partition(|d| {
+    let mut diffs = diffs.to_vec();
+    smudge_with_filters(dir, &mut diffs, true)?;
+    let (mut attributes, mut rest): (Vec<_>, Vec<_>) = diffs.into_iter().partition(|d| {
         d.change
             .path
             .file_name()
             .is_some_and(|n| n == ".gitattributes")
     });
+    smudge_with_filters(dir, &mut attributes, false)?;
     let mut applied = apply(dir, &attributes, merger)?;
     if !attributes.is_empty() {
         let mut args: Vec<&std::ffi::OsStr> = vec!["add".as_ref(), "-A".as_ref(), "--".as_ref()];
         args.extend(attributes.iter().map(|d| d.change.path.as_os_str()));
         git_with_input(dir, &args, &[])?;
     }
-    smudge_with_filters(dir, &mut rest)?;
+    smudge_with_filters(dir, &mut rest, false)?;
     let more = apply(dir, &rest, merger)?;
     applied.structural.extend(more.structural);
     applied.conflicts.extend(more.conflicts);

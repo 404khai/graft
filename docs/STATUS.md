@@ -20,6 +20,8 @@ Root or another workspace, not solely in the graft being measured.
 Integrate applies the target's filter attributes, not the graft's, when it
 replays commits and applies pending or squashed changes, so a target that
 removed a filter lands the graft's clean contents.
+Old sides use pre-change attributes, including filtered `.gitattributes` and
+regular files replaced by symlinks; new sides use the resulting attributes.
 
 ## Phase 0 — Foundation
 
