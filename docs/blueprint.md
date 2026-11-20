@@ -194,6 +194,23 @@ never builds one.
 
 How `graft integrate` lands grafts in Root ([ADR 0017](decisions/0017-integrate-queue.md)).
 
+### Landing semantics
+
+By default, integration preserves every commit since the graft's base, in
+order, with its message and author. If the target has not moved, the original
+commits are fast-forwarded; otherwise each is replayed through the merge and
+resolver machinery (merge commits are replayed relative to their first parent,
+producing linear history). Uncommitted changes become one extra final commit, with
+`--message` or a generated message. Only the final tree runs the test gate;
+no Root ref moves unless it passes, and landing uses compare-and-swap.
+`--squash` opts into one commit; its generated message lists all original
+subjects and short hashes. `--message` overrides that generated message.
+JSON includes `commits` and `commit_count`, retaining `commit` for the final
+hash. Dry runs report candidate hashes without landing them.
+The MCP equivalent is `squash: true`. There is deliberately no Blueprint
+squash setting: `mode` selects the destination, not whether to discard history
+([ADR 0039](decisions/0039-integrate-history.md)).
+
 ```toml
 [integrate]
 test = "cargo test -q"        # the gate: a failing run keeps the graft live

@@ -218,16 +218,19 @@ Status: done (PR #24, ADR 0016). Radar runs in the CLI over every live graft's c
 
 ## Phase 13 — Integrate
 
+- [x] Preserve ordered graft commits and authors by default; explicit CLI/MCP
+  squash, candidate/landed hash lists, and atomic final-tree gate (ADR 0039).
+
 Status: done (PR #25, ADR 0017). Integration happens in a scratch reflink checkout of the target's head; Root's working tree is never written except with `--update-checkout`. Pushing a branch and opening a PR is opt-in (`mode = "push"`, `pr = true`), tested offline against a local bare remote and a stand-in `gh`. `graft rebase` works for both backends; for virtual grafts a `rebase` op starts a new op log epoch (`a_virtual_graft_rebases_onto_a_new_head`). Symlinks land as symlinks (`symlinks_land_as_symlinks`).
 
 - [x] Non-overlapping grafts integrate with zero manual steps.
-  - `non_overlapping_grafts_integrate_unattended`: two reflink grafts land in one `graft integrate a b` through a test gate, as two commits with `Graft:` trailers; `a_virtual_graft_integrates` covers a virtual graft (NFS locally, FUSE in CI).
+  - `non_overlapping_grafts_integrate_unattended`: two reflink grafts land in one `graft integrate a b` through a test gate, preserving the original commit plus final commits for uncommitted changes (with `Graft:` trailers); `a_virtual_graft_integrates` covers a virtual graft (NFS locally, FUSE in CI).
 - [x] A reordering conflict that line-based git merge fails is resolved by the structural merge step (fixture).
   - `a_reordering_conflict_is_resolved_structurally`: two grafts add different fields at the same place in a Rust struct; `git merge-file` conflicts, Mergiraf 0.20.0 merges both. Locally with Mergiraf built into a scratch directory; CI `integrate with mergiraf (linux)` job with `GRAFT_TEST_MERGIRAF=1`. Without Mergiraf the same fixture stops as a conflict that says so.
 - [x] A failing test gate returns the graft to `Live` with the failure output attached.
   - `a_failing_gate_keeps_the_graft_live_and_root_unchanged`: the entry is `failed` with the gate's output in `graft queue`, the graft stays `live`, and lands once fixed.
 - [x] Root never receives a commit that failed the gate (test).
-  - Same test: the target ref and Root's object count are unchanged after the failed gate and after a `--dry-run`; commits are only made after the gate passes.
+  - Same test: the target ref and Root's object count are unchanged after the failed gate and after a `--dry-run`; replay candidates remain in scratch until the final-tree gate passes.
 - [x] Output is plain git history: `git log` and `git fsck` are clean.
   - Every landing test runs `git fsck --strict` and checks Root's working tree is untouched; no staging refs are left.
 

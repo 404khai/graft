@@ -128,7 +128,7 @@ struct RawIntegrate {
 /// How `graft integrate` lands a graft.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntegrateMode {
-    /// One commit on the target branch.
+    /// Commits on the target branch.
     Commit,
     /// A branch `graft/<name>` in Root; the target is left alone.
     Branch,

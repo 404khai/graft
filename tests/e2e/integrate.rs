@@ -14,9 +14,246 @@ use crate::{git, git_repo, graft};
 
 const CONFIG: &str = "pub struct Config {\n    pub name: String,\n}\n";
 
+#[test]
+fn integrate_preserves_order_messages_authors_and_reachability() {
+    for moved in [false, true] {
+        let f = Fixture::new("", &[]);
+        let dir = f.new_graft("history");
+        let base = f.rev("land");
+        let mut originals = Vec::new();
+        for n in 1..=3 {
+            std::fs::write(dir.join(format!("file{n}")), format!("{n}\n")).unwrap();
+            git(&dir, &["add", "-A"]);
+            git(
+                &dir,
+                &[
+                    "commit",
+                    "-qm",
+                    &format!("feat: step {n}\n\nBody {n}"),
+                    "--author",
+                    &format!("Author {n} <author{n}@example.com>"),
+                ],
+            );
+            originals.push(out(&dir, &["rev-parse", "HEAD"]).trim().to_owned());
+        }
+        if moved {
+            let other = f.new_graft("other");
+            std::fs::write(other.join("other"), "other\n").unwrap();
+            f.ok(&["integrate", "other", "--onto", "land"]);
+        }
+        let target = f.rev("land");
+        let dry: serde_json::Value = serde_json::from_str(&f.ok(&[
+            "integrate",
+            "history",
+            "--onto",
+            "land",
+            "--dry-run",
+            "--json",
+        ]))
+        .unwrap();
+        assert_eq!(dry["results"][0]["commit_count"], 3);
+        assert_eq!(f.rev("land"), target);
+        let result: serde_json::Value =
+            serde_json::from_str(&f.ok(&["integrate", "history", "--onto", "land", "--json"]))
+                .unwrap();
+        let commits = result["results"][0]["commits"].as_array().unwrap();
+        assert_eq!(commits.len(), 3);
+        assert_eq!(result["results"][0]["commit"], commits[2]);
+        for (original, landed) in originals.iter().zip(commits) {
+            let landed = landed.as_str().unwrap();
+            assert_eq!(
+                out(&dir, &["show", "-s", "--format=%B%an%ae%aI", original]),
+                out(
+                    f.repo.path(),
+                    &["show", "-s", "--format=%B%an%ae%aI", landed]
+                )
+            );
+            assert_eq!(
+                out(f.repo.path(), &["merge-base", landed, "land"]).trim(),
+                landed
+            );
+            if !moved {
+                assert_eq!(landed, original);
+            }
+        }
+        assert_eq!(
+            out(
+                f.repo.path(),
+                &["rev-list", "--count", &format!("{target}..land")]
+            )
+            .trim(),
+            "3"
+        );
+        assert_ne!(base, f.rev("land"));
+        f.assert_root_clean();
+    }
+}
+
+#[test]
+fn integrate_squash_combines_all_subjects_and_hashes() {
+    let f = Fixture::new("", &[]);
+    let dir = f.new_graft("history");
+    let base = f.rev("land");
+    let mut hashes = Vec::new();
+    for n in 1..=3 {
+        std::fs::write(dir.join(format!("file{n}")), "data").unwrap();
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", &format!("feat: step {n}")]);
+        hashes.push(
+            out(&dir, &["rev-parse", "--short", "HEAD"])
+                .trim()
+                .to_owned(),
+        );
+    }
+    let preview = f.ok(&[
+        "integrate",
+        "history",
+        "--onto",
+        "land",
+        "--squash",
+        "--dry-run",
+    ]);
+    assert!(preview.contains("would land 1 commit:"), "{preview}");
+    assert!(preview.contains("would squash 3 commits:"), "{preview}");
+    assert_eq!(f.rev("land"), base);
+    let result: serde_json::Value = serde_json::from_str(&f.ok(&[
+        "integrate",
+        "history",
+        "--onto",
+        "land",
+        "--squash",
+        "--json",
+    ]))
+    .unwrap();
+    assert_eq!(result["results"][0]["commit_count"], 1);
+    assert!(
+        result["results"][0]["output"]
+            .as_str()
+            .unwrap()
+            .contains("squashed 3 commits")
+    );
+    assert_eq!(
+        out(
+            f.repo.path(),
+            &["rev-list", "--count", &format!("{base}..land")]
+        )
+        .trim(),
+        "1"
+    );
+    let message = out(f.repo.path(), &["show", "-s", "--format=%B", "land"]);
+    for (n, hash) in hashes.iter().enumerate() {
+        assert!(message.contains(&format!("feat: step {} ({hash})", n + 1)));
+    }
+}
+
+#[test]
+fn integrate_history_appends_dirty_changes_and_gate_failure_lands_nothing() {
+    let f = Fixture::new("", &[]);
+    let dir = f.new_graft("history");
+    let base = f.rev("land");
+    std::fs::write(dir.join("committed"), "committed").unwrap();
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "feat: committed"]);
+    let original = out(&dir, &["rev-parse", "HEAD"]).trim().to_owned();
+    std::fs::write(dir.join("dirty"), "dirty").unwrap();
+    f.cmd()
+        .args(["integrate", "history", "--onto", "land", "--test", "false"])
+        .assert()
+        .failure();
+    assert_eq!(f.rev("land"), base);
+    f.ok(&[
+        "integrate",
+        "history",
+        "--onto",
+        "land",
+        "--message",
+        "feat: dirty",
+    ]);
+    assert_eq!(f.rev("land^"), original);
+    assert!(
+        out(f.repo.path(), &["show", "-s", "--format=%B", "land"]).starts_with("feat: dirty\n")
+    );
+    assert_eq!(out(f.repo.path(), &["show", "land:dirty"]), "dirty");
+}
+
 struct Fixture {
     home: tempfile::TempDir,
     repo: tempfile::TempDir,
+}
+
+#[test]
+fn integrate_preserves_empty_and_net_zero_commits() {
+    let f = Fixture::new("", &[]);
+    let dir = f.new_graft("history");
+    let base = f.rev("land");
+    git(&dir, &["commit", "--allow-empty", "-qm", "feat: empty"]);
+    std::fs::write(dir.join("temporary"), "data").unwrap();
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "feat: add"]);
+    git(&dir, &["rm", "temporary"]);
+    git(&dir, &["commit", "-qm", "revert: add"]);
+    let original = out(&dir, &["rev-parse", "HEAD"]).trim().to_owned();
+    f.ok(&["integrate", "history", "--onto", "land"]);
+    assert_eq!(f.rev("land"), original);
+    assert_eq!(f.rev("land^{tree}"), f.rev(&format!("{base}^{{tree}}")));
+    assert_eq!(
+        out(
+            f.repo.path(),
+            &["rev-list", "--count", &format!("{base}..land")]
+        )
+        .trim(),
+        "3"
+    );
+}
+
+#[test]
+fn integrate_history_replay_conflict_lands_nothing() {
+    let f = Fixture::new("", &[("value", "base\n")]);
+    let dir = f.new_graft("history");
+    for value in ["first\n", "second\n"] {
+        std::fs::write(dir.join("value"), value).unwrap();
+        git(&dir, &["commit", "-qam", value.trim()]);
+    }
+    let other = f.new_graft("other");
+    std::fs::write(other.join("value"), "other\n").unwrap();
+    f.ok(&["integrate", "other", "--onto", "land"]);
+    let target = f.rev("land");
+    let result = f
+        .cmd()
+        .args(["integrate", "history", "--onto", "land", "--json"])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    let result: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(result["results"][0]["code"], "conflict");
+    assert_eq!(f.rev("land"), target);
+    assert_eq!(result["results"][0]["commit_count"], 0);
+}
+
+#[test]
+fn integrate_history_replays_renames_symlinks_and_modes() {
+    let f = Fixture::new("", &[("old", "data\n")]);
+    let dir = f.new_graft("history");
+    git(&dir, &["mv", "old", "renamed"]);
+    git(&dir, &["commit", "-qm", "refactor: rename"]);
+    std::os::unix::fs::symlink("renamed", dir.join("link")).unwrap();
+    std::fs::set_permissions(
+        dir.join("renamed"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "feat: link and mode"]);
+    let other = f.new_graft("other");
+    std::fs::write(other.join("other"), "other\n").unwrap();
+    f.ok(&["integrate", "other", "--onto", "land"]);
+    f.ok(&["integrate", "history", "--onto", "land"]);
+    let tree = out(f.repo.path(), &["ls-tree", "land"]);
+    assert!(!tree.contains("\told\n"), "{tree}");
+    assert!(tree.contains("100755 blob"), "{tree}");
+    assert!(tree.contains("120000 blob"), "{tree}");
+    assert_eq!(out(f.repo.path(), &["show", "land:link"]), "renamed");
+    assert_eq!(out(f.repo.path(), &["show", "land:renamed"]), "data\n");
 }
 
 /// `git` in `dir`, returning stdout.
@@ -133,8 +370,8 @@ fn non_overlapping_grafts_integrate_unattended() {
         report.contains("landed   a → land") && report.contains("landed   b → land"),
         "{report}"
     );
-    // Two ordinary commits on land, parent to child, nothing else moved.
-    let log = out(f.repo.path(), &["log", "--format=%s%n%b", "land", "-2"]);
+    // One commit for a, b's original commit, then b's uncommitted changes.
+    let log = out(f.repo.path(), &["log", "--format=%s%n%b", "land", "-3"]);
     assert!(log.contains("feat: add new.txt"), "{log}");
     assert!(log.contains("chore: integrate graft a"), "{log}");
     assert!(

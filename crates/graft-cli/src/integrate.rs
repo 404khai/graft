@@ -8,6 +8,7 @@
 //! operator passes `--update-checkout` for the branch Root has checked out.
 
 use std::fmt::Write as _;
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -18,7 +19,7 @@ use graft_core::{CommitId, GraftId, GraftName, GraftState};
 use graft_fs::{FsBackend, GraftSpec, ReflinkBackend};
 use graft_integrate::{Merged, Merger, Method};
 use graft_root::Repo;
-use graft_root::graft::{FileDiff, GraftRepo};
+use graft_root::graft::{Change, ChangeKind, FileDiff, GraftRepo};
 use graft_store::{GraftRecord, Integration, IntegrationState};
 
 use crate::grafts::{Ctx, find, open, parse_name};
@@ -43,10 +44,12 @@ pub(crate) struct IntegrateArgs {
     /// replaces). Given on the command line, it needs no `graft trust`.
     #[arg(long, value_name = "COMMAND")]
     test: Option<String>,
-    /// The commit message (else the graft's first commit subject, else a
-    /// generated one).
+    /// Message for squash or the final uncommitted-changes commit.
     #[arg(long, short)]
     message: Option<String>,
+    /// Squash the graft into one commit instead of preserving its history.
+    #[arg(long)]
+    squash: bool,
     /// Run every step except landing.
     #[arg(long)]
     dry_run: bool,
@@ -61,7 +64,7 @@ pub(crate) struct IntegrateArgs {
     /// A task description for the resolver hook.
     #[arg(long, value_name = "FILE")]
     task: Option<PathBuf>,
-    /// Print JSON: `{"results": [{graft, target, state, code, commit,
+    /// Print JSON: `{"results": [{graft, target, state, code, commit, commits, commit_count,
     /// output}], "gated": bool, "radar": [overlaps involving them]}`.
     #[arg(long)]
     json: bool,
@@ -227,21 +230,26 @@ struct Applied {
     conflicts: Vec<(PathBuf, String)>,
 }
 
+fn log_structural(applied: &Applied, log: &mut String) {
+    if !applied.structural.is_empty() {
+        let paths: Vec<_> = applied
+            .structural
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        let _ = writeln!(log, "structural merge (Mergiraf): {}", paths.join(", "));
+    }
+}
+
 /// Merges `diffs` into `dir`, whose files are "ours". Conflicting files
 /// get conflict markers where both sides have them.
-fn apply(
-    ctx: &Ctx,
-    record: &GraftRecord,
-    dir: &Path,
-    diffs: &[FileDiff],
-    merger: &Merger,
-) -> anyhow::Result<Applied> {
+fn apply(dir: &Path, diffs: &[FileDiff], merger: &Merger) -> anyhow::Result<Applied> {
     use std::os::unix::fs::PermissionsExt as _;
     let mut applied = Applied::default();
     for d in diffs {
         let target = dir.join(&d.change.path);
         let (ours, ours_link) = read_entry(&target)?.map_or((None, false), |(b, l)| (Some(b), l));
-        let theirs_link = graft_is_link(ctx, record, &d.change.path);
+        let theirs_link = d.mode == 0o120_000;
         if ours_link || theirs_link {
             // Symlinks are not merged: one side must have left it alone.
             if ours.as_deref() == d.new.as_deref() && ours_link == theirs_link {
@@ -287,9 +295,7 @@ fn apply(
                 }
                 std::fs::write(&target, bytes)
                     .with_context(|| format!("writing {}", target.display()))?;
-                if let Some(mode) = graft_mode(ctx, record, &d.change.path) {
-                    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode))?;
-                }
+                std::fs::set_permissions(&target, std::fs::Permissions::from_mode(d.mode & 0o777))?;
             }
             None => match std::fs::remove_file(&target) {
                 Ok(()) => {}
@@ -400,13 +406,142 @@ fn message_for(ctx: &Ctx, record: &GraftRecord, given: Option<&str>) -> String {
     let subject = given.map(str::to_owned).or_else(|| {
         let dir = ctx.backend.path(&record.name);
         let range = format!("{}..HEAD", record.base_commit);
-        git(&dir, &["log", "--reverse", "--format=%s", &range])
+        git(&dir, &["log", "--reverse", "--format=%s (%h)", &range])
             .ok()
-            .and_then(|s| s.lines().next().map(str::to_owned))
+            .map(|s| format!("chore: integrate graft {}\n\n{s}", record.name))
             .filter(|s| !s.is_empty())
     });
     let subject = subject.unwrap_or_else(|| format!("chore: integrate graft {}", record.name));
     format!("{subject}\n\nGraft: {} {}\n", record.name, record.id)
+}
+
+/// Commits made in the graft since its base, in dependency order.
+fn original_commits(ctx: &Ctx, record: &GraftRecord) -> anyhow::Result<Vec<String>> {
+    let source = ctx.backend.path(&record.name);
+    if record.backend.is_virtual()
+        && !crate::virtual_grafts::has_git(&ctx.located, &ctx.root_dir(), &source, record)
+    {
+        return Ok(Vec::new());
+    }
+    let range = format!("{}..HEAD", record.base_commit);
+    Ok(
+        git(&source, &["rev-list", "--reverse", "--topo-order", &range])?
+            .lines()
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+/// Creates the optional final commit and the message file used by publish.
+fn commit_pending(
+    ctx: &Ctx,
+    record: &GraftRecord,
+    entry: &Integration,
+    dir: &Path,
+    needed: bool,
+) -> anyhow::Result<(PathBuf, Option<String>)> {
+    let message = dir.join(".git").join("GRAFT_INTEGRATE_MSG");
+    std::fs::write(&message, message_for(ctx, record, entry.message.as_deref()))?;
+    let commit = if needed {
+        time("integrate: commit", || git(dir, &["add", "-A"]))?;
+        git(
+            dir,
+            &[
+                "commit",
+                "--allow-empty",
+                "-q",
+                "-F",
+                &message.display().to_string(),
+            ],
+        )?;
+        Some(git(dir, &["rev-parse", "HEAD"])?)
+    } else {
+        None
+    };
+    Ok((message, commit))
+}
+
+/// The changes introduced by one commit, relative to its first parent.
+fn commit_diffs(dir: &Path, parent: &str, commit: &str) -> anyhow::Result<Vec<FileDiff>> {
+    let names = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["diff", "--no-renames", "--name-only", "-z", parent, commit])
+        .output()?;
+    anyhow::ensure!(names.status.success(), "listing commit changes failed");
+    let mut diffs = Vec::new();
+    for name in names.stdout.split(|b| *b == 0).filter(|b| !b.is_empty()) {
+        let path = PathBuf::from(std::ffi::OsStr::from_bytes(name));
+        let read = |rev: &str| -> anyhow::Result<Option<Vec<u8>>> {
+            let mut object = std::ffi::OsString::from(format!("{rev}:"));
+            object.push(&path);
+            let result = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .arg("show")
+                .arg(object)
+                .output()?;
+            if !result.status.success() {
+                let entry = Command::new("git")
+                    .arg("-C")
+                    .arg(dir)
+                    .args(["ls-tree", rev, "--"])
+                    .arg(&path)
+                    .output()?;
+                anyhow::ensure!(
+                    entry.status.success() && entry.stdout.is_empty(),
+                    "reading commit file: {}",
+                    String::from_utf8_lossy(&result.stderr)
+                );
+            }
+            Ok(result.status.success().then_some(result.stdout))
+        };
+        let old = read(parent)?;
+        let new = read(commit)?;
+        let mode_rev = if new.is_some() { commit } else { parent };
+        let mode = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["ls-tree", mode_rev, "--"])
+            .arg(&path)
+            .output()?;
+        anyhow::ensure!(mode.status.success(), "reading commit file mode failed");
+        let mode = String::from_utf8_lossy(&mode.stdout);
+        let mode = u32::from_str_radix(
+            mode.split_whitespace()
+                .next()
+                .context("missing file mode")?,
+            8,
+        )?;
+        let kind = if old.is_none() {
+            ChangeKind::Added
+        } else if new.is_none() {
+            ChangeKind::Deleted
+        } else {
+            ChangeKind::Modified
+        };
+        diffs.push(FileDiff {
+            change: Change { path, kind },
+            mode,
+            old,
+            new,
+        });
+    }
+    Ok(diffs)
+}
+
+/// A landing or dry-run summary.
+fn describe_commits(commits: &[String], squash_count: Option<usize>, dry_run: bool) -> String {
+    let (verb, count) = squash_count.map_or_else(
+        || {
+            (
+                if dry_run { "would land" } else { "landing" },
+                commits.len(),
+            )
+        },
+        |count| (if dry_run { "would squash" } else { "squashed" }, count),
+    );
+    format!("{verb} {count} commits: {}\n", commits.join(" "))
 }
 
 /// The outcome of one request.
@@ -414,6 +549,7 @@ struct Outcome {
     state: IntegrationState,
     output: String,
     commit: Option<String>,
+    commits: Vec<String>,
     /// It passed with no test gate configured.
     ungated: bool,
     /// Why it stopped, for agents (ADR 0025); `None` derives one from
@@ -422,11 +558,38 @@ struct Outcome {
 }
 
 impl Outcome {
+    fn summary(&self) -> String {
+        let mut summary = format!(
+            "{} {} {}: {}\n",
+            if self.state == IntegrationState::Checked {
+                "would land"
+            } else {
+                "landed"
+            },
+            self.commits.len(),
+            if self.commits.len() == 1 {
+                "commit"
+            } else {
+                "commits"
+            },
+            self.commits.join(" ")
+        );
+        if let Some(line) = self
+            .output
+            .lines()
+            .find(|line| line.starts_with("squashed ") || line.starts_with("would squash "))
+        {
+            let _ = writeln!(summary, "{line}");
+        }
+        summary
+    }
+
     fn stop(state: IntegrationState, output: impl Into<String>) -> Self {
         Self {
             state,
             output: output.into(),
             commit: None,
+            commits: Vec::new(),
             ungated: false,
             code: None,
         }
@@ -457,6 +620,7 @@ impl Outcome {
             state,
             output,
             commit,
+            commits: Vec::new(),
             ungated: spec.test.is_none(),
             code: None,
         }
@@ -618,7 +782,8 @@ fn preflight(
         }
     }
     let diffs = changes(ctx, record, out)?;
-    if diffs.is_empty() {
+    let has_commits = !original_commits(ctx, record)?.is_empty();
+    if diffs.is_empty() && !has_commits {
         return Ok(Err(Outcome::stop(
             IntegrationState::Failed,
             "nothing to integrate: no changes since base",
@@ -759,9 +924,63 @@ fn call_spec(
     Ok((spec, caller))
 }
 
-/// Runs one request in a scratch checkout of the target's head. `kept`
-/// is the checkout a previous request left for reuse, and receives this
-/// one's if it can be reused.
+/// Preserves the graft's history in scratch, reusing objects or replaying.
+fn replay(
+    ctx: &Ctx,
+    record: &GraftRecord,
+    scratch: &Scratch,
+    originals: &[String],
+    spec: &IntegrateSpec,
+    args: &IntegrateArgs,
+    log: &mut String,
+) -> anyhow::Result<Result<(Vec<String>, bool), Outcome>> {
+    let dir = &scratch.dir;
+    let head = &scratch.head;
+    let source = ctx.backend.path(&record.name);
+    if originals.is_empty() || args.squash {
+        return Ok(Ok((Vec::new(), false)));
+    }
+    git(
+        dir,
+        &["fetch", "--no-tags", &source.display().to_string(), "HEAD"],
+    )?;
+    if head == &record.base_commit {
+        git(dir, &["checkout", "--detach", "FETCH_HEAD"])?;
+        return Ok(Ok((originals.to_vec(), false)));
+    }
+    let merger = Merger::detect();
+    let mut commits = Vec::new();
+    let mut ran = false;
+    for original in originals {
+        let parent = git(&source, &["rev-parse", &format!("{original}^1")])?;
+        let part = commit_diffs(&source, &parent, original)?;
+        let applied = apply(dir, &part, &merger)?;
+        log_structural(&applied, log);
+        if !applied.conflicts.is_empty() {
+            ran = true;
+            link_layers(ctx, head, dir)?;
+            if let Some(stop) = resolve(ctx, record, dir, head, &part, &applied, spec, args, log)? {
+                return Ok(Err(stop));
+            }
+        }
+        git(dir, &["add", "-A"])?;
+        git(
+            dir,
+            &[
+                "commit",
+                "--allow-empty",
+                "--cleanup=verbatim",
+                "-q",
+                "-C",
+                original,
+            ],
+        )?;
+        commits.push(git(dir, &["rev-parse", "HEAD"])?);
+    }
+    Ok(Ok((commits, ran)))
+}
+
+/// Runs one queued request, testing its final tree before landing.
 fn attempt(
     ctx: &mut Ctx,
     entry: &Integration,
@@ -787,18 +1006,24 @@ fn attempt(
     let result = (|| -> anyhow::Result<Outcome> {
         let dir = scratch.dir.clone();
         let merger = Merger::detect();
-        let applied = time("integrate: apply changes", || {
-            apply(ctx, record, &dir, &diffs, &merger)
-        })?;
+        let source = ctx.backend.path(&record.name);
+        let originals = original_commits(ctx, record)?;
         let mut log = String::new();
-        if !applied.structural.is_empty() {
-            let list: Vec<String> = applied
-                .structural
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect();
-            let _ = writeln!(log, "structural merge (Mergiraf): {}", list.join(", "));
-        }
+        let (mut commits, replay_ran) =
+            match replay(ctx, record, &scratch, &originals, &spec, args, &mut log)? {
+                Ok(done) => done,
+                Err(stop) => return Ok(stop),
+            };
+        ran |= replay_ran;
+        let pending = if args.squash || originals.is_empty() {
+            diffs.clone()
+        } else {
+            GraftRepo::open(&source)?.diff_since(&git(&source, &["rev-parse", "HEAD"])?.parse()?)?
+        };
+        let applied = time("integrate: apply changes", || {
+            apply(&dir, &pending, &merger)
+        })?;
+        log_structural(&applied, &mut log);
         if !applied.conflicts.is_empty() {
             if spec.resolver.is_some() {
                 ran = true;
@@ -819,26 +1044,22 @@ fn attempt(
         if let Some(stop) = gate(&dir, &spec, &mut log)? {
             return Ok(stop);
         }
-        if entry.dry_run {
-            return Ok(Outcome::passed(IntegrationState::Checked, log, None, &spec));
+        let (msg_path, extra) =
+            commit_pending(ctx, record, entry, &dir, args.squash || !pending.is_empty())?;
+        if let Some(extra) = extra {
+            commits.push(extra);
         }
-        time("integrate: commit", || git(&dir, &["add", "-A"]))?;
-        let msg_path = dir.join(".git").join("GRAFT_INTEGRATE_MSG");
-        std::fs::write(
-            &msg_path,
-            message_for(ctx, record, entry.message.as_deref()),
-        )?;
-        git(
-            &dir,
-            &[
-                "commit",
-                "-q",
-                "--no-verify",
-                "-F",
-                &msg_path.display().to_string(),
-            ],
-        )?;
         let new = git(&dir, &["rev-parse", "HEAD"])?;
+        log.push_str(&describe_commits(
+            &commits,
+            args.squash.then_some(originals.len()),
+            entry.dry_run,
+        ));
+        if entry.dry_run {
+            let mut outcome = Outcome::passed(IntegrationState::Checked, log, None, &spec);
+            outcome.commits = commits;
+            return Ok(outcome);
+        }
         time("integrate: land", || {
             land(ctx, &dir, &start, &new, &entry.target, record, &spec, args)
         })?;
@@ -851,12 +1072,9 @@ fn attempt(
         if spec.mode == IntegrateMode::Push {
             publish(ctx, &spec, &entry.target, record, &msg_path, &mut log)?;
         }
-        Ok(Outcome::passed(
-            IntegrationState::Landed,
-            log,
-            Some(new),
-            &spec,
-        ))
+        let mut outcome = Outcome::passed(IntegrationState::Landed, log, Some(new), &spec);
+        outcome.commits = commits;
+        Ok(outcome)
     })();
     // Reuse only a checkout that holds exactly what just landed on the
     // target, and only in commit mode, where that is the target's head.
@@ -1151,6 +1369,8 @@ fn process(
             "state": outcome.state.as_str(),
             "code": outcome.code(),
             "commit": outcome.commit,
+            "commits": outcome.commits,
+            "commit_count": outcome.commits.len(),
             "output": outcome.output.trim_end(),
         }));
         let short = outcome.commit.as_deref().map_or("", |c| &c[..12]);
@@ -1161,6 +1381,7 @@ fn process(
             entry.graft_name,
             entry.target
         );
+        out.stdout.push_str(&outcome.summary());
         if outcome.state == IntegrationState::Landed {
             if args.prune {
                 let pruned = crate::grafts::prune(

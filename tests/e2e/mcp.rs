@@ -24,6 +24,47 @@ struct Client {
     notes: Vec<Value>,
 }
 
+#[test]
+fn integrate_preserves_history_or_explicitly_squashes_over_mcp() {
+    for squash in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let repo = git_repo();
+        let r = repo.path();
+        git(r, &["config", "user.name", "Graft Test"]);
+        git(r, &["config", "user.email", "test@graft.invalid"]);
+        git(r, &["branch", "land"]);
+        let mut c = Client::start(home.path(), r);
+        c.ok("graft_init", json!({}));
+        c.ok(
+            "graft_new",
+            json!({"name": "history", "backend": "reflink"}),
+        );
+        for n in 1..=2 {
+            c.ok("graft_run", json!({"name": "history", "command": ["sh", "-c", format!("echo {n} > file{n} && git add -A && git commit -qm 'feat: step {n}' --author='Author {n} <a{n}@example.com>'")]}));
+        }
+        let landed: Value = serde_json::from_str(&c.ok(
+            "graft_integrate",
+            json!({"names": ["history"], "onto": "land", "confirm": true, "squash": squash}),
+        ))
+        .unwrap();
+        let commits = landed["results"][0]["commits"].as_array().unwrap();
+        assert_eq!(commits.len(), if squash { 1 } else { 2 });
+        assert_eq!(landed["results"][0]["commit"], *commits.last().unwrap());
+        for commit in commits {
+            let result = Command::new("git")
+                .args(["merge-base", commit.as_str().unwrap(), "land"])
+                .current_dir(r)
+                .output()
+                .unwrap();
+            assert!(result.status.success());
+            assert_eq!(
+                String::from_utf8(result.stdout).unwrap().trim(),
+                commit.as_str().unwrap()
+            );
+        }
+    }
+}
+
 impl Client {
     fn start(home: &std::path::Path, root: &std::path::Path) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_graft"))
