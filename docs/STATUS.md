@@ -11,6 +11,9 @@ recorded base or prune's existing work-at-risk guard. Status reports committed
 and uncommitted path counts; reflink rings name their HEAD parent and uncommitted delta.
 MCP run results always report a sandbox object with `confined: true` for
 completed confined runs, including success.
+Review hardening: dangling publication refs are skipped, detached registered
+grafts still exclude their own branch, and unborn HEAD or display-base errors
+retain the recorded base rather than breaking list/status.
 
 ## Phase 0 — Foundation
 

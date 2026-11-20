@@ -224,11 +224,27 @@ pub(crate) fn find(store: &Store, name: &GraftName) -> anyhow::Result<GraftRecor
     })
 }
 
-fn display_base(ctx: &Ctx, record: &GraftRecord, path: &Path) -> anyhow::Result<CommitId> {
+fn display_base(
+    ctx: &Ctx,
+    record: &GraftRecord,
+    path: &Path,
+    warnings: &mut Vec<String>,
+) -> CommitId {
     if record.backend.is_virtual() || !path.is_dir() {
-        return Ok(record.base_commit.clone());
+        return record.base_commit.clone();
     }
-    Ok(GraftRepo::open(path)?.effective_base(&ctx.located.repo, &record.base_commit)?)
+    match GraftRepo::open(path)
+        .and_then(|repo| repo.effective_base(&ctx.located.repo, &record.base_commit))
+    {
+        Ok(base) => base,
+        Err(e) => {
+            warnings.push(format!(
+                "graft {}: cannot determine published base ({e}); using recorded base",
+                record.name
+            ));
+            record.base_commit.clone()
+        }
+    }
 }
 
 /// The backend for a new graft: `--backend`, `$GRAFT_FS`, config, default.
@@ -949,7 +965,7 @@ pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
     ]];
     for g in &grafts {
         let path = backend.path(&g.name);
-        let base = display_base(&ctx, g, &path)?;
+        let base = display_base(&ctx, g, &path, &mut out.warnings);
         let (up, want_disk) = (mounted.as_deref(), !args.no_disk);
         let (changed, disk, note) =
             measure(&ctx, g, &base, &path, up, want_disk, &mut out.warnings);
@@ -1094,7 +1110,7 @@ fn status_one(
     warnings: &mut Vec<String>,
 ) -> anyhow::Result<StatusView> {
     let path = ctx.backend.path(&record.name);
-    let base = display_base(ctx, record, &path)?;
+    let base = display_base(ctx, record, &path, warnings);
     let mut view = StatusView {
         name: record.name.to_string(),
         state: record.state.to_string(),

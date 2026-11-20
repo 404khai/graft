@@ -610,6 +610,50 @@ fn dangling_remote_head_does_not_break_listing_or_status() {
 }
 
 #[test]
+fn unborn_head_keeps_recorded_base_and_lists_uncommitted_paths() {
+    let s = Setup::new();
+    s.run(&["new", "a"]).success();
+    let a = s.path("a");
+    let base = git_out(&a, &["rev-parse", "HEAD"]).trim().to_owned();
+    git(&a, &["checkout", "--orphan", "unborn"]);
+    let status: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["status", "a", "--json"])).unwrap();
+    assert_eq!(status["grafts"][0]["base"], base);
+    assert_eq!(status["grafts"][0]["recorded_base"], base);
+    assert_eq!(status["grafts"][0]["committed"], 0);
+    assert_eq!(status["grafts"][0]["uncommitted"], 2);
+    let ls: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["ls", "--json", "--no-disk"])).unwrap();
+    assert_eq!(ls["grafts"][0]["base"], base);
+    assert_eq!(ls["grafts"][0]["changed"], 0);
+}
+
+#[test]
+fn display_base_errors_warn_and_fall_back_to_recorded_base() {
+    let s = Setup::new();
+    s.run(&["new", "a"]).success();
+    let base = git_out(&s.path("a"), &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    std::fs::write(
+        s.repo.path().join(".git/refs/heads/broken"),
+        "not an object id\n",
+    )
+    .unwrap();
+    for args in [
+        vec!["ls", "--json", "--no-disk"],
+        vec!["status", "a", "--json"],
+    ] {
+        let result = s
+            .run(&args)
+            .success()
+            .stderr(predicate::str::contains("using recorded base"));
+        let v: serde_json::Value = serde_json::from_slice(&result.get_output().stdout).unwrap();
+        assert_eq!(v["grafts"][0]["base"], base);
+    }
+}
+
+#[test]
 fn diff_applies_to_the_base_checkout() {
     let s = Setup::new();
     for (name, contents) in [

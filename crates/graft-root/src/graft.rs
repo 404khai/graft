@@ -863,9 +863,11 @@ impl GraftRepo {
     pub fn effective_base(&self, root: &Repo, recorded: &CommitId) -> Result<CommitId> {
         let head = self
             .repo
-            .head_id()
-            .map_err(|e| git_err("reading graft HEAD")(boxed(e)))?
-            .detach();
+            .head()
+            .map_err(|e| git_err("reading graft HEAD")(boxed(e)))?;
+        let Some(head) = head.id().map(gix::Id::detach) else {
+            return Ok(recorded.clone());
+        };
         let recorded_id = oid(recorded)?;
         let merge = |a, b| {
             self.repo
@@ -948,6 +950,14 @@ impl GraftRepo {
     ///
     /// Git object or tree traversal errors.
     pub fn committed_paths(&self, base: &CommitId) -> Result<usize> {
+        if self
+            .repo
+            .head()
+            .map_err(|e| git_err("reading graft HEAD")(boxed(e)))?
+            .is_unborn()
+        {
+            return Ok(0);
+        }
         let old = self
             .repo
             .find_tree(self.tree_of(base)?)
