@@ -566,8 +566,8 @@ pub(crate) fn confine(args: &ConfineArgs) -> anyhow::Result<ExitCode> {
     let policy = Policy::new(&args.write)?.with_create_only(&args.create_only)?;
     match graft_sandbox::confine_self(&policy)? {
         graft_sandbox::Enforcement::Full => {}
-        graft_sandbox::Enforcement::Partial => tracing::warn!(
-            "this kernel's Landlock is older than graft knows: renames across directories and truncation are not restricted"
+        graft_sandbox::Enforcement::Partial { missing } => tracing::warn!(
+            "this kernel's Landlock cannot fully enforce the requested write policy; unsupported rights: {missing}"
         ),
     }
     let (program, rest) = args.command.split_first().context("no command")?;

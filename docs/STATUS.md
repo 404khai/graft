@@ -254,6 +254,8 @@ Diagnostics (ADR 0030, `feat/diagnostics-report`): `graft doctor --json`; `graft
 
 ## Phase 16 — Materialize, hardening and first release
 
+Landlock warnings name only missing required write rights, using the kernel ABI reported by the landlock crate. ABI 3 and newer no longer warn merely because optional newer rights are unavailable.
+
 Status: in review (`chore/first-release`, ADR 0020). Chunk-level copy-up is not done: no measurement shows whole-file copy-up as a cost (it stays with the deferred performance work). Licensed MIT, the maintainer's choice.
 
 - [x] Materialize round-trips: materialize → edit → re-import produces the expected delta.
