@@ -277,6 +277,36 @@ fn integrate_uses_target_filters_when_target_removes_filter() {
 }
 
 #[test]
+fn integrate_applies_filters_the_graft_adds() {
+    for mode in ["replay", "pending", "squash"] {
+        let f = Fixture::new("", &[("file.txt", "one\n")]);
+        git(f.repo.path(), &["config", "filter.rev.clean", "rev"]);
+        git(f.repo.path(), &["config", "filter.rev.smudge", "rev"]);
+        let dir = f.new_graft("filtered");
+        std::fs::write(dir.join(".gitattributes"), "new.txt filter=rev\n").unwrap();
+        std::fs::write(dir.join("new.txt"), "wen\n").unwrap();
+        if mode != "pending" {
+            git(&dir, &["add", "-A"]);
+            git(&dir, &["commit", "-qm", "feat: add filtered file"]);
+        }
+        let other = f.new_graft("other");
+        std::fs::write(other.join("file.txt"), "two\n").unwrap();
+        f.ok(&["integrate", "other", "--onto", "land"]);
+        let mut args = vec!["integrate", "filtered", "--onto", "land"];
+        if mode == "squash" {
+            args.push("--squash");
+        }
+        f.ok(&args);
+        assert_eq!(
+            out(f.repo.path(), &["show", "land:new.txt"]),
+            "new\n",
+            "{mode}"
+        );
+        f.assert_root_clean();
+    }
+}
+
+#[test]
 fn integrate_replay_uses_worktree_filters_for_both_sides() {
     for crlf in [false, true] {
         let attributes = if crlf {

@@ -462,7 +462,8 @@ fn commit_pending(
     Ok((message, commit))
 }
 
-/// The changes introduced by one commit, relative to its first parent.
+/// The changes introduced by one commit, relative to its first parent,
+/// as stored blobs.
 fn commit_diffs(dir: &Path, parent: &str, commit: &str) -> anyhow::Result<Vec<FileDiff>> {
     let names = Command::new("git")
         .arg("-C")
@@ -479,7 +480,7 @@ fn commit_diffs(dir: &Path, parent: &str, commit: &str) -> anyhow::Result<Vec<Fi
             let result = Command::new("git")
                 .arg("-C")
                 .arg(dir)
-                .args(["cat-file", "--filters"])
+                .args(["cat-file", "blob"])
                 .arg(object)
                 .output()?;
             if !result.status.success() {
@@ -559,9 +560,9 @@ fn git_with_input(dir: &Path, args: &[&std::ffi::OsStr], input: &[u8]) -> anyhow
     Ok(output.stdout)
 }
 
-/// Converts the graft's working-file contents in `diffs` to the target's:
-/// cleaned with the graft's filters, then smudged with the target's.
-fn target_filters(source: &Path, target: &Path, diffs: &mut [FileDiff]) -> anyhow::Result<()> {
+/// Cleans the graft's working-file contents in `diffs` with the graft's
+/// filters.
+fn clean_with_filters(source: &Path, diffs: &mut [FileDiff]) -> anyhow::Result<()> {
     for diff in diffs {
         if diff.mode == 0o120_000 {
             continue;
@@ -580,24 +581,37 @@ fn target_filters(source: &Path, target: &Path, diffs: &mut [FileDiff]) -> anyho
                 bytes,
             )?;
             let blob = String::from_utf8(blob)?;
-            let clean = git_with_input(
+            *bytes = git_with_input(
                 source,
                 &["cat-file".as_ref(), "blob".as_ref(), blob.trim().as_ref()],
                 &[],
             )?;
+        }
+    }
+    Ok(())
+}
+
+/// Smudges the stored contents in `diffs` with `dir`'s filters.
+fn smudge_with_filters(dir: &Path, diffs: &mut [FileDiff]) -> anyhow::Result<()> {
+    for diff in diffs {
+        if diff.mode == 0o120_000 {
+            continue;
+        }
+        let path = diff.change.path.as_os_str();
+        for bytes in [&mut diff.old, &mut diff.new].into_iter().flatten() {
             let blob = git_with_input(
-                target,
+                dir,
                 &[
                     "hash-object".as_ref(),
                     "-w".as_ref(),
                     "--stdin".as_ref(),
                     "--no-filters".as_ref(),
                 ],
-                &clean,
+                bytes,
             )?;
             let blob = String::from_utf8(blob)?;
             *bytes = git_with_input(
-                target,
+                dir,
                 &[
                     "cat-file".as_ref(),
                     "--filters".as_ref(),
@@ -610,6 +624,29 @@ fn target_filters(source: &Path, target: &Path, diffs: &mut [FileDiff]) -> anyho
         }
     }
     Ok(())
+}
+
+/// Merges stored contents `diffs` into `dir` under the attributes they
+/// leave it with: `.gitattributes` first, staged because checkout reads
+/// attributes from the index, then the rest smudged with `dir`'s filters.
+fn apply_with_filters(dir: &Path, diffs: &[FileDiff], merger: &Merger) -> anyhow::Result<Applied> {
+    let (attributes, mut rest): (Vec<_>, Vec<_>) = diffs.iter().cloned().partition(|d| {
+        d.change
+            .path
+            .file_name()
+            .is_some_and(|n| n == ".gitattributes")
+    });
+    let mut applied = apply(dir, &attributes, merger)?;
+    if !attributes.is_empty() {
+        let mut args: Vec<&std::ffi::OsStr> = vec!["add".as_ref(), "-A".as_ref(), "--".as_ref()];
+        args.extend(attributes.iter().map(|d| d.change.path.as_os_str()));
+        git_with_input(dir, &args, &[])?;
+    }
+    smudge_with_filters(dir, &mut rest)?;
+    let more = apply(dir, &rest, merger)?;
+    applied.structural.extend(more.structural);
+    applied.conflicts.extend(more.conflicts);
+    Ok(applied)
 }
 
 /// A landing or dry-run summary.
@@ -915,14 +952,15 @@ impl Scratch {
             &created.path,
             &["config", "--local", "core.hooksPath", "/dev/null"],
         )?;
-        git(&created.path, &["checkout-index", "--all", "--force"])?;
-        Ok(Self {
+        let scratch = Self {
             backend,
             name,
             id,
             dir: created.path,
             head: head.clone(),
-        })
+        };
+        git(&scratch.dir, &["checkout-index", "--all", "--force"])?;
+        Ok(scratch)
     }
 
     /// Whether the checkout is exactly `head`: HEAD matches and nothing
@@ -1065,7 +1103,7 @@ fn replay(
     for original in originals {
         let parent = replay_parent(dir, &source, original, &mapped, head.as_str())?;
         let part = commit_diffs(dir, &parent, original)?;
-        let applied = apply(dir, &part, &merger)?;
+        let applied = apply_with_filters(dir, &part, &merger)?;
         log_structural(&applied, log);
         if !applied.conflicts.is_empty() {
             if !ran {
@@ -1135,9 +1173,9 @@ fn attempt(
         } else {
             GraftRepo::open(&source)?.diff_since(&git(&source, &["rev-parse", "HEAD"])?.parse()?)?
         };
-        target_filters(&source, &dir, &mut pending)?;
+        clean_with_filters(&source, &mut pending)?;
         let applied = time("integrate: apply changes", || {
-            apply(&dir, &pending, &merger)
+            apply_with_filters(&dir, &pending, &merger)
         })?;
         log_structural(&applied, &mut log);
         if !applied.conflicts.is_empty() {
