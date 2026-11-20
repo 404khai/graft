@@ -268,3 +268,4 @@ Status: in review (`chore/first-release`, ADR 0020). Chunk-level copy-up is not 
   - "Measured results" quotes the committed benchmark run (42113580319), including where grafts lose to worktrees.
 - [x] Release workflow produces signed binaries for both platforms.
   - `.github/workflows/release.yml` builds Linux x86_64/aarch64 and macOS arm64 archives and signs them with GitHub artifact attestations (Sigstore); a tag creates a draft release with a Homebrew formula. Release run 43306915013 built all three; `gh attestation verify graft-0.1.0-aarch64-apple-darwin.tar.gz --repo 404khai/graft` succeeds (and fails for another repository), and the binary reports `graft 0.1.0`. Not notarised by Apple (needs the maintainer's Developer ID).
+  - CI generates a fixture formula and runs `brew audit --strict` for macOS arm64 and both Linux architectures. Homebrew infers the version from the release URLs.
