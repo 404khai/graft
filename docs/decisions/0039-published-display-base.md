@@ -19,7 +19,10 @@ existing checks for uncommitted files and commits not otherwise held by Root.
 
 Only list and status derive an effective base. Consider merge-bases of HEAD
 with the graft's remote-tracking refs and Root's local branches. Exclude the
-registered graft branch even when HEAD is detached. A private repo's
+registered graft branch even when HEAD is detached. For registered grafts,
+only local branches checked out in Root's main workspace or another workspace
+count as published; topic branches confined to this graft remain private.
+A private repo's
 same-named branch does not exclude an independent Root branch.
 
 Keep only candidates descended from the recorded base. If HEAD is not

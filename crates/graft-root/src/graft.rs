@@ -853,7 +853,7 @@ impl GraftRepo {
 
     /// The published part of HEAD's ancestry, without changing the recorded base.
     ///
-    /// Root's branches (except this graft's registered branch) and the graft's
+    /// Root's published branches and the graft's
     /// remote-tracking refs are publication points. Incomparable maximal bases
     /// are resolved by breadth-first distance from HEAD.
     ///
@@ -888,6 +888,11 @@ impl GraftRepo {
         } else {
             None
         };
+        let checked_out = if shared {
+            self.branches_checked_out_elsewhere(root)?
+        } else {
+            HashSet::new()
+        };
         let mut candidates = HashSet::new();
         for (repo, prefix) in [(&self.repo, "refs/remotes/"), (&root.repo, "refs/heads/")] {
             let refs = repo
@@ -900,6 +905,9 @@ impl GraftRepo {
                 let mut reference = reference
                     .map_err(|e| git_err("reading published ref")(Box::from(e.to_string())))?;
                 if !reference.name().as_bstr().starts_with(prefix.as_bytes())
+                    || (shared
+                        && prefix == "refs/heads/"
+                        && !checked_out.contains(reference.name().as_bstr().as_ref() as &[u8]))
                     || (prefix == "refs/heads/"
                         && own
                             .as_ref()
@@ -942,6 +950,30 @@ impl GraftRepo {
             }
         }
         Ok(recorded.clone())
+    }
+
+    fn branches_checked_out_elsewhere(&self, root: &Repo) -> Result<HashSet<Vec<u8>>> {
+        let mut branches = HashSet::new();
+        let private_dir = self.repo.git_dir();
+        let private_dir = private_dir.canonicalize().map_err(io_err(private_dir))?;
+        let worktrees = root
+            .repo
+            .worktrees_including_main()
+            .map_err(|e| git_err("listing publication worktrees")(boxed(e)))?;
+        for repo in worktrees {
+            let repo = repo.map_err(|e| git_err("opening publication worktree")(boxed(e)))?;
+            let dir = repo.git_dir();
+            if dir.canonicalize().map_err(io_err(dir))? == private_dir {
+                continue;
+            }
+            let head = repo
+                .head()
+                .map_err(|e| git_err("reading publication HEAD")(boxed(e)))?;
+            if let Some(name) = head.referent_name() {
+                branches.insert(name.as_bstr().to_vec());
+            }
+        }
+        Ok(branches)
     }
 
     /// Counts paths changed between the base tree and HEAD, without renames.

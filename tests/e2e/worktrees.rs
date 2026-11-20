@@ -149,6 +149,38 @@ fn status_does_not_treat_the_registered_grafts_own_branch_as_published() {
 }
 
 #[test]
+fn topic_branches_are_private_until_checked_out_elsewhere() {
+    let s = Setup::new(None);
+    let a = s.new_graft("a");
+    let base = out(&a, &["rev-parse", "HEAD"]).trim().to_owned();
+    git(&a, &["switch", "-c", "topic"]);
+    std::fs::write(a.join("private.txt"), "private\n").unwrap();
+    git(&a, &["add", "-A"]);
+    git(&a, &["commit", "-qm", "private topic"]);
+    for detached in [false, true] {
+        if detached {
+            git(&a, &["switch", "--detach"]);
+        }
+        let v: serde_json::Value = serde_json::from_str(&s.ok(&["status", "a", "--json"])).unwrap();
+        assert_eq!(v["grafts"][0]["base"], base);
+        assert_eq!(v["grafts"][0]["committed"], 1);
+        let ls: serde_json::Value =
+            serde_json::from_str(&s.ok(&["ls", "--json", "--no-disk"])).unwrap();
+        assert_eq!(ls["grafts"][0]["changed"], 1);
+    }
+    s.root_git(&["switch", "topic"]);
+    let v: serde_json::Value = serde_json::from_str(&s.ok(&["status", "a", "--json"])).unwrap();
+    assert_eq!(v["grafts"][0]["committed"], 0);
+    assert_eq!(v["grafts"][0]["recorded_base"], base);
+    s.root_git(&["switch", "main"]);
+    let other = s.repo.path().join("other");
+    s.root_git(&["worktree", "add", other.to_str().unwrap(), "topic"]);
+    let v: serde_json::Value = serde_json::from_str(&s.ok(&["status", "a", "--json"])).unwrap();
+    assert_eq!(v["grafts"][0]["committed"], 0);
+    s.root_git(&["worktree", "remove", other.to_str().unwrap()]);
+}
+
+#[test]
 fn registered_graft_commits_land_on_its_branch_in_root() {
     let s = Setup::new(None);
     let a = s.new_graft("a");

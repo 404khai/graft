@@ -14,6 +14,8 @@ completed confined runs, including success.
 Review hardening: dangling publication refs are skipped, detached registered
 grafts still exclude their own branch, and unborn HEAD or display-base errors
 retain the recorded base rather than breaking list/status.
+Registered graft topic branches count as published only when checked out in
+Root or another workspace, not solely in the graft being measured.
 
 ## Phase 0 — Foundation
 
