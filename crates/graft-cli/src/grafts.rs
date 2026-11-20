@@ -45,6 +45,7 @@ pub(crate) struct NewArgs {
     /// Reflink these git-ignored directories from Root's working tree into
     /// the graft (e.g. `target,web/node_modules`), with no build: a graft
     /// starts with Root's build outputs and dependencies as they are.
+    /// A matching layer is skipped; nested overlaps with layers are refused.
     /// Reflink grafts only.
     #[arg(long, value_name = "PATHS", value_delimiter = ',')]
     clone_ignored: Vec<String>,
@@ -234,7 +235,7 @@ fn display_base(
     path: &Path,
     warnings: &mut Vec<String>,
 ) -> CommitId {
-    if record.backend.is_virtual() || !path.is_dir() {
+    if record.state == GraftState::Created || record.backend.is_virtual() || !path.is_dir() {
         return record.base_commit.clone();
     }
     match GraftRepo::open(path)
@@ -464,6 +465,7 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
     let rev = args.from.as_deref().unwrap_or("HEAD");
     let base = located.repo.resolve_commit(rev)?;
     let blueprint = blueprint_for(args, &located, &base)?;
+    let seeds = check_clone_ignored(&located.record.path, &args.clone_ignored)?;
     // Refuse unapproved layer commands before anything is created.
     let planned = timing::time("plan layers", || {
         layers::plan(
@@ -473,9 +475,9 @@ fn new_reflink(args: &NewArgs, env: &Environment, name: &GraftName) -> anyhow::R
             &base,
             args.from.as_deref(),
             blueprint.as_ref().and_then(|b| b.layers.as_deref()),
+            &seeds,
         )
     })?;
-    let seeds = check_clone_ignored(&located.record.path, &args.clone_ignored)?;
 
     // The record reserves the name before any files exist.
     let record = located
@@ -662,10 +664,7 @@ fn clone_ignored(
     for p in paths {
         let dst = graft.join(p);
         if std::fs::symlink_metadata(&dst).is_ok() {
-            bail!(
-                "--clone-ignored {}: already in the graft (a layer of graft.toml?)",
-                p.display()
-            );
+            bail!("--clone-ignored {}: already in the graft", p.display());
         }
         if let Some(parent) = dst.parent() {
             std::fs::create_dir_all(parent)
@@ -710,6 +709,7 @@ fn new_virtual(
             &base,
             args.from.as_deref(),
             blueprint.as_ref().and_then(|b| b.layers.as_deref()),
+            &[],
         )
     })?;
     let mut out = Output::default();
@@ -853,6 +853,9 @@ fn measure(
     want_disk: bool,
     warnings: &mut Vec<String>,
 ) -> (Option<usize>, Option<u64>, Option<String>) {
+    if g.state == GraftState::Created {
+        return (None, None, Some("creating".to_owned()));
+    }
     let Ctx {
         home,
         located,
@@ -935,7 +938,10 @@ pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
     let grafts = located.store.grafts()?;
     let mut out = Output::default();
     // Asking graftd also restarts it (and so remounts) after a crash.
-    let mounted: Option<Vec<GraftName>> = if grafts.iter().any(|g| g.backend.is_virtual()) {
+    let mounted: Option<Vec<GraftName>> = if grafts
+        .iter()
+        .any(|g| g.backend.is_virtual() && g.state != GraftState::Created)
+    {
         match daemon(home, &mut out).and_then(|mut c| Ok(c.mounts()?)) {
             Ok(list) => Some(
                 list.into_iter()

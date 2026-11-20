@@ -89,6 +89,45 @@ fn new_creates_a_clean_working_tree() {
 }
 
 #[test]
+fn ls_reports_creating_without_measuring_an_incomplete_graft() {
+    let s = Setup::new();
+    let repo = graft_root::Repo::discover(s.repo.path()).unwrap();
+    let head = repo.head_commit().unwrap();
+    s.store()
+        .create_graft(
+            &"pending".parse().unwrap(),
+            &head,
+            graft_core::BackendKind::Reflink,
+        )
+        .unwrap();
+    let path = s.path("pending");
+    assert!(!path.exists());
+
+    // The record is visible both before checkout and while the path is
+    // being populated. Neither state is ready for a Git or disk probe.
+    for checkout_exists in [false, true] {
+        if checkout_exists {
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join("partial"), "still copying\n").unwrap();
+        }
+        s.run(&["ls"])
+            .success()
+            .stdout(predicate::str::contains("created"))
+            .stdout(predicate::str::contains("creating"))
+            .stderr(predicate::str::is_empty());
+        for args in [&["ls", "--json"][..], &["ls", "--json", "--no-disk"]] {
+            let out = s.stdout(args);
+            let report: serde_json::Value = serde_json::from_str(&out).unwrap();
+            let row = &report["grafts"][0];
+            assert_eq!(row["state"], "created", "{row}");
+            assert!(row["changed"].is_null(), "{row}");
+            assert!(row["disk_bytes"].is_null(), "{row}");
+            assert_eq!(row["note"], "creating", "{row}");
+        }
+    }
+}
+
+#[test]
 fn new_from_a_ref() {
     let s = Setup::new();
     let first = git_out(s.repo.path(), &["rev-parse", "HEAD~1"]);

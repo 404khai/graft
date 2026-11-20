@@ -155,6 +155,54 @@ fn builds_once_and_reuses_the_layer() {
 }
 
 #[test]
+fn clone_ignored_overrides_a_layer_at_the_same_path() {
+    let f = Fixture::new();
+    let deps = f.repo.path().join("deps");
+    std::fs::create_dir(&deps).unwrap();
+    std::fs::write(deps.join("copy"), "from Root\n").unwrap();
+    f.stdout(&["trust"]);
+
+    for name in ["cold", "warm"] {
+        let out = f.stdout(&["new", name, "--clone-ignored", "deps/", "--json"]);
+        let report: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(report["layers"], serde_json::json!([]), "{report}");
+        assert_eq!(report["cloned"][0]["path"], "deps", "{report}");
+        assert_eq!(
+            std::fs::read_to_string(f.path(name).join("deps/copy")).unwrap(),
+            "from Root\n"
+        );
+        if name == "cold" {
+            assert!(f.builds().is_empty(), "the overridden layer built");
+            assert!(f.store().layers().unwrap().is_empty());
+            f.run(&["new", "normal"]).success();
+        }
+    }
+    assert_eq!(f.builds(), ["normal"]);
+    assert_eq!(f.store().layers().unwrap()[0].refs, 1);
+}
+
+#[test]
+fn clone_ignored_refuses_nested_layer_overlaps() {
+    let spec = graft_toml(
+        "mkdir -p deps/child",
+        Some("echo ran >> \"$GRAFT_E2E_BUILD_LOG\""),
+    )
+    .replace("path = \"deps\"", "path = \"deps/child\"");
+    let f = Fixture::with_toml(&spec);
+    std::fs::create_dir_all(f.repo.path().join("deps/child/grandchild")).unwrap();
+    f.run(&["trust"]).success();
+    for path in ["deps", "deps/child/grandchild"] {
+        f.run(&["new", "a", "--clone-ignored", path])
+            .failure()
+            .stderr(predicate::str::contains(format!(
+                "--clone-ignored {path}: overlaps layer deps/child"
+            )));
+    }
+    assert!(f.builds().is_empty(), "planning ran a toolchain command");
+    assert!(f.store().grafts().unwrap().is_empty());
+}
+
+#[test]
 fn writes_to_a_layer_stay_private_to_the_graft() {
     let f = Fixture::new();
     f.stdout(&["trust"]);
