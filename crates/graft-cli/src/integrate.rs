@@ -531,6 +531,87 @@ fn commit_diffs(dir: &Path, parent: &str, commit: &str) -> anyhow::Result<Vec<Fi
     Ok(diffs)
 }
 
+/// Runs git in `dir` with `input` on stdin; its stdout.
+fn git_with_input(dir: &Path, args: &[&std::ffi::OsStr], input: &[u8]) -> anyhow::Result<Vec<u8>> {
+    use std::io::Write as _;
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let mut stdin = child.stdin.take().context("opening git input")?;
+    let output = std::thread::scope(|scope| -> anyhow::Result<_> {
+        let writer = scope.spawn(move || stdin.write_all(input));
+        let output = child.wait_with_output()?;
+        writer
+            .join()
+            .map_err(|_| anyhow::anyhow!("git input writer panicked"))??;
+        Ok(output)
+    })?;
+    anyhow::ensure!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(output.stdout)
+}
+
+/// Converts the graft's working-file contents in `diffs` to the target's:
+/// cleaned with the graft's filters, then smudged with the target's.
+fn target_filters(source: &Path, target: &Path, diffs: &mut [FileDiff]) -> anyhow::Result<()> {
+    for diff in diffs {
+        if diff.mode == 0o120_000 {
+            continue;
+        }
+        let path = diff.change.path.as_os_str();
+        for bytes in [&mut diff.old, &mut diff.new].into_iter().flatten() {
+            let blob = git_with_input(
+                source,
+                &[
+                    "hash-object".as_ref(),
+                    "-w".as_ref(),
+                    "--stdin".as_ref(),
+                    "--path".as_ref(),
+                    path,
+                ],
+                bytes,
+            )?;
+            let blob = String::from_utf8(blob)?;
+            let clean = git_with_input(
+                source,
+                &["cat-file".as_ref(), "blob".as_ref(), blob.trim().as_ref()],
+                &[],
+            )?;
+            let blob = git_with_input(
+                target,
+                &[
+                    "hash-object".as_ref(),
+                    "-w".as_ref(),
+                    "--stdin".as_ref(),
+                    "--no-filters".as_ref(),
+                ],
+                &clean,
+            )?;
+            let blob = String::from_utf8(blob)?;
+            *bytes = git_with_input(
+                target,
+                &[
+                    "cat-file".as_ref(),
+                    "--filters".as_ref(),
+                    "--path".as_ref(),
+                    path,
+                    blob.trim().as_ref(),
+                ],
+                &[],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// A landing or dry-run summary.
 fn describe_commits(commits: &[String], squash_count: Option<usize>, dry_run: bool) -> String {
     let (verb, count) = squash_count.map_or_else(
@@ -834,6 +915,7 @@ impl Scratch {
             &created.path,
             &["config", "--local", "core.hooksPath", "/dev/null"],
         )?;
+        git(&created.path, &["checkout-index", "--all", "--force"])?;
         Ok(Self {
             backend,
             name,
@@ -982,7 +1064,7 @@ fn replay(
     let mut ran = false;
     for original in originals {
         let parent = replay_parent(dir, &source, original, &mapped, head.as_str())?;
-        let part = commit_diffs(&source, &parent, original)?;
+        let part = commit_diffs(dir, &parent, original)?;
         let applied = apply(dir, &part, &merger)?;
         log_structural(&applied, log);
         if !applied.conflicts.is_empty() {
@@ -1048,11 +1130,12 @@ fn attempt(
                 Err(stop) => return Ok(stop),
             };
         ran |= replay_ran;
-        let pending = if args.squash || originals.is_empty() {
+        let mut pending = if args.squash || originals.is_empty() {
             diffs.clone()
         } else {
             GraftRepo::open(&source)?.diff_since(&git(&source, &["rev-parse", "HEAD"])?.parse()?)?
         };
+        target_filters(&source, &dir, &mut pending)?;
         let applied = time("integrate: apply changes", || {
             apply(&dir, &pending, &merger)
         })?;

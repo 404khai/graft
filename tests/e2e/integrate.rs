@@ -207,6 +207,76 @@ fn integrate_preserves_successful_gate_edits_in_a_final_commit() {
 }
 
 #[test]
+fn integrate_uses_target_filters_when_target_removes_filter() {
+    for mode in ["replay", "pending", "squash"] {
+        let f = Fixture::new(
+            "",
+            &[
+                (".gitattributes", "*.txt filter=caps\n"),
+                ("file.txt", "one\n"),
+            ],
+        );
+        git(
+            f.repo.path(),
+            &["config", "filter.caps.clean", "tr A-Z a-z"],
+        );
+        git(
+            f.repo.path(),
+            &["config", "filter.caps.smudge", "tr a-z A-Z"],
+        );
+        std::fs::write(f.repo.path().join("file.txt"), "ONE\n").unwrap();
+        let dir = f.new_graft("filtered");
+        std::fs::write(dir.join("file.txt"), "TWO\n").unwrap();
+        if mode != "pending" {
+            git(&dir, &["add", "-A"]);
+            git(&dir, &["commit", "-qm", "feat: change filtered file"]);
+        }
+        // The target drops the filter without touching file.txt.
+        let index = f.repo.path().join(".git/attributes-index");
+        let plumb = |args: &[&str]| {
+            let o = Command::new("git")
+                .args(args)
+                .current_dir(f.repo.path())
+                .env("GIT_INDEX_FILE", &index)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "git {args:?}");
+            String::from_utf8(o.stdout).unwrap().trim().to_owned()
+        };
+        plumb(&["read-tree", "land"]);
+        plumb(&["rm", "-q", "--cached", ".gitattributes"]);
+        let tree = plumb(&["write-tree"]);
+        let commit = plumb(&[
+            "commit-tree",
+            &tree,
+            "-p",
+            "land",
+            "-m",
+            "chore: drop filter",
+        ]);
+        plumb(&["update-ref", "refs/heads/land", &commit]);
+        std::fs::remove_file(&index).unwrap();
+        let mut args = vec!["integrate", "filtered", "--onto", "land"];
+        if mode == "squash" {
+            args.push("--squash");
+        }
+        f.ok(&args);
+        assert_eq!(
+            out(f.repo.path(), &["show", "land:file.txt"]),
+            "two\n",
+            "{mode}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("file.txt")).unwrap(),
+            "TWO\n"
+        );
+        f.assert_root_clean();
+    }
+}
+
+#[test]
 fn integrate_replay_uses_worktree_filters_for_both_sides() {
     for crlf in [false, true] {
         let attributes = if crlf {

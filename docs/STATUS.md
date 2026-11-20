@@ -17,6 +17,10 @@ retain the recorded base rather than breaking list/status.
 Registered graft topic branches count as published only when checked out in
 Root or another workspace, not solely in the graft being measured.
 
+Integrate applies the target's filter attributes, not the graft's, when it
+replays commits and applies pending or squashed changes, so a target that
+removed a filter lands the graft's clean contents.
+
 ## Phase 0 — Foundation
 
 Status: done (#1)
