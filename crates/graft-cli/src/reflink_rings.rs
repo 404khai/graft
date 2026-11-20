@@ -24,6 +24,7 @@ const RING_REFS: &str = "refs/worktree/graft/rings/";
 pub(crate) struct Ring {
     pub(crate) label: String,
     pub(crate) commit: String,
+    pub(crate) head: String,
     /// Paths that differ from `HEAD` as it was when the ring was taken.
     pub(crate) entries: usize,
     /// When it was taken (ISO 8601).
@@ -39,6 +40,8 @@ impl Ring {
             "entries": self.entries,
             "at": self.at,
             "commit": self.commit,
+            "head": self.head,
+            "uncommitted_paths": self.entries,
         })
     }
 }
@@ -131,10 +134,12 @@ fn next_label(dir: &Path, prefix: &str) -> anyhow::Result<String> {
 fn info(dir: &Path, label: &str, commit: &str) -> anyhow::Result<Ring> {
     let at = git(dir, None, &["log", "-1", "--format=%cI", commit])?;
     let parent = format!("{commit}^");
+    let head = git(dir, None, &["rev-parse", &parent])?;
     let changed = git(dir, None, &["diff", "--name-only", &parent, commit])?;
     Ok(Ring {
         label: label.to_owned(),
         commit: commit.to_owned(),
+        head,
         entries: changed.lines().filter(|l| !l.is_empty()).count(),
         at,
     })

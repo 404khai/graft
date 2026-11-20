@@ -123,11 +123,11 @@ pub(crate) fn report_failure(code: &str, message: &str, hint: Option<&str>) {
 }
 
 /// Under `graft mcp`, writes how a `graft run` command ended to stderr as
-/// `{"run":{"exit_code","signal","duration_ms"}}`, for `graft_run`'s result.
+/// `{"run":{"exit_code","signal","duration_ms","sandbox"}}`, for `graft_run`.
 pub(crate) fn report_run(
     status: std::process::ExitStatus,
     took: std::time::Duration,
-    sandbox: Option<&crate::run::SandboxReport>,
+    sandbox: &crate::run::SandboxReport,
 ) {
     if !is_mcp() {
         return;
@@ -141,7 +141,7 @@ pub(crate) fn report_run(
             "exit_code": status.code(),
             "signal": signal,
             "duration_ms": u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
-            "sandbox": sandbox.map(|s| serde_json::json!({"denied": s.denied, "hint": s.hint})),
+            "sandbox": {"confined": true, "denied": sandbox.denied, "hint": sandbox.hint},
         }
     });
     let _ = writeln!(std::io::stderr(), "{v}");

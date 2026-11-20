@@ -498,6 +498,16 @@ fn failures_have_codes_and_mcp_hints() {
     ))
     .unwrap();
     assert_eq!(done["exit_code"], 0, "{done}");
+    assert_eq!(
+        done["sandbox"],
+        json!({"confined": true, "denied": [], "hint": null}),
+        "{done}"
+    );
+    assert_eq!(
+        e["sandbox"],
+        json!({"confined": true, "denied": [], "hint": null}),
+        "{e}"
+    );
     assert_eq!(done["stdout"], "fine\n", "{done}");
     let killed = error_of(
         &mut c,

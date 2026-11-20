@@ -5,6 +5,18 @@ Phase checklist for Graft. Acceptance criteria are copied from
 Items marked *target* are performance goals; the PR that meets or misses
 them records the measured number.
 
+Follow-up from the Kinigami field report (ADR 0040): reflink list/status
+derive a published-ancestry display base without changing integration's
+recorded base or prune's existing work-at-risk guard. Status reports committed
+and uncommitted path counts; reflink rings name their HEAD parent and uncommitted delta.
+MCP run results always report a sandbox object with `confined: true` for
+completed confined runs, including success.
+Review hardening: dangling publication refs are skipped, detached registered
+grafts still exclude their own branch, and unborn HEAD or display-base errors
+retain the recorded base rather than breaking list/status.
+Registered graft topic branches count as published only when checked out in
+Root or another workspace, not solely in the graft being measured.
+
 ## Phase 0 — Foundation
 
 Status: done (#1)

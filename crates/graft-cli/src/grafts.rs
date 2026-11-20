@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use anyhow::{Context, bail};
-use graft_core::{BackendKind, GraftHome, GraftName, GraftState};
+use graft_core::{BackendKind, CommitId, GraftHome, GraftName, GraftState};
 use graft_daemon::Client;
 use graft_fs::{FsBackend, GraftSpec, ReflinkBackend, human_bytes};
 use graft_root::graft::{GraftRepo, unified_diff};
@@ -228,8 +228,27 @@ pub(crate) fn find(store: &Store, name: &GraftName) -> anyhow::Result<GraftRecor
     })
 }
 
-fn short(record: &GraftRecord) -> &str {
-    record.base_commit.short(7)
+fn display_base(
+    ctx: &Ctx,
+    record: &GraftRecord,
+    path: &Path,
+    warnings: &mut Vec<String>,
+) -> CommitId {
+    if record.backend.is_virtual() || !path.is_dir() {
+        return record.base_commit.clone();
+    }
+    match GraftRepo::open(path)
+        .and_then(|repo| repo.effective_base(&ctx.located.repo, &record.base_commit))
+    {
+        Ok(base) => base,
+        Err(e) => {
+            warnings.push(format!(
+                "graft {}: cannot determine published base ({e}); using recorded base",
+                record.name
+            ));
+            record.base_commit.clone()
+        }
+    }
 }
 
 /// The backend for a new graft: `--backend`, `$GRAFT_FS`, config, default.
@@ -828,6 +847,7 @@ fn report_layers(applied: &[layers::Applied], out: &mut Output) {
 fn measure(
     ctx: &Ctx,
     g: &GraftRecord,
+    base: &CommitId,
     path: &std::path::Path,
     mounted: Option<&[GraftName]>,
     want_disk: bool,
@@ -859,7 +879,7 @@ fn measure(
         }
     } else if path.is_dir() {
         let changed = backend
-            .diff(&g.name, &g.base_commit)
+            .diff(&g.name, base)
             .map(|c| c.len())
             .map_err(|e| format!("error: {e}"));
         let disk = if want_disk {
@@ -949,13 +969,15 @@ pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
     ]];
     for g in &grafts {
         let path = backend.path(&g.name);
+        let base = display_base(&ctx, g, &path, &mut out.warnings);
         let (up, want_disk) = (mounted.as_deref(), !args.no_disk);
-        let (changed, disk, note) = measure(&ctx, g, &path, up, want_disk, &mut out.warnings);
+        let (changed, disk, note) =
+            measure(&ctx, g, &base, &path, up, want_disk, &mut out.warnings);
         let (registration, disk) = with_registration(&located.repo, g, &path, disk);
         let shown = |v: Option<String>| v.or_else(|| note.clone()).unwrap_or_default();
         rows.push([
             g.name.to_string(),
-            short(g).to_owned(),
+            base.short(7).to_owned(),
             g.state.to_string(),
             changed.map_or_else(|| "-".to_owned(), |c| c.to_string()),
             if args.no_disk {
@@ -966,7 +988,8 @@ pub(crate) fn ls(args: &LsArgs, env: &Environment) -> anyhow::Result<Output> {
         ]);
         listed.push(serde_json::json!({
             "name": g.name.as_str(),
-            "base": g.base_commit.as_str(),
+            "base": base.as_str(),
+            "recorded_base": g.base_commit.as_str(),
             "state": g.state.to_string(),
             "backend": g.backend.to_string(),
             "path": path,
@@ -1023,6 +1046,9 @@ struct StatusView {
     state: String,
     path: std::path::PathBuf,
     base: String,
+    recorded_base: String,
+    committed: Option<usize>,
+    uncommitted: Option<usize>,
     /// `(code, path)`, e.g. `("M", "src/lib.rs")`.
     changes: Vec<(char, String)>,
     /// Why the changes could not be listed.
@@ -1032,12 +1058,26 @@ struct StatusView {
 impl StatusView {
     fn text(&self) -> String {
         let mut out = format!(
-            "graft {} ({}) at {}, base {}\n",
+            "graft {} ({}) at {}, base {}",
             self.name,
             self.state,
             self.path.display(),
             &self.base[..7.min(self.base.len())]
         );
+        if self.base != self.recorded_base {
+            let _ = write!(
+                out,
+                " (recorded {}, advanced by pull)",
+                &self.recorded_base[..7.min(self.recorded_base.len())]
+            );
+        }
+        out.push('\n');
+        if let (Some(committed), Some(uncommitted)) = (self.committed, self.uncommitted) {
+            let _ = writeln!(
+                out,
+                "  committed since base: {committed}; uncommitted: {uncommitted}"
+            );
+        }
         if let Some(note) = self.note {
             let _ = writeln!(out, "  {note}");
         } else if self.changes.is_empty() {
@@ -1055,6 +1095,9 @@ impl StatusView {
             "state": self.state,
             "path": self.path,
             "base": self.base,
+            "recorded_base": self.recorded_base,
+            "committed": self.committed,
+            "uncommitted": self.uncommitted,
             "changes": self
                 .changes
                 .iter()
@@ -1071,11 +1114,15 @@ fn status_one(
     warnings: &mut Vec<String>,
 ) -> anyhow::Result<StatusView> {
     let path = ctx.backend.path(&record.name);
+    let base = display_base(ctx, record, &path, warnings);
     let mut view = StatusView {
         name: record.name.to_string(),
         state: record.state.to_string(),
         path: path.clone(),
-        base: record.base_commit.to_string(),
+        base: base.to_string(),
+        recorded_base: record.base_commit.to_string(),
+        committed: None,
+        uncommitted: None,
         changes: Vec::new(),
         note: None,
     };
@@ -1098,9 +1145,12 @@ fn status_one(
         view.note = Some("working tree is missing; `graft prune --force` removes the record");
         return Ok(view);
     }
+    let repo = GraftRepo::open(&path)?;
+    view.committed = Some(repo.committed_paths(&base)?);
+    view.uncommitted = Some(repo.uncommitted_paths()?.len());
     view.changes = ctx
         .backend
-        .diff(&record.name, &record.base_commit)?
+        .diff(&record.name, &base)?
         .into_iter()
         .map(|c| (c.kind.code(), c.path.display().to_string()))
         .collect();
