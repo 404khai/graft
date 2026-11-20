@@ -466,6 +466,127 @@ fn diff_and_status_report_changes_against_the_base() {
 }
 
 #[test]
+fn published_ancestry_advances_display_base_without_hiding_local_work() {
+    let s = Setup::new();
+    s.run(&["new", "a"]).success();
+    let a = s.path("a");
+    let base = git_out(&a, &["rev-parse", "HEAD"]).trim().to_owned();
+    std::fs::write(s.repo.path().join("upstream.txt"), "published\n").unwrap();
+    git(s.repo.path(), &["add", "-A"]);
+    git(s.repo.path(), &["commit", "-qm", "upstream"]);
+    let published = git_out(s.repo.path(), &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    git(&a, &["checkout", "-B", "main"]);
+    git(&a, &["pull", "--ff-only", "root", "main"]);
+    let listing: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["ls", "--json", "--no-disk"])).unwrap();
+    assert_eq!(listing["grafts"][0]["base"], published);
+    assert_eq!(listing["grafts"][0]["recorded_base"], base);
+    assert_eq!(listing["grafts"][0]["changed"], 0);
+    let text = s.stdout(&["status", "a"]);
+    assert!(
+        text.contains(&format!(
+            "base {} (recorded {}",
+            &published[..7],
+            &base[..7]
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains("committed since base: 0; uncommitted: 0"),
+        "{text}"
+    );
+    let ls = s.stdout(&["ls", "--no-disk"]);
+    assert!(ls.lines().nth(1).unwrap().contains(&published[..7]), "{ls}");
+
+    std::fs::write(a.join("local.txt"), "private\n").unwrap();
+    git(&a, &["add", "-A"]);
+    git(&a, &["commit", "-qm", "local"]);
+    let head = git_out(&a, &["rev-parse", "HEAD"]).trim().to_owned();
+    let status: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["status", "a", "--json"])).unwrap();
+    let view = &status["grafts"][0];
+    assert_eq!(view["base"], published);
+    assert_eq!(view["recorded_base"], base);
+    assert_eq!(view["committed"], 1);
+    assert_eq!(view["uncommitted"], 0);
+    assert_eq!(
+        view["changes"],
+        serde_json::json!([{"kind": "A", "path": "local.txt"}])
+    );
+    assert!(
+        s.stdout(&["status", "a"])
+            .contains("committed since base: 1; uncommitted: 0")
+    );
+    let listing: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["ls", "--json", "--no-disk"])).unwrap();
+    assert_eq!(listing["grafts"][0]["changed"], 1);
+    let ring = s.stdout(&["ring", "a", "clean"]);
+    assert!(
+        ring.contains(&format!(
+            "snapshot of HEAD {} + 0 uncommitted paths vs HEAD",
+            &head[..7]
+        )),
+        "{ring}"
+    );
+    let rings: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["ring", "a", "--list", "--json"])).unwrap();
+    assert_eq!(rings[0]["head"], head);
+    assert_eq!(rings[0]["uncommitted_paths"], 0);
+    assert_eq!(rings[0]["entries"], 0);
+    assert_ne!(rings[0]["commit"], head);
+    std::fs::write(a.join("loose.txt"), "untracked\n").unwrap();
+    let status: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["status", "a", "--json"])).unwrap();
+    assert_eq!(status["grafts"][0]["uncommitted"], 1);
+    let ring: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["ring", "a", "dirty", "--json"])).unwrap();
+    assert_eq!(ring["uncommitted_paths"], 1);
+    assert_eq!(ring["head"], head);
+    std::fs::write(
+        s.repo.path().join("later-upstream.txt"),
+        "published later\n",
+    )
+    .unwrap();
+    git(s.repo.path(), &["add", "-A"]);
+    git(s.repo.path(), &["commit", "-qm", "upstream again"]);
+    let merged_base = git_out(s.repo.path(), &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    git(&a, &["fetch", "root"]);
+    git(&a, &["merge", "--no-edit", "root/main"]);
+    let status: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["status", "a", "--json"])).unwrap();
+    assert_eq!(status["grafts"][0]["base"], merged_base);
+    assert_eq!(status["grafts"][0]["committed"], 1);
+    assert_eq!(status["grafts"][0]["uncommitted"], 1);
+    assert_eq!(s.store().grafts().unwrap()[0].base_commit.as_str(), base);
+}
+
+#[test]
+fn display_base_uses_remote_refs_and_keeps_recorded_base_after_reset() {
+    let s = Setup::new();
+    s.run(&["new", "a"]).success();
+    let a = s.path("a");
+    let base = git_out(&a, &["rev-parse", "HEAD"]).trim().to_owned();
+    std::fs::write(a.join("remote.txt"), "published elsewhere\n").unwrap();
+    git(&a, &["add", "-A"]);
+    git(&a, &["commit", "-qm", "remote"]);
+    let published = git_out(&a, &["rev-parse", "HEAD"]).trim().to_owned();
+    git(&a, &["update-ref", "refs/remotes/origin/main", &published]);
+    let status: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["status", "a", "--json"])).unwrap();
+    assert_eq!(status["grafts"][0]["base"], published);
+    assert_eq!(status["grafts"][0]["changes"], serde_json::json!([]));
+    git(&a, &["checkout", "--orphan", "unrelated"]);
+    git(&a, &["commit", "-qm", "unrelated"]);
+    let status: serde_json::Value =
+        serde_json::from_str(&s.stdout(&["status", "a", "--json"])).unwrap();
+    assert_eq!(status["grafts"][0]["base"], base);
+}
+
+#[test]
 fn diff_applies_to_the_base_checkout() {
     let s = Setup::new();
     for (name, contents) in [

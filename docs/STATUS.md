@@ -5,6 +5,13 @@ Phase checklist for Graft. Acceptance criteria are copied from
 Items marked *target* are performance goals; the PR that meets or misses
 them records the measured number.
 
+Follow-up from the Kinigami field report (ADR 0039): reflink list/status
+derive a published-ancestry display base without changing integration's
+recorded base or prune's existing work-at-risk guard. Status reports committed
+and uncommitted path counts; reflink rings name their HEAD parent and uncommitted delta.
+MCP run results always report a sandbox object with `confined: true` for
+completed confined runs, including success.
+
 ## Phase 0 — Foundation
 
 Status: done (#1)

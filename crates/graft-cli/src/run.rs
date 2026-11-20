@@ -119,11 +119,13 @@ pub(crate) fn run(args: &RunArgs, env: &Environment) -> anyhow::Result<(Output, 
     let command = command_or_shell(&args.command);
     let ended = run_in(&ctx, &record, &write, &command, &mut out)?;
     let took = started.elapsed();
-    let sandbox = (!ended.status.success()).then(|| explain_failure(&ended, &command, took));
-    if let Some(s) = &sandbox {
-        out.warnings.extend(s.note());
-    }
-    crate::agent::report_run(ended.status, took, sandbox.as_ref());
+    let sandbox = if ended.status.success() {
+        SandboxReport::default()
+    } else {
+        explain_failure(&ended, &command, took)
+    };
+    out.warnings.extend(sandbox.note());
+    crate::agent::report_run(ended.status, took, &sandbox);
     Ok((out, exit_code(ended.status)))
 }
 

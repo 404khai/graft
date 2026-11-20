@@ -851,6 +851,128 @@ impl GraftRepo {
         Ok(paths)
     }
 
+    /// The published part of HEAD's ancestry, without changing the recorded base.
+    ///
+    /// Root's branches (except this graft's checked-out branch) and the graft's
+    /// remote-tracking refs are publication points. Incomparable maximal bases
+    /// are resolved by breadth-first distance from HEAD.
+    ///
+    /// # Errors
+    ///
+    /// Git reference or history traversal errors.
+    pub fn effective_base(&self, root: &Repo, recorded: &CommitId) -> Result<CommitId> {
+        let head = self
+            .repo
+            .head_id()
+            .map_err(|e| git_err("reading graft HEAD")(boxed(e)))?
+            .detach();
+        let recorded_id = oid(recorded)?;
+        let merge = |a, b| {
+            self.repo
+                .merge_base(a, b)
+                .map(|id| id.map(gix::Id::detach))
+                .map_err(|e| git_err("finding published ancestry")(boxed(e)))
+        };
+        if merge(head, recorded_id)? != Some(recorded_id) {
+            return Ok(recorded.clone());
+        }
+        let common = self.repo.common_dir();
+        let root_common = root.repo.common_dir();
+        let shared = common.canonicalize().map_err(io_err(common))?
+            == root_common.canonicalize().map_err(io_err(root_common))?;
+        let own = if shared {
+            self.repo
+                .head_name()
+                .map_err(|e| git_err("reading graft branch")(boxed(e)))?
+        } else {
+            None
+        };
+        let mut candidates = HashSet::new();
+        for (repo, prefix) in [(&self.repo, "refs/remotes/"), (&root.repo, "refs/heads/")] {
+            let refs = repo
+                .references()
+                .map_err(|e| git_err("listing published refs")(boxed(e)))?;
+            let refs = refs
+                .all()
+                .map_err(|e| git_err("listing published refs")(boxed(e)))?;
+            for reference in refs {
+                let mut reference = reference
+                    .map_err(|e| git_err("reading published ref")(Box::from(e.to_string())))?;
+                if !reference.name().as_bstr().starts_with(prefix.as_bytes())
+                    || (prefix == "refs/heads/"
+                        && own
+                            .as_ref()
+                            .is_some_and(|name| name.as_bstr() == reference.name().as_bstr()))
+                {
+                    continue;
+                }
+                let tip = reference
+                    .peel_to_commit()
+                    .map_err(|e| git_err("reading published commit")(boxed(e)))?
+                    .id;
+                if let Some(base) = merge(head, tip)?
+                    && merge(base, recorded_id)? == Some(recorded_id)
+                {
+                    candidates.insert(base);
+                }
+            }
+        }
+        let mut maximal = candidates.clone();
+        for a in &candidates {
+            for b in &candidates {
+                if a != b && merge(*a, *b)? == Some(*a) {
+                    maximal.remove(a);
+                    break;
+                }
+            }
+        }
+        if maximal.is_empty() {
+            return Ok(recorded.clone());
+        }
+        let walk = self
+            .repo
+            .rev_walk([head])
+            .all()
+            .map_err(|e| git_err("walking graft ancestry")(boxed(e)))?;
+        for item in walk {
+            let item = item.map_err(|e| git_err("walking graft ancestry")(boxed(e)))?;
+            if maximal.contains(&item.id) {
+                return to_commit_id(item.id);
+            }
+        }
+        Ok(recorded.clone())
+    }
+
+    /// Counts paths changed between the base tree and HEAD, without renames.
+    ///
+    /// # Errors
+    ///
+    /// Git object or tree traversal errors.
+    pub fn committed_paths(&self, base: &CommitId) -> Result<usize> {
+        let old = self
+            .repo
+            .find_tree(self.tree_of(base)?)
+            .map_err(|e| git_err("reading base tree")(boxed(e)))?;
+        let new = self
+            .repo
+            .head_tree()
+            .map_err(|e| git_err("reading HEAD tree")(boxed(e)))?;
+        let mut count = 0;
+        old.changes()
+            .map_err(|e| git_err("starting committed diff")(boxed(e)))?
+            .options(|o| {
+                o.track_rewrites(None);
+            })
+            .for_each_to_obtain_tree(&new, |change| {
+                if !change.entry_mode().is_tree() {
+                    count += 1;
+                }
+                Ok(std::ops::ControlFlow::Continue(()))
+            })
+            .map_err(|e| git_err("comparing committed trees")(boxed(e)))?;
+        Ok(count)
+    }
+
     /// Every path that differs between `base` and the working tree,
     /// whether committed in the graft or not. Ignored files are excluded.
     ///

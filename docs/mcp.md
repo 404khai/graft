@@ -135,6 +135,14 @@ Show, turn on or turn off Graft's anonymous usage telemetry. It is off unless th
 
 Show what changed in a graft since its base, as JSON {root, version, grafts: [...]}, each with its changes ({kind: A|M|D|..., path}). Without name, every graft. (read-only)
 
+List and status report `base` (effective published ancestry) and
+`recorded_base` (the unchanged creation/rebase base). For reflink grafts,
+status also reports `committed` (paths changed between effective base and
+HEAD) and `uncommitted` (staged, unstaged, and nonignored untracked paths
+against HEAD). These counts can overlap; they are not additive. Virtual
+grafts keep their recorded base and delta-derived changes, with null split
+counts. Integration, diff, Radar, and prune retain their existing semantics.
+
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `name` | string | no | Graft name: lowercase letters, digits and hyphens, at most 40 characters. |
@@ -149,7 +157,7 @@ Show a graft's changes as a unified diff. (read-only)
 
 ### `graft_run`
 
-Run a command confined to a graft: it can only write inside the graft (and its private TMPDIR), with the graft's blueprint environment. The command is an argument list, not a shell line; in ["sh", "-c", ...] a pipeline's status is its last command's, so use set -o pipefail. Returns JSON {exit_code, signal, stdout, stderr, duration_ms, timed_out, sandbox}; a non-zero exit, a signal or a timeout is a tool error with code command_failed or timed_out and the same fields. On a failure, sandbox is {denied, hint}: denied lists the paths outside the graft the sandbox refused writes to (macOS), so a failure the sandbox caused is not mistaken for a bug; hint says how to allow them.
+Run a command confined to a graft: it can only write inside the graft (and its private TMPDIR), with the graft's blueprint environment. The command is an argument list, not a shell line; in ["sh", "-c", ...] a pipeline's status is its last command's, so use set -o pipefail. Returns JSON {exit_code, signal, stdout, stderr, duration_ms, timed_out, sandbox}; a non-zero exit or signal is a tool error with code command_failed and the same fields. For completed runs, sandbox is always {confined: true, denied, hint}, including success (denied: [], hint: null). Unsupported confinement refuses execution, not an unconfined fallback. On failure, denied lists the paths outside the graft the sandbox refused writes to (macOS), so a failure the sandbox caused is not mistaken for a bug; hint says how to allow them. Setup failures and server timeouts return their own errors rather than a completed-run sandbox report.
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -171,6 +179,12 @@ Fork a virtual graft (backend fuse or nfs) in constant time: a new graft with th
 ### `graft_ring`
 
 Checkpoint a graft's changes as a named ring, to restore later with graft_rewind, or list its rings. On a reflink graft a ring is a git snapshot of the working tree (tracked and untracked files; ignored ones such as build outputs are not included) and seq is null. Returns JSON {graft, label, seq, entries, at} (plus commit on reflink grafts), or a list of them with list.
+
+Reflink rings also return `head` (the snapshot commit's parent) and
+`uncommitted_paths` (an explicit alias of `entries`): the path count
+compares the snapshot against that HEAD, not the status base. The ring's
+`commit` identifies the snapshot of HEAD plus uncommitted work, not HEAD
+itself. Taking a ring leaves HEAD and the real index unchanged.
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |

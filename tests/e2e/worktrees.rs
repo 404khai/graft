@@ -122,6 +122,25 @@ fn registered_grafts_are_listed_as_git_worktrees() {
 }
 
 #[test]
+fn status_does_not_treat_the_registered_grafts_own_branch_as_published() {
+    let s = Setup::new(None);
+    let a = s.new_graft("a");
+    let base = out(&a, &["rev-parse", "HEAD"]).trim().to_owned();
+    std::fs::write(a.join("private.txt"), "private\n").unwrap();
+    git(&a, &["add", "-A"]);
+    git(&a, &["commit", "-qm", "private"]);
+    let v: serde_json::Value = serde_json::from_str(&s.ok(&["status", "a", "--json"])).unwrap();
+    assert_eq!(v["grafts"][0]["base"], base);
+    assert_eq!(v["grafts"][0]["recorded_base"], base);
+    assert_eq!(v["grafts"][0]["committed"], 1);
+    assert_eq!(v["grafts"][0]["uncommitted"], 0);
+    let ls: serde_json::Value =
+        serde_json::from_str(&s.ok(&["ls", "--json", "--no-disk"])).unwrap();
+    assert_eq!(ls["grafts"][0]["changed"], 1);
+    s.cmd(&["prune", "a"]).assert().failure();
+}
+
+#[test]
 fn registered_graft_commits_land_on_its_branch_in_root() {
     let s = Setup::new(None);
     let a = s.new_graft("a");

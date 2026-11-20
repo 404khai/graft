@@ -118,8 +118,11 @@ fn reflink_ring(ctx: &Ctx, name: &GraftName, args: &RingArgs) -> anyhow::Result<
     }
     let ring = crate::reflink_rings::ring(&dir, label.as_ref().map(RingLabel::as_str))?;
     let mut out = Output::stdout(format!(
-        "Ringed graft {name} as {} ({} changed paths; untracked files included, ignored ones not)\n",
-        ring.label, ring.entries
+        "Ringed graft {name} as {}: commit {} (snapshot of HEAD {} + {} uncommitted paths vs HEAD; untracked files included, ignored ones not)\n",
+        ring.label,
+        &ring.commit[..7],
+        &ring.head[..7],
+        ring.entries
     ));
     if label.is_none() {
         let _ = writeln!(
