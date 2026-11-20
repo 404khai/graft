@@ -49,16 +49,22 @@ platform. Never arguments, names, paths or identifiers.
 graft doctor              # can this machine reflink?
 graft init                # register this repository as a Root
 graft new auth            # a graft checked out at HEAD
-cd "$(graft path auth)"   # work in it like any git checkout
+graft exec auth -- git status   # run one command without changing directories
 graft ls                  # name, base, state, changed files, unshared disk
 graft status auth         # what changed since the base
 graft diff auth           # as a unified diff
 graft prune auth          # refuses if work would be lost; --force to discard
 ```
 
-On macOS graft paths live under `~/.graft`. Installs from before 0.2 keep
-using `~/Library/Application Support/graft`, which has a space: quote those
-paths (`cd "$(graft path auth)"`), or set `GRAFT_HOME`.
+From outside the repository, use `graft exec auth --root /path/to/repo --
+git status`. The command starts at the top of the graft, even if its path
+contains spaces, and its exit status is returned unchanged. Arguments
+after `--` are passed directly, without a shell. Like changing directories,
+`graft exec` does not restrict writes; use `graft run` to confine an agent.
+
+To stay in the graft for several commands, use `cd "$(graft path auth)"`.
+Keep the quotes: older macOS installs may still use
+`~/Library/Application Support/graft` instead of `~/.graft`.
 
 Checkpoint a graft and go back to it; a rewind can itself be undone:
 

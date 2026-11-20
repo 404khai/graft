@@ -999,6 +999,28 @@ mod fuse {
     }
 
     #[test]
+    fn exec_remounts_a_virtual_graft_after_daemon_stop() {
+        require_fuse();
+        let home = tempfile::tempdir().unwrap();
+        let _daemon = Daemon(home.path());
+        let repo = crate::git_repo();
+        init(home.path(), repo.path());
+        let path = new_fuse(home.path(), repo.path(), "exec");
+        std::fs::write(path.join("kept.txt"), "kept\n").unwrap();
+        graft_d(home.path())
+            .args(["daemon", "stop"])
+            .assert()
+            .success();
+        assert!(!path.join("README.md").is_file());
+        graft_d(home.path())
+            .current_dir(repo.path())
+            .args(["exec", "exec", "--", "cat", "kept.txt"])
+            .assert()
+            .success()
+            .stdout("kept\n");
+    }
+
+    #[test]
     fn prune_unmounts_lazily_when_busy() {
         require_fuse();
         let home = tempfile::tempdir().unwrap();

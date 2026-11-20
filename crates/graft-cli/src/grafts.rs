@@ -189,8 +189,12 @@ pub(crate) struct Ctx {
 }
 
 pub(crate) fn open(env: &Environment) -> anyhow::Result<Ctx> {
+    open_at(env, Path::new("."))
+}
+
+pub(crate) fn open_at(env: &Environment, start: &Path) -> anyhow::Result<Ctx> {
     let home = env.require_home()?;
-    let located = locate(home, Path::new("."))?;
+    let located = locate(home, start)?;
     let root_dir = home.root_dir(&located.record.id);
     Ok(Ctx {
         home: home.clone(),
