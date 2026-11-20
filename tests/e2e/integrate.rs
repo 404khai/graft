@@ -301,6 +301,51 @@ fn integrate_replay_uses_worktree_filters_for_both_sides() {
 }
 
 #[test]
+fn integrate_history_links_layers_once_across_replay_and_pending_conflicts() {
+    let resolver = "[integrate]\nresolver = 'test -f deps/lock && printf resolved > v.txt'\ntest = 'test -f deps/lock'\n";
+    let f = Fixture::new(
+        &format!("{LAYER}{resolver}"),
+        &[
+            ("deps.lock", "v1\n"),
+            (".gitignore", "deps/\n"),
+            ("v.txt", "base\n"),
+        ],
+    );
+    let dir = f.new_graft("history");
+    for value in ["first\n", "second\n"] {
+        std::fs::write(dir.join("v.txt"), value).unwrap();
+        git(&dir, &["commit", "-qam", value.trim()]);
+    }
+    std::fs::write(dir.join("v.txt"), "pending\n").unwrap();
+    let other = f.new_graft("other");
+    std::fs::write(other.join("v.txt"), "target\n").unwrap();
+    f.ok(&["integrate", "other", "--onto", "land"]);
+    let target = f.rev("land");
+    let (report, stderr) = f.integrate_timed(&["history", "--onto", "land"]);
+    assert!(report.contains("landed   history → land"), "{report}");
+    assert_eq!(steps(&stderr, "integrate: link layers"), 1);
+    assert_eq!(out(f.repo.path(), &["show", "land:v.txt"]), "resolved");
+    assert_eq!(
+        out(
+            f.repo.path(),
+            &["rev-list", "--count", &format!("{target}..land")]
+        )
+        .trim(),
+        "3"
+    );
+    assert_eq!(
+        out(f.repo.path(), &["ls-tree", "--name-only", "land", "deps"]),
+        ""
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("v.txt")).unwrap(),
+        "pending\n"
+    );
+    assert_eq!(f.scratch_dirs(), 0);
+    f.assert_root_clean();
+}
+
+#[test]
 fn integrate_preserves_order_messages_authors_and_reachability() {
     for moved in [false, true] {
         let f = Fixture::new("", &[]);

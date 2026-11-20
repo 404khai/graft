@@ -220,6 +220,9 @@ Status: done (PR #24, ADR 0016). Radar runs in the CLI over every live graft's c
 
 - [x] Preserve ordered graft commits and authors by default; explicit CLI/MCP
   squash, candidate/landed hash lists, and atomic final-tree gate (ADR 0039).
+  Regression coverage includes merge topology and final trees, filtered replay
+  contents, successful gate edits, disabled scratch Git hooks, and one layer
+  checkout across multiple replay and uncommitted-change conflicts.
 
 Status: done (PR #25, ADR 0017). Integration happens in a scratch reflink checkout of the target's head; Root's working tree is never written except with `--update-checkout`. Pushing a branch and opening a PR is opt-in (`mode = "push"`, `pr = true`), tested offline against a local bare remote and a stand-in `gh`. `graft rebase` works for both backends; for virtual grafts a `rebase` op starts a new op log epoch (`a_virtual_graft_rebases_onto_a_new_head`). Symlinks land as symlinks (`symlinks_land_as_symlinks`).
 

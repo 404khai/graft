@@ -986,8 +986,10 @@ fn replay(
         let applied = apply(dir, &part, &merger)?;
         log_structural(&applied, log);
         if !applied.conflicts.is_empty() {
-            ran = true;
-            link_layers(ctx, head, dir)?;
+            if !ran {
+                link_layers(ctx, head, dir)?;
+                ran = true;
+            }
             if let Some(stop) = resolve(ctx, record, dir, head, &part, &applied, spec, args, log)? {
                 return Ok(Err(stop));
             }
@@ -1056,9 +1058,9 @@ fn attempt(
         })?;
         log_structural(&applied, &mut log);
         if !applied.conflicts.is_empty() {
-            if spec.resolver.is_some() {
-                ran = true;
+            if spec.resolver.is_some() && !ran {
                 link_layers(ctx, head, &dir)?;
+                ran = true;
             }
             if let Some(stop) = resolve(
                 ctx, record, &dir, head, &diffs, &applied, &spec, args, &mut log,
@@ -1066,10 +1068,8 @@ fn attempt(
                 return Ok(stop);
             }
         }
-        if spec.test.is_some() {
-            if !ran {
-                link_layers(ctx, head, &dir)?;
-            }
+        if spec.test.is_some() && !ran {
+            link_layers(ctx, head, &dir)?;
             ran = true;
         }
         if let Some(stop) = gate(&dir, &spec, &mut log)? {
