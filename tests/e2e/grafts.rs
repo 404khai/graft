@@ -1,5 +1,6 @@
 //! `graft new`, `ls`, `path`, `status`, `diff` and `prune`.
 
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -453,15 +454,102 @@ fn diff_and_status_report_changes_against_the_base() {
     let diff = s.stdout(&["diff", "d"]);
     assert!(diff.contains("+world\n"), "{diff}");
     assert!(
-        diff.contains("deleted file\n--- a/src/lib.rs\n+++ /dev/null\n"),
+        diff.contains("deleted file mode 100644\n--- a/src/lib.rs\n+++ /dev/null\n"),
         "{diff}"
     );
     assert!(
-        diff.contains("new file\n--- /dev/null\n+++ b/new.txt\n"),
+        diff.contains("new file mode 100644\n--- /dev/null\n+++ b/new.txt\n"),
         "{diff}"
     );
     let ls = s.stdout(&["ls"]);
     assert!(ls.lines().nth(1).unwrap().contains(" 3 "), "{ls}");
+}
+
+#[test]
+fn diff_applies_to_the_base_checkout() {
+    let s = Setup::new();
+    for (name, contents) in [
+        ("empty-deleted", ""),
+        ("deleted.sh", "#!/bin/sh\necho old\n"),
+    ] {
+        std::fs::write(s.repo.path().join(name), contents).unwrap();
+    }
+    std::fs::set_permissions(
+        s.repo.path().join("deleted.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("README.md", s.repo.path().join("old-link")).unwrap();
+    git(s.repo.path(), &["add", "-A"]);
+    git(s.repo.path(), &["commit", "-qm", "diff base"]);
+    s.run(&["new", "patch"]).success();
+    let path = s.path("patch");
+    assert_eq!(s.stdout(&["diff", "patch"]), "");
+    for name in ["src/lib.rs", "empty-deleted", "deleted.sh", "old-link"] {
+        std::fs::remove_file(path.join(name)).unwrap();
+    }
+    for (name, contents) in [
+        ("README.md", "hello\nworld\n"),
+        ("AUTH.md", "new\n"),
+        ("empty-added", ""),
+        ("no-newline", "new"),
+        ("added.sh", "#!/bin/sh\necho new\n"),
+    ] {
+        std::fs::write(path.join(name), contents).unwrap();
+    }
+    std::fs::set_permissions(
+        path.join("added.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("AUTH.md", path.join("new-link")).unwrap();
+    let diff = s.stdout(&["diff", "patch"]);
+    for header in [
+        "new file mode 100644\n",
+        "new file mode 100755\n",
+        "new file mode 120000\n",
+        "deleted file mode 100755\n",
+        "deleted file mode 120000\n",
+        "@@ -0,0 +1,1 @@\n+new\n",
+        "@@ -1,1 +0,0 @@\n-pub fn a() {}\n",
+    ] {
+        assert!(diff.contains(header), "missing {header:?}: {diff}");
+    }
+    let output_file = s.home.path().join("diff.patch");
+    std::fs::write(&output_file, diff).unwrap();
+    git_out(
+        s.repo.path(),
+        &["apply", "--check", output_file.to_str().unwrap()],
+    );
+    git_out(s.repo.path(), &["apply", output_file.to_str().unwrap()]);
+    for name in [
+        "README.md",
+        "AUTH.md",
+        "empty-added",
+        "no-newline",
+        "added.sh",
+    ] {
+        assert_eq!(
+            std::fs::read(s.repo.path().join(name)).unwrap(),
+            std::fs::read(path.join(name)).unwrap(),
+            "{name}"
+        );
+    }
+    for name in ["src/lib.rs", "empty-deleted", "deleted.sh", "old-link"] {
+        assert!(std::fs::symlink_metadata(s.repo.path().join(name)).is_err());
+    }
+    assert_eq!(
+        std::fs::metadata(s.repo.path().join("added.sh"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o755
+    );
+    assert_eq!(
+        std::fs::read_link(s.repo.path().join("new-link")).unwrap(),
+        Path::new("AUTH.md")
+    );
 }
 
 #[test]
