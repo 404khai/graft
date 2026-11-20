@@ -88,6 +88,7 @@ fn run_toolchain(repo: &Repo, command: &str) -> anyhow::Result<Vec<u8>> {
 
 /// Works out each layer's key for a graft of `base`, refusing before
 /// anything is created if a command would have to run without approval.
+/// A path explicitly cloned from Root replaces a layer at the same path.
 pub(crate) fn plan(
     repo: &Repo,
     store: &Store,
@@ -95,12 +96,26 @@ pub(crate) fn plan(
     base: &CommitId,
     from: Option<&str>,
     only: Option<&[PathBuf]>,
+    cloned: &[PathBuf],
 ) -> anyhow::Result<Vec<Planned>> {
     let Some(mut specs) = layers_at(repo, base)? else {
         return Ok(Vec::new());
     };
     if let Some(only) = only {
         specs.retain(|s| only.contains(&s.path));
+    }
+    specs.retain(|s| !cloned.contains(&s.path));
+    for spec in &specs {
+        if let Some(path) = cloned
+            .iter()
+            .find(|p| p.starts_with(&spec.path) || spec.path.starts_with(p))
+        {
+            bail!(
+                "--clone-ignored {}: overlaps layer {}; use the exact layer path or omit the overlap",
+                path.display(),
+                spec.path.display(),
+            );
+        }
     }
     // Approval is checked first, so an untrusted toolchain command never runs.
     let trusted = |spec: &LayerSpec| store.is_trusted(&hash_of(spec));

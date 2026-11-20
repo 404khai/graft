@@ -900,6 +900,7 @@ fn link_layers(ctx: &Ctx, head: &CommitId, dir: &Path) -> anyhow::Result<()> {
         head,
         None,
         None,
+        &[],
     ) {
         time("integrate: link layers", || {
             crate::layers::link_ready(&planned, &ctx.layers, dir)

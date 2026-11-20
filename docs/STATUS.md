@@ -58,6 +58,8 @@ Status: done (#3, #4)
   - Removal retries a bounded number of times when a pass leaves a directory not empty (seen on the macOS runner with the 200k-file large fixture), and, between attempts, sweeps what is left by listing it all before deleting any of it (on the macOS runner `remove_dir_all` kept missing the same directory pass after pass); otherwise it names what is left: `backend::tests::*`, `reflink_backend::prunes_a_graft_with_many_files_and_nothing_else` (20,000 files, a read-only directory, a symlink to Root).
 - [x] Copy fallback works on ext4 and prints a single clear warning.
   - `grafts::warns_exactly_once_when_copying_instead_of_reflinking` passes on the Ubuntu runner (ext4); the `bench` run on an ext4 loop mount printed exactly one warning and copied the 1 GiB tree correctly (`graft ls`: 1.0 GiB). `warns_once_when_graft_home_is_on_another_filesystem` covers the cross-filesystem case.
+- [x] `graft ls` shows `creating` instead of probing disk use or changes before a graft is ready.
+  - `grafts::ls_reports_creating_without_measuring_an_incomplete_graft`.
 
 ## Phase 3 — Layer cache
 
@@ -71,6 +73,8 @@ Status: done (#5)
   - `layers::gc_never_removes_a_referenced_layer`, `layers::gc_racing_graft_new_never_strands_a_graft` (6 `graft new` and 6 `graft gc` processes at once; 0 failures in 15 local runs), store and foreign-key tests.
 - [x] Time from `graft new` to first passing `npm test` on the fixture is < 3 s after the first graft (*target*).
   - 0.13–0.16 s on Apple Silicon (APFS), measured by the Node e2e test.
+- [x] `graft new --clone-ignored` uses Root's directory instead of a layer at the same path, cold or cached. Nested overlaps are refused before creation.
+  - `layers::clone_ignored_overrides_a_layer_at_the_same_path`, `layers::clone_ignored_refuses_nested_layer_overlaps`.
 
 ## Phase 4 — Benchmark harness
 

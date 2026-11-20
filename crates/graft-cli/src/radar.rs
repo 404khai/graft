@@ -332,6 +332,7 @@ fn run_check(
             base,
             None,
             None,
+            &[],
         ) {
             crate::layers::link_ready(&planned, &ctx.layers, &dir)?;
         }
