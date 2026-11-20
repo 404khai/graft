@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read as _;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -743,6 +744,8 @@ pub struct Change {
 pub struct FileDiff {
     /// The change.
     pub change: Change,
+    /// Git file mode of the current version, or the base version if deleted.
+    pub mode: u32,
     /// The base version, in working-tree form (filters applied); `None` if
     /// added.
     pub old: Option<Vec<u8>>,
@@ -1023,12 +1026,27 @@ impl GraftRepo {
             .map_err(|e| git_err("loading git filters")(boxed(e)))?;
         let mut out = Vec::with_capacity(changes.len());
         for change in changes {
+            let entry = tree
+                .lookup_entry_by_path(&change.path)
+                .map_err(|e| git_err("reading the base tree")(boxed(e)))?;
+            let mode = if change.kind == ChangeKind::Deleted {
+                entry
+                    .as_ref()
+                    .map_or(0o100_644, |entry| u32::from(entry.mode().value()))
+            } else {
+                let path = self.workdir.join(&change.path);
+                let meta = std::fs::symlink_metadata(&path).map_err(io_err(&path))?;
+                if meta.file_type().is_symlink() {
+                    0o120_000
+                } else if meta.permissions().mode() & 0o100 != 0 {
+                    0o100_755
+                } else {
+                    0o100_644
+                }
+            };
             let old = if change.kind == ChangeKind::Added {
                 None
             } else {
-                let entry = tree
-                    .lookup_entry_by_path(&change.path)
-                    .map_err(|e| git_err("reading the base tree")(boxed(e)))?;
                 match entry {
                     Some(entry) if !entry.mode().is_commit() => {
                         let blob = self
@@ -1057,7 +1075,12 @@ impl GraftRepo {
                 ChangeKind::Deleted => None,
                 _ => Some(read_worktree(&self.workdir.join(&change.path))?),
             };
-            out.push(FileDiff { change, old, new });
+            out.push(FileDiff {
+                change,
+                mode,
+                old,
+                new,
+            });
         }
         Ok(out)
     }
@@ -1078,35 +1101,61 @@ fn read_worktree(path: &Path) -> Result<Vec<u8>> {
 /// Renders a [`FileDiff`] in git's unified diff format.
 #[must_use]
 pub fn unified_diff(diff: &FileDiff) -> String {
-    use gix::diff::blob::unified_diff::{
-        ConsumeBinaryHunk, ConsumeBinaryHunkDelegate, ContextSize, HunkHeader,
-    };
+    use gix::diff::blob::unified_diff::{ConsumeHunk, ContextSize, DiffLineKind, HunkHeader};
     use gix::diff::blob::{Algorithm, Diff, InternedInput, UnifiedDiff};
     use std::fmt::Write as _;
 
     struct Collect(String);
-    impl ConsumeBinaryHunkDelegate for Collect {
-        fn consume_binary_hunk(
+    impl ConsumeHunk for Collect {
+        type Out = Self;
+
+        fn consume_hunk(
             &mut self,
-            _: HunkHeader,
-            header: &str,
-            hunk: &[u8],
+            mut header: HunkHeader,
+            lines: &[(DiffLineKind, &[u8])],
         ) -> std::io::Result<()> {
-            self.0.push_str(header);
-            self.0.push_str(&String::from_utf8_lossy(hunk));
+            if header.before_hunk_len == 0 {
+                header.before_hunk_start = header.before_hunk_start.saturating_sub(1);
+            }
+            if header.after_hunk_len == 0 {
+                header.after_hunk_start = header.after_hunk_start.saturating_sub(1);
+            }
+            writeln!(self.0, "{header}").map_err(std::io::Error::other)?;
+            for (kind, content) in lines {
+                self.0.push(match kind {
+                    DiffLineKind::Context => ' ',
+                    DiffLineKind::Add => '+',
+                    DiffLineKind::Remove => '-',
+                });
+                self.0.push_str(&String::from_utf8_lossy(content));
+                if !content.ends_with(b"\n") {
+                    self.0.push_str("\n\\ No newline at end of file\n");
+                }
+            }
             Ok(())
+        }
+
+        fn finish(self) -> Self::Out {
+            self
         }
     }
 
     let path = diff.change.path.display();
     let mut out = format!("diff --git a/{path} b/{path}\n");
     match diff.change.kind {
-        ChangeKind::Added => out.push_str("new file\n"),
-        ChangeKind::Deleted => out.push_str("deleted file\n"),
+        ChangeKind::Added => {
+            let _ = writeln!(out, "new file mode {:o}", diff.mode);
+        }
+        ChangeKind::Deleted => {
+            let _ = writeln!(out, "deleted file mode {:o}", diff.mode);
+        }
         ChangeKind::Modified => {}
     }
     let old = diff.old.as_deref().unwrap_or_default();
     let new = diff.new.as_deref().unwrap_or_default();
+    if old.is_empty() && new.is_empty() {
+        return out;
+    }
     let binary = |d: &[u8]| d[..d.len().min(8000)].contains(&0);
     let (a, b) = (
         if diff.old.is_some() {
@@ -1128,7 +1177,7 @@ pub fn unified_diff(diff: &FileDiff) -> String {
     let input = InternedInput::new(old, new);
     let mut d = Diff::compute(Algorithm::Histogram, &input);
     d.postprocess_lines(&input);
-    let sink = ConsumeBinaryHunk::new(Collect(String::new()), "\n");
+    let sink = Collect(String::new());
     match UnifiedDiff::new(&d, &input, sink, ContextSize::symmetrical(3)).consume() {
         Ok(Collect(hunks)) => out.push_str(&hunks),
         Err(e) => {

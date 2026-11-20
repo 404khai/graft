@@ -254,6 +254,8 @@ Diagnostics (ADR 0030, `feat/diagnostics-report`): `graft doctor --json`; `graft
 
 ## Phase 16 — Materialize, hardening and first release
 
+`graft diff` patches preserve added/deleted file modes and empty-side hunk offsets; a git-apply round-trip covers regular files, executables, symlinks and empty files.
+
 Status: in review (`chore/first-release`, ADR 0020). Chunk-level copy-up is not done: no measurement shows whole-file copy-up as a cost (it stays with the deferred performance work). Licensed MIT, the maintainer's choice.
 
 - [x] Materialize round-trips: materialize → edit → re-import produces the expected delta.
