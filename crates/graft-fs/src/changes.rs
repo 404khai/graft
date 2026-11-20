@@ -188,11 +188,11 @@ struct Compare<'a> {
     blobs: &'a BlobStore,
 }
 
-/// A file as git sees it: contents and the executable bit.
+/// A file as git sees it: contents and mode.
 #[derive(Debug, PartialEq, Eq)]
 struct GitFile {
     bytes: Vec<u8>,
-    exec: bool,
+    mode: u32,
 }
 
 fn read_err(path: &[u8]) -> impl FnOnce(Errno) -> ChangesError + '_ {
@@ -235,12 +235,16 @@ impl Compare<'_> {
                 };
                 Some(GitFile {
                     bytes,
-                    exec: mode & 0o111 != 0,
+                    mode: if mode & 0o100 != 0 {
+                        0o100_755
+                    } else {
+                        0o100_644
+                    },
                 })
             }
             Some(LowerKind::Symlink { target }) => Some(GitFile {
                 bytes: target,
-                exec: false,
+                mode: 0o120_000,
             }),
             Some(LowerKind::Dir { .. }) | None => None,
         })
@@ -263,12 +267,16 @@ impl Compare<'_> {
                 };
                 Some(GitFile {
                     bytes,
-                    exec: mode & 0o111 != 0,
+                    mode: if mode & 0o100 != 0 {
+                        0o100_755
+                    } else {
+                        0o100_644
+                    },
                 })
             }
             Some(Node::Symlink { target, .. }) => Some(GitFile {
                 bytes: target,
-                exec: false,
+                mode: 0o120_000,
             }),
             Some(Node::Dir { .. }) | None => None,
         })
@@ -286,6 +294,7 @@ impl Compare<'_> {
                 _ => continue,
             };
             out.push(FileDiff {
+                mode: new.as_ref().or(old.as_ref()).map_or(0o100_644, |f| f.mode),
                 change: Change {
                     path: graft_core::path_from_bytes(path.clone()),
                     kind,

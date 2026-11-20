@@ -338,7 +338,7 @@ fn renders_unified_diffs() {
     let text: String = diffs.iter().map(unified_diff).collect();
     assert!(text.contains("diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1,1 +1,2 @@\n hello\n+world\n"), "{text}");
     assert!(
-        text.contains("new file\nBinary files /dev/null and b/bin.dat differ\n"),
+        text.contains("new file mode 100644\nBinary files /dev/null and b/bin.dat differ\n"),
         "{text}"
     );
 }
