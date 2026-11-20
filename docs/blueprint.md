@@ -210,7 +210,7 @@ JSON includes `commits` and `commit_count`, retaining `commit` for the final
 hash. Dry runs report candidate hashes without landing them.
 The MCP equivalent is `squash: true`. There is deliberately no Blueprint
 squash setting: `mode` selects the destination, not whether to discard history
-([ADR 0039](decisions/0039-integrate-history.md)).
+([ADR 0041](decisions/0041-integrate-history.md)).
 
 ```toml
 [integrate]

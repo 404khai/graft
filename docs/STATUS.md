@@ -219,7 +219,7 @@ Status: done (PR #24, ADR 0016). Radar runs in the CLI over every live graft's c
 ## Phase 13 — Integrate
 
 - [x] Preserve ordered graft commits and authors by default; explicit CLI/MCP
-  squash, candidate/landed hash lists, and atomic final-tree gate (ADR 0039).
+  squash, candidate/landed hash lists, and atomic final-tree gate (ADR 0041).
   Regression coverage includes merge topology and final trees, filtered replay
   contents, successful gate edits, disabled scratch Git hooks, and one layer
   checkout across multiple replay and uncommitted-change conflicts.

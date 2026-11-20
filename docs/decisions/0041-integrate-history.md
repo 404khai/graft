@@ -1,4 +1,4 @@
-# 0039: Preserve integration history
+# 0041: Preserve integration history
 Status: accepted
 ## Context
 Squashing by default discards the ordered commits agents and reviewers rely on.
