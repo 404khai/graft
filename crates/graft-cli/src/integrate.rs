@@ -1075,8 +1075,10 @@ fn attempt(
         if let Some(stop) = gate(&dir, &spec, &mut log)? {
             return Ok(stop);
         }
-        let (msg_path, extra) =
-            commit_pending(ctx, record, entry, &dir, args.squash || !pending.is_empty())?;
+        let needed = args.squash
+            || !pending.is_empty()
+            || !git(&dir, &["status", "--porcelain"])?.is_empty();
+        let (msg_path, extra) = commit_pending(ctx, record, entry, &dir, needed)?;
         if let Some(extra) = extra {
             commits.push(extra);
         }

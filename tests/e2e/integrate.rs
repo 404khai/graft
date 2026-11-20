@@ -141,6 +141,72 @@ fn integrate_replays_merge_trees_and_keeps_side_commits_reachable() {
 }
 
 #[test]
+fn integrate_preserves_successful_gate_edits_in_a_final_commit() {
+    for moved in [false, true] {
+        for (gate, changed, failed) in [
+            ("true", false, false),
+            (
+                "printf gated > tracked; printf generated > generated",
+                true,
+                false,
+            ),
+            (
+                "printf gated > tracked; printf generated > generated; false",
+                true,
+                true,
+            ),
+        ] {
+            let f = Fixture::new("", &[("tracked", "base\n")]);
+            let dir = f.new_graft("history");
+            std::fs::write(dir.join("tracked"), "source\n").unwrap();
+            git(&dir, &["add", "-A"]);
+            git(&dir, &["commit", "-qm", "feat: source"]);
+            if moved {
+                let other = f.new_graft("other");
+                std::fs::write(other.join("other"), "other\n").unwrap();
+                f.ok(&["integrate", "other", "--onto", "land"]);
+            }
+            let target = f.rev("land");
+            let args = [
+                "integrate",
+                "history",
+                "--onto",
+                "land",
+                "--test",
+                gate,
+                "--json",
+            ];
+            if failed {
+                let result = f.cmd().args(args).output().unwrap();
+                assert!(!result.status.success());
+                assert_eq!(f.rev("land"), target);
+            } else {
+                let result: serde_json::Value = serde_json::from_str(&f.ok(&args)).unwrap();
+                assert_eq!(
+                    result["results"][0]["commit_count"],
+                    if changed { 2 } else { 1 }
+                );
+                assert_eq!(
+                    out(f.repo.path(), &["show", "land:tracked"]),
+                    if changed { "gated" } else { "source\n" }
+                );
+                if changed {
+                    assert_eq!(out(f.repo.path(), &["show", "land:generated"]), "generated");
+                    assert_eq!(out(f.repo.path(), &["show", "land^:tracked"]), "source\n");
+                }
+            }
+            assert_eq!(
+                std::fs::read_to_string(dir.join("tracked")).unwrap(),
+                "source\n"
+            );
+            assert!(!dir.join("generated").exists());
+            assert_eq!(f.scratch_dirs(), 0);
+            f.assert_root_clean();
+        }
+    }
+}
+
+#[test]
 fn integrate_preserves_order_messages_authors_and_reachability() {
     for moved in [false, true] {
         let f = Fixture::new("", &[]);
