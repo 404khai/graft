@@ -137,6 +137,14 @@ fn status_does_not_treat_the_registered_grafts_own_branch_as_published() {
     let ls: serde_json::Value =
         serde_json::from_str(&s.ok(&["ls", "--json", "--no-disk"])).unwrap();
     assert_eq!(ls["grafts"][0]["changed"], 1);
+    git(&a, &["switch", "--detach"]);
+    let detached: serde_json::Value =
+        serde_json::from_str(&s.ok(&["status", "a", "--json"])).unwrap();
+    assert_eq!(detached["grafts"][0]["base"], base);
+    assert_eq!(detached["grafts"][0]["committed"], 1);
+    let ls: serde_json::Value =
+        serde_json::from_str(&s.ok(&["ls", "--json", "--no-disk"])).unwrap();
+    assert_eq!(ls["grafts"][0]["changed"], 1);
     s.cmd(&["prune", "a"]).assert().failure();
 }
 

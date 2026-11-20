@@ -853,7 +853,7 @@ impl GraftRepo {
 
     /// The published part of HEAD's ancestry, without changing the recorded base.
     ///
-    /// Root's branches (except this graft's checked-out branch) and the graft's
+    /// Root's branches (except this graft's registered branch) and the graft's
     /// remote-tracking refs are publication points. Incomparable maximal bases
     /// are resolved by breadth-first distance from HEAD.
     ///
@@ -881,9 +881,8 @@ impl GraftRepo {
         let shared = common.canonicalize().map_err(io_err(common))?
             == root_common.canonicalize().map_err(io_err(root_common))?;
         let own = if shared {
-            self.repo
-                .head_name()
-                .map_err(|e| git_err("reading graft branch")(boxed(e)))?
+            self.registered_name()
+                .map(|name| crate::worktree::live_ref(&name))
         } else {
             None
         };
@@ -902,7 +901,7 @@ impl GraftRepo {
                     || (prefix == "refs/heads/"
                         && own
                             .as_ref()
-                            .is_some_and(|name| name.as_bstr() == reference.name().as_bstr()))
+                            .is_some_and(|name| name.as_bytes() == reference.name().as_bstr()))
                 {
                     continue;
                 }
