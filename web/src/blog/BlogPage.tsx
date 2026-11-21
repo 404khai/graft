@@ -6,6 +6,7 @@ import { DitherTree, type TreeSpec } from "../components/art/DitherTree";
 import { copyText } from "../components/CopyCommand";
 import { ScrollIndicator } from "../components/nexvyn/ScrollIndicator";
 import { figures, type FigureId } from "../generated/figures";
+import { BarChart } from "./BarChart";
 import { AUTHOR, POSTS, postBySlug, readingMinutes, toMarkdown, type Block, type Post } from "./posts";
 import { SITE } from "../site";
 import "../generated/anatomy.css";
@@ -130,6 +131,25 @@ function BlockView({ block, index }: { block: Block; index: number }) {
         ))}
       </ul>
     );
+  if ("table" in block)
+    return (
+      <figure className="blog-table">
+        <div className="blog-table-scroll">
+          <table>
+            <thead>
+              <tr>{block.table.head.map((h, i) => <th key={i} scope="col">{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {block.table.rows.map((r, i) => (
+                <tr key={i}>{r.map((c, j) => (j === 0 ? <th key={j} scope="row">{inline(c)}</th> : <td key={j}>{inline(c)}</td>))}</tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {block.table.caption && <figcaption>{block.table.caption}</figcaption>}
+      </figure>
+    );
+  if ("chart" in block) return <BarChart chart={block.chart} />;
   return (
     <div className="blog-stats">
       {block.stats.map((s) => (

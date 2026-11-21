@@ -6,6 +6,7 @@ import { Footer } from "./components/Footer";
 import { Hero } from "./components/Hero";
 import { Nav } from "./components/Nav";
 import { ProductShot } from "./components/ProductShot";
+import { ScrollStatement } from "./components/ScrollStatement";
 
 export function App() {
   return (
@@ -14,6 +15,7 @@ export function App() {
       <main>
         <Hero />
         <ProductShot />
+        <ScrollStatement />
         <Features />
         <AtWork />
         <Compare />

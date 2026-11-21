@@ -45,12 +45,15 @@ function lazy() {
   for (const [i, g] of grafts.entries()) {
     const z = 60 + i * 22;
     const plan = { x: g.x, y: g.y, w: 96, d: 64, r: 6 };
+    // Each graft is one group, so pages can animate it (classes lz-*).
+    out.push(`<g class="lz-graft" style="--i:${i}">`);
     // reads fall through to the root
-    for (const [cx, cy] of k.corners(plan, 6)) out.push(L(k.segment([cx, cy, 0], [cx, cy, z], P), { tone: "faint", dotted: true }));
+    for (const [cx, cy] of k.corners(plan, 6)) out.push(L(k.segment([cx, cy, 0], [cx, cy, z], P), { tone: "faint", dotted: true, className: "lz-read" }));
     out.push(slab(P, plan, z, 3, { label: g.name.toUpperCase(), sub: "graft", size: 9 }));
     // the private delta: a small block on top
     const delta = { x: g.x + 64, y: g.y + 36, w: 22, d: 18, r: 2 };
-    out.push(S(k.slabOf(delta, z + 3, 10, P, 4), { tone: "hi", lit: true }));
+    out.push(S(k.slabOf(delta, z + 3, 10, P, 4), { tone: "hi", lit: true, className: "lz-delta" }));
+    out.push("</g>");
   }
   out.push(T([-112, 70], 0, P, "Δ = WHAT EACH AGENT CHANGED", { size: 7, tone: "mid" }));
   return k.figureSvg({ width: W, height: H, label: "Grafts are thin views over Root's object store, each with a private delta", body: out });
