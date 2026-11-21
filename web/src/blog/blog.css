@@ -112,3 +112,39 @@
   .blog-fig { padding: 12px; }
   .blog-more a { flex-direction: column; gap: 2px; }
 }
+
+/* ---------- tables ---------- */
+.blog-table { margin: 8px 0; }
+.blog-table-scroll { overflow-x: auto; border: 1px solid var(--rule); }
+.blog-table table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: 14px; }
+.blog-table th, .blog-table td { padding: 12px 16px; text-align: left; vertical-align: top; line-height: 1.55; border-bottom: 1px solid var(--rule); }
+.blog-table thead th { font-size: 11px; font-weight: 400; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); background: var(--panel); }
+.blog-table tbody th { font-weight: 600; color: var(--ink); white-space: nowrap; }
+.blog-table td { color: var(--ink-2); }
+.blog-table tbody tr:last-child > * { border-bottom: 0; }
+.blog-table b { color: var(--green); }
+.blog-table code { font-size: 13px; }
+.blog-table figcaption { margin-top: 10px; font-size: 12px; color: var(--muted); }
+
+/* ---------- bar charts ---------- */
+.bar-chart { margin: 8px 0; padding: 24px; background: #fbfbfa; border: 1px solid var(--rule); }
+.bar-chart-title { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 18px; font: 600 16px var(--font-display); color: var(--ink); }
+.bar-chart-title span { font: 11px var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.bar-chart-rows { display: grid; gap: 12px; }
+.bar-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) 92px; align-items: center; gap: 14px; font-size: 13px; }
+.bar-label { color: var(--ink-2); }
+.bar-track { height: 22px; background: var(--panel); }
+.bar-track i { display: block; height: 100%; transform-origin: left; }
+.tone-worktree .bar-track i { background: var(--ink); }
+.tone-reflink .bar-track i { background: #6fa57e; }
+.tone-virtual .bar-track i { background: var(--green); }
+.bar-value { text-align: right; font-weight: 600; color: var(--ink); }
+.tone-virtual .bar-value { color: var(--green); }
+.blog-body .bar-chart-note, .bar-chart-note { margin: 16px 0 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.bar-chart.is-armed .bar-track i { transform: scaleX(0); }
+.bar-chart.is-armed.is-on .bar-track i { transform: scaleX(1); transition: transform .9s cubic-bezier(.2, .8, .2, 1) calc(var(--i) * 140ms); }
+@media (max-width: 640px) {
+  .bar-chart { padding: 16px; }
+  .bar-row { grid-template-columns: 1fr auto; gap: 6px 10px; }
+  .bar-track { grid-column: 1 / -1; grid-row: 2; }
+}

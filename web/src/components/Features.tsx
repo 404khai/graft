@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from "react";
+import { useVisible } from "./art/useVisible";
 import { Icon } from "./Icon";
 const overlaps = [
   { sev: "behaviour", pair: ["auth", "billing"], detail: "speculative merge: tests fail together" },
@@ -14,6 +16,13 @@ const small = [
 ];
 
 export function Features() {
+  // Cells rise in as the grid scrolls into view. Armed after mount, so without
+  // JavaScript (or with reduced motion) they are simply shown.
+  const grid = useRef<HTMLDivElement>(null);
+  const seen = useVisible(grid, true);
+  const [armed, setArmed] = useState(false);
+  useEffect(() => setArmed(!matchMedia("(prefers-reduced-motion: reduce)").matches), []);
+
   return (
     <section className="features" id="features">
       <div className="section-head">
@@ -24,7 +33,7 @@ export function Features() {
         <p>Cheap workspaces are the start. Graft adds runtime, overlap detection, a merge queue and enforcement.</p>
       </div>
 
-      <div className="bento">
+      <div ref={grid} className={`bento${armed ? " is-armed" : ""}${seen ? " is-on" : ""}`}>
         <article className="cell cell-radar">
           <div className="cell-head">
             <span className="label">Radar</span>

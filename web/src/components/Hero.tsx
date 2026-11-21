@@ -28,9 +28,8 @@ export function Hero() {
         One root. Every agent its own <em>graft.</em>
       </h1>
       <p className="lede">
-        Copy‑on‑write workspaces for parallel coding agents. Each graft is a
-        view of one shared Root plus a private delta, so it costs only what the
-        agent changes.
+        Copy‑on‑write workspaces for parallel coding agents. Give every agent
+        its own copy of your repo, without copying it.
       </p>
       <div className="actions">
         <InstallBox />
