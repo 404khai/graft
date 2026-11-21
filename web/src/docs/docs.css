@@ -275,7 +275,7 @@
 .bp-hatch { stroke-width: 1.2; fill: url(#bp-fine); }
 .bp-head { fill: #eef8ee; }
 .bp-text { font: 7px var(--font-mono); letter-spacing: .08em; fill: #eef8ee; opacity: .85; }
-.bp-math { font: italic 500 15px "Funnel Display", serif; fill: #eef8ee; }
+.bp-math { font: italic 500 15px var(--font-display); fill: #eef8ee; }
 .bp-math.small { font-size: 11px; opacity: .8; }
 
 .bp-wait .bp-line, .bp-wait .bp-thin, .bp-wait .bp-hatch { stroke-dasharray: 1; stroke-dashoffset: 1; }

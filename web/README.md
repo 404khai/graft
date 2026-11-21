@@ -7,6 +7,7 @@ npm install
 npm run dev      # http://localhost:5173
 npm run build    # type-check and build to dist/
 npm run figures  # regenerate the blog's Anatomy figures (src/generated/)
+npm run og       # re-render public/og.png, the 1200×630 link preview (needs Chrome)
 ```
 
 Three pages: `index.html` (home), `docs.html` (`src/docs/`, hash-routed: `#quickstart`, `#commands`…) and `changelog.html` (`src/changelog/`).
@@ -21,7 +22,7 @@ Three pages: `index.html` (home), `docs.html` (`src/docs/`, hash-routed: `#quick
 
 ## Routes
 
-One app (`index.html`, `src/main.tsx`): `/`, `/docs` (hash routes such as `/docs#quickstart`), `/changelog`, `/blog` and `/blog/<slug>`. The host must rewrite unknown paths to `/index.html`: `vercel.json` does this on Vercel (static files are still served first), and `npm run dev` and `npm run preview` already do.
+One app (`index.html`, `src/main.tsx`, routes in `src/routes.tsx`): `/`, `/docs`, `/docs/<page>`, `/changelog`, `/blog` and `/blog/<slug>`. `npm run build` prerenders every route to HTML (`scripts/prerender.mjs`), so pages work with JavaScript off and crawlers, link previews and AI agents get real content; it also writes `llms.txt`, `llms-full.txt`, `blog/<slug>.md`, `sitemap.xml` and `robots.txt`. Fonts are self-hosted (Fontsource), preloaded and cached as immutable assets. The host must rewrite unknown paths to `/index.html`: `vercel.json` does this on Vercel (static files are still served first), and `npm run dev` and `npm run preview` already do.
 
 - `src/blog/posts.ts`: blog posts as blocks (render as HTML, copy as Markdown). Figures are built by `scripts/build-figures.mjs` with the vendored Anatomy kit (`vendor/anatomy/`, MIT).
 - `src/docs/brand.tsx`: the brand guidelines page.

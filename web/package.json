@@ -5,11 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && vite build --ssr src/entry-server.tsx --outDir dist-ssr && node scripts/prerender.mjs",
     "preview": "vite preview",
-    "figures": "node scripts/build-figures.mjs"
+    "figures": "node scripts/build-figures.mjs",
+    "og": "sh scripts/og.sh"
   },
   "dependencies": {
+    "@fontsource-variable/funnel-display": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
     "@hugeicons/core-free-icons": "^4.4.0",
     "@hugeicons/react": "^1.1.10",
     "react": "^19.3.1",

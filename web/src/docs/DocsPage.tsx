@@ -22,10 +22,11 @@ const TABS = [
   { label: "MCP", id: "mcp" },
 ];
 
-const fromHash = () => {
-  const id = location.hash.slice(1);
-  return ROUTES.some((r) => r.id === id) ? id : "overview";
-};
+/** Docs pages live at /docs/<id>; /docs is the overview. Old /docs#<id> links still resolve. */
+export const docsHref = (id: string) => (id === "overview" ? "/docs" : `/docs/${id}`);
+const known = (id: string | undefined) => (id && ROUTES.some((r) => r.id === id) ? id : undefined);
+const fromLocation = () =>
+  known(location.pathname.match(/^\/docs\/([a-z0-9-]+)\/?$/)?.[1]) ?? known(location.hash.slice(1)) ?? "overview";
 
 /** The illustration on a page's tile and header. */
 function TileArt({ page }: { page: DocPage }) {
@@ -72,10 +73,10 @@ function Overview() {
         <NavigationCompass
           className="doc-compass"
           links={[
-            { angle: 345, label: "Quickstart", href: "#quickstart" },
-            { angle: 75, label: "Commands", href: "#commands" },
-            { angle: 165, label: "MCP", href: "#mcp" },
-            { angle: 255, label: "Concepts", href: "#concepts" },
+            { angle: 345, label: "Quickstart", href: "/docs/quickstart" },
+            { angle: 75, label: "Commands", href: "/docs/commands" },
+            { angle: 165, label: "MCP", href: "/docs/mcp" },
+            { angle: 255, label: "Concepts", href: "/docs/concepts" },
           ]}
         />
       </section>
@@ -84,7 +85,7 @@ function Overview() {
         <span className="eyebrow">Start here</span>
         <div className="doc-grid">
           {PAGES.map((p) => (
-            <a key={p.id} className="doc-tile" href={`#${p.id}`}>
+            <a key={p.id} className="doc-tile" href={docsHref(p.id)}>
               <div className={`doc-tile-stage art-${p.art}`}>
                 <TileArt page={p} />
               </div>
@@ -121,7 +122,7 @@ function Page({ page }: { page: DocPage }) {
         </section>
       ))}
       {next && (
-        <a className="doc-next" href={`#${next.id}`}>
+        <a className="doc-next" href={docsHref(next.id)}>
           <span>Next</span>
           <b>{next.title} <Icon name="arrow-right" /></b>
         </a>
@@ -243,20 +244,33 @@ function Search({ onGo }: { onGo: (id: string) => void }) {
   );
 }
 
-export function Docs() {
-  const [route, setRoute] = useState(fromHash);
+export function Docs({ initial = "overview" }: { initial?: string }) {
+  const [route, setRoute] = useState(() => (typeof window === "undefined" ? (known(initial) ?? "overview") : fromLocation()));
   const [menu, setMenu] = useState(false);
   useEffect(() => {
-    const onHash = () => {
-      setRoute(fromHash());
+    // Move an old /docs#<id> link to its real path.
+    const id = fromLocation();
+    if (location.pathname.replace(/\/+$/, "") !== docsHref(id).replace(/\/+$/, "")) history.replaceState(null, "", docsHref(id));
+    const onPop = () => {
+      setRoute(fromLocation());
       setMenu(false);
-      window.scrollTo(0, 0);
     };
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
+    window.addEventListener("popstate", onPop);
+    window.addEventListener("hashchange", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      window.removeEventListener("hashchange", onPop);
+    };
   }, []);
+  useEffect(() => {
+    const page = PAGES.find((p) => p.id === route);
+    document.title = page ? `${page.title} · Graft docs` : "Graft docs";
+  }, [route]);
   const go = (id: string) => {
-    location.hash = id;
+    history.pushState(null, "", docsHref(id));
+    setRoute(id);
+    setMenu(false);
+    window.scrollTo(0, 0);
   };
   const page = PAGES.find((p) => p.id === route);
   const sections = page ? page.sections.map((s) => s.title) : ["Overview", "Start here"];
@@ -289,7 +303,7 @@ export function Docs() {
       <div className="docs-body">
         <nav className="docs-tabs" aria-label="Docs sections">
           {TABS.map((t) => (
-            <a key={t.id} href={`#${t.id}`} aria-current={route === t.id ? "page" : undefined}>{t.label}</a>
+            <a key={t.id} href={docsHref(t.id)} onClick={(e) => { e.preventDefault(); go(t.id); }} aria-current={route === t.id ? "page" : undefined}>{t.label}</a>
           ))}
         </nav>
         <main className="docs-main" key={route}>

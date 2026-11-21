@@ -21,8 +21,8 @@
   --sev-behaviour: #b4501e;
   --sev-symbol: #a07a10;
 
-  --font-display: "Funnel Display", system-ui, sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, monospace;
+  --font-display: "Funnel Display Variable", "Funnel Display", system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, monospace;
 
   --gutter: 40px;
   --rail-inset: 40px;
