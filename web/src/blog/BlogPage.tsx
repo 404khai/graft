@@ -7,6 +7,7 @@ import { copyText } from "../components/CopyCommand";
 import { ScrollIndicator } from "../components/nexvyn/ScrollIndicator";
 import { figures, type FigureId } from "../generated/figures";
 import { AUTHOR, POSTS, postBySlug, readingMinutes, toMarkdown, type Block, type Post } from "./posts";
+import { SITE } from "../site";
 import "../generated/anatomy.css";
 import "./blog.css";
 
@@ -149,7 +150,7 @@ function Ask({ post }: { post: Post }) {
     const t = setTimeout(() => setCopied(false), 1600);
     return () => clearTimeout(t);
   }, [copied]);
-  const url = location.href;
+  const url = `${SITE}/blog/${post.slug}`;
   const q = encodeURIComponent(`Read ${url} and help me understand it.`);
   return (
     <div className="blog-ask">
@@ -157,7 +158,9 @@ function Ask({ post }: { post: Post }) {
       <a href={`https://claude.ai/new?q=${q}`} target="_blank" rel="noreferrer">
         <img src="/claude.svg" alt="" />Claude
       </a>
-      <a href={`https://chatgpt.com/?q=${q}`} target="_blank" rel="noreferrer">ChatGPT</a>
+      <a href={`https://chatgpt.com/?q=${q}`} target="_blank" rel="noreferrer">
+        <img src="/chatgpt.svg" alt="" />ChatGPT
+      </a>
       <button type="button" onClick={async () => setCopied(await copyText(toMarkdown(post, url)))}>
         {copied ? "Copied" : "Copy as Markdown"}
       </button>

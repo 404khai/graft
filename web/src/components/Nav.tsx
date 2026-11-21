@@ -7,7 +7,7 @@ const links = [
   { label: "Docs", href: "/docs" },
   { label: "Features", href: "/#features" },
   { label: "Benchmarks", href: "/#at-work" },
-  { label: "MCP", href: "/docs#mcp" },
+  { label: "MCP", href: "/docs/mcp" },
   { label: "Blog", href: "/blog" },
   { label: "Changelog", href: "/changelog" },
 ];
@@ -56,16 +56,18 @@ const STARS_KEY = "graft:stars";
 
 /** GitHub mark with the repo's star count, fetched once per session. */
 function GitHubLink() {
-  const [stars, setStars] = useState<number | null>(() => {
+  // Read after mount, so the prerendered HTML and the first client render match.
+  const [stars, setStars] = useState<number | null>(null);
+  useEffect(() => {
     try {
       const v = sessionStorage.getItem(STARS_KEY);
-      return v ? Number(v) : null;
+      if (v) {
+        setStars(Number(v));
+        return;
+      }
     } catch {
-      return null;
+      // storage blocked: fetch instead
     }
-  });
-  useEffect(() => {
-    if (stars !== null) return;
     const ctl = new AbortController();
     fetch(`https://api.github.com/repos/${REPO}`, { signal: ctl.signal })
       .then((r) => (r.ok ? r.json() : null))
@@ -80,7 +82,7 @@ function GitHubLink() {
       })
       .catch(() => {});
     return () => ctl.abort();
-  }, [stars]);
+  }, []);
   const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
   return (
     <a

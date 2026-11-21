@@ -13,18 +13,30 @@ const HERO_FADE = { x: 0.5, y: 0.52, rx: 0.45, ry: 0.62 };
 export function Hero() {
   return (
     <section className="hero">
-      <DitherTree className="hero-dither" trees={HERO_TREES} fade={HERO_FADE} light={0.05} ink="#6fa57e" />
-      <span className="pill"><i aria-hidden="true" />0.2.0 — now on Linux &amp; macOS</span>
+      <DitherTree
+        className="hero-dither"
+        trees={HERO_TREES}
+        fade={HERO_FADE}
+        light={0.05}
+        ink="#6fa57e"
+      />
+      <span className="pill">
+        <i aria-hidden="true" />
+        0.2.0 — now on Linux &amp; macOS
+      </span>
       <h1>
         One root. Every agent its own <em>graft.</em>
       </h1>
       <p className="lede">
-        Copy‑on‑write workspaces for parallel coding agents. Each graft is a view of one shared
-        Root plus a private delta, so it costs only what the agent changes.
+        Copy‑on‑write workspaces for parallel coding agents. Each graft is a
+        view of one shared Root plus a private delta, so it costs only what the
+        agent changes.
       </p>
       <div className="actions">
         <InstallBox />
-        <a className="btn btn-green" href="/docs#quickstart">Get started <Icon name="arrow-right" /></a>
+        <a className="btn btn-green" href="/docs/quickstart">
+          Get started <Icon name="arrow-right" />
+        </a>
       </div>
     </section>
   );
