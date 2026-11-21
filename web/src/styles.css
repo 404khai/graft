@@ -724,3 +724,7 @@ button.btn { border: 0; cursor: pointer; }
 .bento.is-armed.is-on > .cell:nth-child(3) { transition-delay: .2s; }
 .bento.is-armed.is-on > .cell:nth-child(4) { transition-delay: .3s; }
 .bento.is-armed.is-on > .cell:nth-child(5) { transition-delay: .4s; }
+
+/* hero subheading: larger and heavier so it reads at a glance */
+.hero .lede { max-width: 760px; font: 500 20px/1.55 var(--font-mono); color: var(--ink); }
+@media (max-width: 640px) { .hero .lede { font-size: 16px; } }
