@@ -7,7 +7,18 @@ export type Block =
   | { code: string; lang?: string }
   | { figure: FigureId; caption: string }
   | { list: string[] }
-  | { stats: { label: string; value: string; note?: string }[] };
+  | { stats: { label: string; value: string; note?: string }[] }
+  | { table: { head: string[]; rows: string[][]; caption?: string } }
+  | { chart: Chart };
+
+/** A bar chart: one bar per method. `value` is in `unit`; `log` for values spanning orders of magnitude. */
+export type Chart = {
+  title: string;
+  unit: "ms" | "MiB";
+  log?: boolean;
+  bars: { label: string; value: number; tone: "worktree" | "reflink" | "virtual" }[];
+  note?: string;
+};
 
 export type Post = {
   slug: string;
@@ -33,6 +44,130 @@ const GH = "https://github.com/404khai/graft/blob/main";
 
 // Inline markup: `code`, **bold**, [text](href). Kept tiny on purpose.
 export const POSTS: Post[] = [
+  {
+    slug: "why-worktrees-break-down",
+    title: "Why worktrees break down, and how Graft works",
+    cover: "Root & Delta",
+    category: "Engineering",
+    date: "2026-11-21",
+    summary:
+      "A git worktree gives every agent a full copy of the repo and everything built from it. That cost grows with the repo and the number of agents. Graft gives each agent a copy-on-write view of one shared Root plus a private delta. Here is how it works, with the numbers.",
+    figure: "lazy",
+    sources: [
+      { label: "README: measured results (bench run 42113580319)", href: "https://github.com/404khai/graft#measured-results" },
+      { label: "docs/architecture.md", href: `${GH}/docs/architecture.md` },
+      { label: "ADR 0003: reflink graft layout", href: `${GH}/docs/decisions/0003-reflink-graft-layout.md` },
+      { label: "ADR 0004: layer cache and build trust", href: `${GH}/docs/decisions/0004-layer-cache-and-build-trust.md` },
+      { label: "ADR 0006: virtual graft read path", href: `${GH}/docs/decisions/0006-virtual-graft-read-path.md` },
+      { label: "ADR 0008: delta store and op log", href: `${GH}/docs/decisions/0008-delta-store-and-op-log.md` },
+    ],
+    body: [
+      { p: "Running several coding agents on one repository needs one rule above all: agents must not write over each other. The standard answer is `git worktree add`, one per agent. It works, and it is free to try. It also scales with the wrong thing." },
+      { h2: "What a worktree actually costs" },
+      { p: "A worktree is a full checkout of the repo: every tracked file written to disk. Then the agent needs to run something, so it also needs every file built from the repo: `node_modules`, `target/`, a virtualenv, a database. A worktree shares git's object store with the main checkout, and nothing else." },
+      { table: {
+        head: ["", "Per worktree", "Grows with"],
+        rows: [
+          ["Working tree", "every tracked file, written out", "repo size"],
+          ["Dependencies", "a full install (`npm ci`, `cargo build`)", "dependency tree size"],
+          ["Runtime", "the same ports, database and `.env` as every other worktree", "number of agents (collisions)"],
+          ["Branch", "one branch, locked: two worktrees cannot check out the same one", "—"],
+          ["Overlap", "invisible until someone merges", "how long agents work"],
+        ],
+      } },
+      { p: "Each of those is fine for one or two agents. With sixteen agents on a 200,000-file repo, the first two rows dominate. In our benchmark, sixteen worktrees of the large fixture, each with its `node_modules` installed, add **22.7 GiB** of disk, and each one takes about 15 seconds to create." },
+      { chart: {
+        title: "Disk added by 16 workspaces, large fixture (200k files)",
+        unit: "MiB",
+        log: true,
+        bars: [
+          { label: "git worktree", value: 23245, tone: "worktree" },
+          { label: "graft (reflink)", value: 1946, tone: "reflink" },
+          { label: "graft (FUSE)", value: 1.1, tone: "virtual" },
+        ],
+        note: "Log scale. XFS with reflinks, GitHub Actions ubuntu-latest, medians of three runs.",
+      } },
+      { p: "The other rows cost differently: in collisions. Two worktrees running the same app fight over port 3000 and the same development database. Two agents editing the same function only find out when one of them tries to merge. The worktree has no idea what the other worktrees are doing." },
+      { h2: "Root and delta" },
+      { p: "Graft starts from a different question: what does an agent actually own? Not the repository. It owns **what it changed**." },
+      { p: "So a graft is two things. **Root** is the repository itself: git's object store, shared and read-only, plus a cache of built layers like `node_modules`. The **delta** is private to one graft: the files that agent has created, changed or deleted, and nothing else. A graft is a directory that shows Root with the delta laid over it. Reading a file that was never changed reads Root; writing one copies it into the delta first." },
+      { figure: "lazy", caption: "Every graft reads through to the same git objects. Each one owns only its delta." },
+      { p: "A graft costs what the agent changes, not what the repo weighs. Creating one, forking it (`graft bud`) or checkpointing it (`graft ring`) touches metadata, not files." },
+      { h2: "Two ways to lay a delta over Root" },
+      { p: "Graft has two kinds of backend, because filesystems differ in what they can share." },
+      { table: {
+        head: ["Backend", "How the graft exists", "Create cost", "Where"],
+        rows: [
+          ["reflink", "a real checkout whose unchanged files share disk blocks with Root (`FICLONE`, `clonefile`)", "one clone per file: grows with the repo", "APFS, btrfs, XFS; plain copy with one warning on ext4"],
+          ["FUSE", "a mount served by `graftd` from git's objects, read lazily; writes go to the delta", "metadata only: constant", "Linux"],
+          ["NFS", "the same, over an NFSv3 server on 127.0.0.1 that macOS mounts itself", "metadata only: constant", "macOS, no kernel extension"],
+        ],
+      } },
+      { p: "A virtual graft (FUSE or NFS) builds its directory tree lazily: a directory's entries are read from its git tree object the first time something looks inside it, and a file's contents on its first read. Memory grows with the paths an agent visits, not the size of the repo." },
+      { chart: {
+        title: "Create one workspace, large fixture (200k files)",
+        unit: "ms",
+        log: true,
+        bars: [
+          { label: "git worktree", value: 15120, tone: "worktree" },
+          { label: "graft (reflink)", value: 10550, tone: "reflink" },
+          { label: "graft (FUSE)", value: 18, tone: "virtual" },
+        ],
+        note: "Log scale. Median per workspace, 16 created one after another.",
+      } },
+      { h2: "Every write, journaled" },
+      { p: "Every change in a virtual graft goes through `graftd`, which records it in an append-only **op log** and updates the delta in one SQLite transaction. A crash loses at most the write in flight. Replaying the op log from empty rebuilds the delta exactly; a property test checks that on every run." },
+      { p: "Because every graft's changes are journaled in one place, Graft can see what all agents are doing without entering their directories. That is what the rest of the system is built on." },
+      { h2: "What a worktree leaves to you" },
+      { table: {
+        head: ["Problem", "With worktrees", "With Graft"],
+        rows: [
+          ["Dependencies", "install per workspace", "**layers**: built once per lockfile hash, shared by every graft"],
+          ["Ports, databases, `.env`", "shared, so they collide", "**Blueprints** in `graft.toml`: a free port, a cloned database and rendered env per graft"],
+          ["Overlapping edits", "found at merge time", "**Radar**: same file, same function, or tests that fail only when combined, while agents work"],
+          ["Landing work", "merge by hand and hope", "**Integrate**: rebase, structural merge (Mergiraf), test gate, then a plain git commit"],
+          ["Agent writes elsewhere", "a rule in the prompt", "`graft run`: Landlock on Linux, Seatbelt on macOS"],
+          ["Branch locks", "one branch per worktree", "grafts are anonymous: Root and every graft can have `main` checked out"],
+        ],
+      } },
+      { h2: "The first graft, and the ones after" },
+      { p: "Layers change the shape of start-up cost. The first graft of a lockfile builds `node_modules` once; every graft after it gets the layer as a reflink or a pass-through in milliseconds. A worktree pays the install every time." },
+      { chart: {
+        title: "Ready to test, later agents, medium fixture (20k files)",
+        unit: "ms",
+        log: true,
+        bars: [
+          { label: "git worktree", value: 2570, tone: "worktree" },
+          { label: "graft (reflink)", value: 1910, tone: "reflink" },
+          { label: "graft (FUSE)", value: 153, tone: "virtual" },
+        ],
+        note: "Create, install if needed, and a passing npm test. Log scale.",
+      } },
+      { table: {
+        head: ["Fixture", "Method", "Create", "Ready, later agents", "Disk added (16)", "Prune"],
+        rows: [
+          ["small, 1k files", "worktree", "75 ms", "425 ms", "124.4 MiB", "32 ms"],
+          ["", "graft (reflink)", "123 ms", "250 ms", "11.8 MiB", "46 ms"],
+          ["", "graft (FUSE)", "19 ms", "141 ms", "1.2 MiB", "6 ms"],
+          ["medium, 20k files", "worktree", "1.29 s", "2.57 s", "3.0 GiB", "1.12 s"],
+          ["", "graft (reflink)", "1.78 s", "1.91 s", "326.1 MiB", "1.15 s"],
+          ["", "graft (FUSE)", "19 ms", "153 ms", "45.0 MiB", "6 ms"],
+          ["large, 200k files", "worktree", "15.12 s", "15.56 s", "22.7 GiB", "7.63 s"],
+          ["", "graft (reflink)", "10.55 s", "10.65 s", "1.9 GiB", "6.97 s"],
+          ["", "graft (FUSE)", "18 ms", "135 ms", "1.1 MiB", "6 ms"],
+        ],
+        caption: "Bench run 42113580319: GitHub Actions ubuntu-latest (AMD EPYC 9V74, 4 threads), XFS with reflinks, three runs, medians.",
+      } },
+      { h2: "Where grafts still lose" },
+      { list: [
+        "Reflink grafts create slower than worktrees on small and medium repos: 123 ms against 75 ms, and 1.78 s against 1.29 s. Cloning file by file costs more than writing a fresh checkout until the repo is large.",
+        "The first graft of a lockfile is slower than a worktree, because it builds the shared layer.",
+        "Inside a workspace, reflink grafts match worktrees on builds and tests but are 1–8% slower on some git and search commands.",
+        "Virtual grafts are up to about 40× slower on file-heavy work such as `rg` or writing 10,000 files. That is the next performance target.",
+      ] },
+      { p: "Graft's output is always ordinary git history. CI, code review and GitHub keep working unchanged; the difference is how much of the repository each agent has to carry to get there." },
+    ],
+  },
   {
     slug: "graftd-handoff",
     title: "Two graftds, one lock",
@@ -173,7 +308,7 @@ export const postBySlug = (slug: string) => POSTS.find((p) => p.slug === slug);
 /** Plain-text word count, for reading time. */
 export function readingMinutes(post: Post) {
   const words = post.body
-    .map((b) => ("p" in b ? b.p : "h2" in b ? b.h2 : "list" in b ? b.list.join(" ") : "code" in b ? b.code : ""))
+    .map((b) => ("p" in b ? b.p : "h2" in b ? b.h2 : "list" in b ? b.list.join(" ") : "code" in b ? b.code : "table" in b ? b.table.rows.flat().join(" ") : ""))
     .join(" ")
     .split(/\s+/).length;
   return Math.max(1, Math.round(words / 220));
@@ -189,7 +324,16 @@ export function toMarkdown(post: Post, url: string) {
     else if ("list" in b) out.push(...b.list.map((l) => `- ${l}`), "");
     else if ("figure" in b) out.push(`> Figure: ${b.caption}`, "");
     else if ("stats" in b) out.push(...b.stats.map((s) => `- **${s.value}** ${s.label}${s.note ? ` (${s.note})` : ""}`), "");
+    else if ("table" in b)
+      out.push(`| ${b.table.head.join(" | ")} |`, `| ${b.table.head.map(() => "---").join(" | ")} |`, ...b.table.rows.map((r) => `| ${r.join(" | ")} |`), ...(b.table.caption ? ["", `_${b.table.caption}_`] : []), "");
+    else if ("chart" in b) out.push(`**${b.chart.title}**`, "", ...b.chart.bars.map((x) => `- ${x.label}: ${fmtValue(x.value, b.chart.unit)}`), ...(b.chart.note ? ["", `_${b.chart.note}_`] : []), "");
   }
   out.push("Sources:", ...post.sources.map((s) => `- [${s.label}](${s.href})`));
   return out.join("\n");
+}
+
+/** 15120 ms -> "15.12 s", 22732 MiB -> "22.2 GiB". */
+export function fmtValue(v: number, unit: Chart["unit"]) {
+  if (unit === "ms") return v >= 1000 ? `${(v / 1000).toFixed(2)} s` : `${v} ms`;
+  return v >= 1024 ? `${(v / 1024).toFixed(1)} GiB` : `${v} MiB`;
 }
